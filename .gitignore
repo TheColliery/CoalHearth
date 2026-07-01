@@ -1,0 +1,23 @@
+# Internal governance + design notes — machine-local, never shipped to the public repo
+CLAUDE.md
+MEMORY.md
+AGENTS.md
+.claude
+.agents
+COALHEARTH_DESIGN.md
+COALHEARTH_BLUEPRINT.md
+USAGE-DATA.md
+
+# Dependencies / build cruft
+node_modules/
+
+# Runtime journal + staging (created inside a target project at run-time, never committed)
+.claude/coalhearth/
+
+# SkillSpector scan reports (provenance recorded in SECURITY.md; the raw JSON is not shipped)
+skillspector-*.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log

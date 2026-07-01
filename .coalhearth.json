@@ -1,0 +1,21 @@
+{
+  // Advisory budget-guardrail thresholds (char-heuristic best-effort, NOT a
+  // precise or guaranteed token/turn count — see lib/budget-tracker.js header).
+  "budgets": {
+    "maxTurns": 30,
+    "maxTokens": 2000000,
+    "warningTurnThreshold": 5,
+    "warningTokenPercentage": 0.15
+  },
+  // Handoff journal (the recovery core — this is the part that matters).
+  "journal": {
+    "outputDirectory": ".claude/coalhearth",
+    "historyLimit": 5,
+    "atomicityRetries": 3
+  },
+  // Resume-on-boot behavior.
+  "recovery": {
+    "autoInjectPrompt": true,
+    "stashUnsavedChanges": true
+  }
+}

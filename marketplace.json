@@ -1,0 +1,12 @@
+{
+  "name": "coalhearth",
+  "owner": { "name": "TheColliery" },
+  "description": "CoalHearth — session warm-resume + budget-guardrail engine. Part of the TheColliery mining series.",
+  "plugins": [
+    {
+      "name": "coalhearth",
+      "source": "./plugin",
+      "description": "Journals session state continuously so a limit-hit or crash can resume from a handoff prompt instead of a manual rebuild; a secondary advisory budget nudge (char-heuristic, best-effort) warns before a fan-out spawn when headroom is low. Honest frame: reduces limit-hit damage, does not prevent or guarantee against it. Zero-dependency, offline, no API keys."
+    }
+  ]
+}

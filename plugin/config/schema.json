@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CoalHearthConfig",
+  "type": "object",
+  "properties": {
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "maxTurns": { "type": "integer", "minimum": 1, "default": 30 },
+        "maxTokens": { "type": "integer", "minimum": 1, "default": 2000000 },
+        "warningTurnThreshold": { "type": "integer", "minimum": 0, "default": 5 },
+        "warningTokenPercentage": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15 }
+      },
+      "additionalProperties": false
+    },
+    "journal": {
+      "type": "object",
+      "properties": {
+        "outputDirectory": { "type": "string", "default": ".claude/coalhearth" },
+        "historyLimit": { "type": "integer", "minimum": 0, "default": 5 },
+        "atomicityRetries": { "type": "integer", "minimum": 0, "default": 3 }
+      },
+      "additionalProperties": false
+    },
+    "recovery": {
+      "type": "object",
+      "properties": {
+        "autoInjectPrompt": { "type": "boolean", "default": true },
+        "stashUnsavedChanges": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,10 @@
+{
+  "name": "coalhearth",
+  "version": "0.1.0-beta.1",
+  "description": "CoalHearth — session warm-resume + budget-guardrail engine. Journals session state continuously so a limit-hit or crash can resume from a handoff prompt instead of a manual rebuild; a secondary advisory budget nudge (char-heuristic, best-effort) warns before a fan-out spawn when headroom is low. Honest frame: reduces limit-hit damage, does not prevent or guarantee against it. Zero-dependency, offline, no API keys.",
+  "author": { "name": "HetCreep" },
+  "homepage": "https://github.com/TheColliery/CoalHearth",
+  "repository": "https://github.com/TheColliery/CoalHearth",
+  "license": "MIT",
+  "keywords": ["session-memory", "warm-resume", "budget-guardrail", "handoff", "recovery", "skills", "hooks"]
+}
