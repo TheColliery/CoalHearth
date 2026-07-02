@@ -22,7 +22,7 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 <!-- version-transition: SkillSpector scan — re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface, maintainer-commanded), NOT per release; bump the version/score/date/commit below only after a real re-scan. -->
 ## Independent scanning — NVIDIA SkillSpector
 
-First scan: CoalHearth **v0.1.0-beta.3** dist (`plugin/`, commit `aba7ccb`), on **2026-07-02**, with [NVIDIA SkillSpector](https://github.com/NVIDIA/skillspector) **v2.3.9** (self-reported — the tool ships no tagged releases; the version is the `uvx`-from-git HEAD, `326a2b4`), static stage (`--no-llm`, the documented FP-prone baseline). Re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface), not per release — this pins the last version actually verified.
+Last scan: CoalHearth **v1.0.0** dist (`plugin/`, commit `3b0587a`), on **2026-07-02**, with [NVIDIA SkillSpector](https://github.com/NVIDIA/skillspector) **v2.3.9** (self-reported — the tool ships no tagged releases; the version is the `uvx`-from-git HEAD, `326a2b4`), static stage (`--no-llm`, the documented FP-prone baseline). Re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface), not per release — this pins the last version actually verified.
 
 **Score 53/100 · 5 findings · all false positive:**
 
