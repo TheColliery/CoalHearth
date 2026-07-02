@@ -8,7 +8,7 @@
 
 ![version](https://img.shields.io/github/v/tag/TheColliery/CoalHearth?label=version&color=blue)
 ![license](https://img.shields.io/badge/license-MIT-blue)
-![status](https://img.shields.io/badge/status-beta-orange)
+![status](https://img.shields.io/badge/status-stable-brightgreen)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 

@@ -2,6 +2,10 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [1.0.0] — 2026-07-02
+
+**First stable release.** CoalHearth graduates from beta. The recovery core (atomic per-step journal + warm-resume recovery block, two Phoenix-13 hooks) proved itself on a **live interrupted session** this cycle — not just the hermetic fake-cases — and the beta→1.0 graduation gate, **Incident E sub-flight tracking** (beta.10), closed the one honest gap the fan-out case exposed. Same code as `0.1.0-beta.10`; this promotes it to stable. Platform: Claude Code only (it *is* two hooks; no other agent platform runs them — stated in the install docs). The full hardening trail — macOS-CI symlink iteration, journal-dir containment, spawn-free snapshot (Phoenix #5), the `\Z`-anchor and realpath fixes — is in the beta entries below.
+
 ## [0.1.0-beta.10] — 2026-07-02
 
 **The beta→1.0 graduation-gate item — sub-flight tracking (Incident E) — plus two board LOW fixes.**
