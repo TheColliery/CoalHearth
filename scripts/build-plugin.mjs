@@ -20,6 +20,7 @@ export const DIST_ITEMS = [
   'lib',
   'config',
   'hooks',
+  'commands',
 ];
 
 export function buildDist(distRoot = dist) {
@@ -70,6 +71,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log('plugin/ dist in sync with source.');
   } else {
     buildDist();
-    console.log('plugin/ dist built (bin + lib + config + hooks + plugin.json) from source.');
+    console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json) from source.');
   }
 }

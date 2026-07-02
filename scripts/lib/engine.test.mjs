@@ -269,10 +269,13 @@ test('config-schema validateConfig passes the factory shape and flags unknown gr
     budgets: { maxTurns: 30, maxTokens: 2000000, warningTurnThreshold: 5, warningTokenPercentage: 0.15 },
     journal: { outputDirectory: '.claude/coalhearth', historyLimit: 5, atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
+    update: { updateMode: 'ask', updateCheckDays: 14 },
   };
   assert.deepStrictEqual(validateConfig(factory), [], 'factory config is valid');
-  assert.ok(Object.keys(CONFIG_SCHEMA).length === 3, 'three config groups');
+  assert.ok(Object.keys(CONFIG_SCHEMA).length === 4, 'four config groups (budgets/journal/recovery/update)');
   assert.deepStrictEqual(validateConfig({ nope: {} }), ["group 'nope' not in schema"]);
   assert.deepStrictEqual(validateConfig({ budgets: { bogus: 1 } }), ["'budgets.bogus' not in schema"]);
   assert.deepStrictEqual(validateConfig({ budgets: { maxTurns: 0 } }), ["'budgets.maxTurns' must be >= 1"]);
+  assert.match(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'sometimes'), /must be one of/);
+  assert.strictEqual(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'OFF'), null, 'enum compares case-insensitively');
 });

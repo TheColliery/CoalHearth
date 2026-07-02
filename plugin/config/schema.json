@@ -29,6 +29,14 @@
         "stashUnsavedChanges": { "type": "boolean", "default": true }
       },
       "additionalProperties": false
+    },
+    "update": {
+      "type": "object",
+      "properties": {
+        "updateMode": { "type": "string", "enum": ["ask", "auto", "remind", "off"], "default": "ask" },
+        "updateCheckDays": { "type": "integer", "minimum": 1, "maximum": 365, "default": 14 }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

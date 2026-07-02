@@ -21,7 +21,9 @@ function sandbox() {
 function runHook(cwd, home) {
   return spawnSync(process.execPath, [HOOK], {
     cwd,
-    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home },
+    // CLAUDE_CONFIG_DIR emptied: the config loader honors it, so a real machine value
+    // would point the "global" config outside the sandbox home (hooks-safety §7).
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
     encoding: 'utf8',
   });
 }
@@ -30,8 +32,17 @@ function cleanup(...dirs) {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 }
 
+// A fresh sandbox home makes the self-update check "due" on the first boot; the
+// strict-silence tests here are about the JOURNAL path, so they mute it (the update
+// path has its own hermetic cases in scripts/lib/hooks.test.mjs, cases 12-14).
+function muteUpdate(home) {
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), '{"update":{"updateMode":"off"}}', 'utf8');
+}
+
 test('no journal present: exits 0, silent, prints nothing', () => {
   const { home, cwd } = sandbox();
+  muteUpdate(home);
   const r = runHook(cwd, home);
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.stdout, '');
@@ -72,6 +83,7 @@ test('in_progress journal: exits 0, prints the recovery block, marks resumed', (
 
 test('completed journal: exits 0, silent, does not touch the file', () => {
   const { home, cwd } = sandbox();
+  muteUpdate(home);
   const outDir = path.join(cwd, '.claude', 'coalhearth');
   fs.mkdirSync(outDir, { recursive: true });
   const journalPath = path.join(outDir, 'session_handoff.json');
@@ -90,6 +102,7 @@ test('completed journal: exits 0, silent, does not touch the file', () => {
 
 test('corrupt journal: quarantines, boots clean, exits 0 silent', () => {
   const { home, cwd } = sandbox();
+  muteUpdate(home);
   const outDir = path.join(cwd, '.claude', 'coalhearth');
   fs.mkdirSync(outDir, { recursive: true });
   const journalPath = path.join(outDir, 'session_handoff.json');
@@ -108,6 +121,7 @@ test('corrupt journal: quarantines, boots clean, exits 0 silent', () => {
 
 test('never walks above HOME for project config (sandbox isolation holds)', () => {
   const { home, cwd } = sandbox();
+  muteUpdate(home);
   // A .coalhearth.json placed ABOVE home must never be read by a cwd nested under home.
   const aboveHome = path.dirname(home);
   const outsideMarker = path.join(aboveHome, `.coalhearth-outside-${Date.now()}.json`);

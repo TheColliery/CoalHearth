@@ -70,14 +70,18 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 | | `atomicityRetries` | `3` | Atomic write-then-rename retries before giving up (fail-silent). |
 | `recovery` | `autoInjectPrompt` | `true` | Inject the recovery block on resume. |
 | | `stashUnsavedChanges` | `true` | Stash-related resume behavior. |
+| `update` | `updateMode` | `ask` | Self-update handling: `ask` · `auto` · `remind` · `off`. The hook only schedules; the agent verifies + offers, consent-gated. |
+| | `updateCheckDays` | `14` | Days between self-update checks (1-365; out-of-range clamps to the default on read). |
 
 > The `budgets` numbers are **advisory thresholds for a best-effort heuristic**, not a precise limit read — see the honest frame above.
+
+Check for updates any time with **`/coalhearth:update`** — the agent compares the latest release tag to the installed version and offers `claude plugin update coalhearth@coalhearth`. The hook never networks; the check is the agent's, run with your consent.
 
 ## 🪝 The two hooks
 
 Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes** beyond an optional best-effort `git status`, and they emit only their one sanctioned channel.
 
-- **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
+- **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
 - **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically, then runs the advisory budget check and prints the one nudge line only when headroom is low.
 
 ## 🧭 Part of TheColliery

@@ -1,0 +1,42 @@
+name: "Bug report"
+description: "A hook, the journal/resume engine, the budget nudge, or a script misbehaves"
+title: "[bug] <component>: <one-line summary>"
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - warm-resume / recovery block (session-start.js + resume-engine.js)
+        - journaling (post-tool-use.js + handoff-journal.js + state-snapshot.js)
+        - budget guardrail nudge (budget-tracker.js)
+        - orphan sweep (resume-engine.js)
+        - self-update (session-start.js schedule + commands/update.md)
+        - config (load-config.js / config-schema.mjs / schema.json)
+        - verify / build / test scripts
+        - plugin / packaging
+        - docs
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CoalHearth version + platform
+      placeholder: "v0.1.0-beta.2 · Claude Code on Windows 11"  # version-pin: tracks .claude-plugin/plugin.json — bump on release
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce + what happened
+      description: "Exact commands/inputs and exact output. For a resume bug, the journal JSON (redact anything private) and what the recovery block showed."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: "What you expected to happen instead."
+    validations:
+      required: false

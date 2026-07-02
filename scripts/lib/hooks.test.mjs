@@ -12,7 +12,7 @@
 // simulate the death (just stop calling it / mutate status) -> REAL SessionStart boots
 // -> assert exit0 + silence-except-sanctioned + the state effect.
 //
-// CORE 6 + EDGE 5 = 11 cases. Each asserts the three observable surfaces:
+// CORE 6 + EDGE 5 + SELF-UPDATE 3 = 14 cases. Each asserts the three observable surfaces:
 //   (1) exit code 0 on every path;
 //   (2) stderr silent (Phoenix #13 — SessionStart's context-injection stdout is sanctioned);
 //   (3) the expected state effect (journal read/written/quarantined, sweep, or nothing).
@@ -44,11 +44,24 @@ function clean(...dirs) {
 function run(hook, cwd, home, stdin = '') {
   return spawnSync(process.execPath, [hook], {
     cwd,
-    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home },
+    // CLAUDE_CONFIG_DIR emptied: the config loader honors it, so a real machine value
+    // would point the "global" config outside the sandbox home (hooks-safety §7).
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
     input: stdin,
     encoding: 'utf8',
     timeout: 20000,
   });
+}
+// Write a sandbox GLOBAL config (home/.claude/.coalhearth.json).
+function writeGlobalCfg(home, cfg) {
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify(cfg), 'utf8');
+}
+// A fresh sandbox home means the self-update check is "due" on the very first boot;
+// cases that assert STRICT SILENCE mute it so their assertion stays about the journal
+// path only (the update directive has its own cases 12-14).
+function muteUpdate(home) {
+  writeGlobalCfg(home, { update: { updateMode: 'off' } });
 }
 // Write a journal exactly where a PostToolUse hook would leave it.
 function writeJournal(cwd, state) {
@@ -157,6 +170,7 @@ test('case 3: journal locked on save -> retry then fail-silent, exit 0', () => {
 test('case 4: corrupt journal on load -> quarantine + boot clean, exit 0 silent', () => {
   const { home, cwd } = sandbox();
   try {
+    muteUpdate(home); // keep the strict-silence assertion about the JOURNAL path only
     writeJournal(cwd, '{ this is not : valid json ]');
     const ss = run(SESSION_START, cwd, home);
     assertGraceful(ss);
@@ -248,6 +262,7 @@ test('case 7b: config resolution stops at home (no walk above the sandbox home)'
   const marker = path.join(aboveHome, `.coalhearth-leak-${Date.now()}.json`);
   const nested = fs.mkdtempSync(path.join(home, 'nested-'));
   try {
+    muteUpdate(home); // keep the strict-silence assertion about config isolation only
     // If the walk escaped home it would find THIS bogus config; a clean run proves it didn't.
     fs.writeFileSync(marker, '{"budgets":{"maxTurns":-999}}');
     const ss = run(SESSION_START, nested, home);
@@ -354,6 +369,60 @@ test('case 11: orphan worktree -> scoped sweep of CoalHearth-owned stale worktre
     assert.strictEqual(fs.existsSync(stale), false, 'stale ch-worker worktree swept');
     assert.strictEqual(fs.existsSync(keep), true, 'unowned worktree dir untouched');
     assert.match(ss.stdout, /unrecoverable/i, 'flags the killed worker\'s lost work');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// SELF-UPDATE 3 (kind-1, series-standard) — the SessionStart hook only SCHEDULES
+// via a throttled crash-safe stamp under the sandbox home (~/.claude/
+// .coalhearth-update-check); the online check is the agent's /coalhearth:update.
+// ---------------------------------------------------------------------------
+
+// (12) stamp-throttle: the 1st boot (first ever) nudges + stamps; the 2nd is silent.
+test('case 12: self-update stamp-throttle -> 1st SessionStart nudges + stamps, 2nd silent', () => {
+  const { home, cwd } = sandbox();
+  try {
+    const r1 = run(SESSION_START, cwd, home);
+    assertGraceful(r1);
+    assert.match(r1.stdout, /self-update due/, 'run #1 (first ever) is due -> nudges');
+    assert.ok(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), 'crash-safe stamp written under home/.claude');
+    const r2 = run(SESSION_START, cwd, home);
+    assertGraceful(r2);
+    assert.strictEqual(r2.stdout, '', 'run #2 inside the window -> throttled silent');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+// (13) update.updateMode:off -> fully silent, and nothing is even scheduled.
+test('case 13: update.updateMode:off -> silent, no stamp scheduled', () => {
+  const { home, cwd } = sandbox();
+  try {
+    writeGlobalCfg(home, { update: { updateMode: 'off' } });
+    const r = run(SESSION_START, cwd, home);
+    assertGraceful(r);
+    assert.strictEqual(r.stdout, '', 'updateMode:off -> no update directive');
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), false, 'off never writes a stamp');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+// (14) updateCheckDays:0 is CLAMPED on read -> the 2nd boot is throttled, not re-nagged.
+// Taken literally, 0 would make EVERY session "due" (now - last >= 0 always); the clamp
+// (out-of-range -> 14) restores the throttle. Mirrors CoalBoard's #3 regression test.
+test('case 14: updateCheckDays:0 clamped -> 2nd SessionStart throttled, not re-nagged', () => {
+  const { home, cwd } = sandbox();
+  try {
+    writeGlobalCfg(home, { update: { updateMode: 'auto', updateCheckDays: 0 } });
+    const r1 = run(SESSION_START, cwd, home);
+    const r2 = run(SESSION_START, cwd, home);
+    assertGraceful(r1);
+    assertGraceful(r2);
+    assert.match(r1.stdout, /self-update due/, 'run #1 (first ever) is due -> nudges + stamps');
+    assert.strictEqual(r2.stdout, '', 'run #2 must be throttled: updateCheckDays:0 clamps to 14, the window holds');
   } finally {
     clean(home, cwd);
   }

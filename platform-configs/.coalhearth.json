@@ -17,5 +17,16 @@
   "recovery": {
     "autoInjectPrompt": true,
     "stashUnsavedChanges": true
+  },
+  // Self-update (orthogonal to the journal/resume hooks — its own off-switch).
+  // The SessionStart hook only SCHEDULES a check via a throttled local stamp (no
+  // network); the AGENT verifies the latest tag and offers `claude plugin update
+  // coalhearth@coalhearth` (/coalhearth:update), consent-gated. updateMode: ask =
+  // on the first due session, ask once how to handle updates; auto = standing
+  // consent to check + offer; remind = a free reminder, you run it; off = silent.
+  // updateCheckDays: days between checks (1-365; out-of-range clamps to 14 on read).
+  "update": {
+    "updateMode": "ask",
+    "updateCheckDays": 14
   }
 }

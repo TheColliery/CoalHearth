@@ -1,11 +1,12 @@
 // Single source of truth for every .coalhearth.json key. Mirrors CoalTipple's
 // scripts/lib/config-schema.mjs pattern (series parity), adapted for CoalHearth's
-// 3 nested groups (budgets/journal/recovery) instead of a flat key list — the
+// 4 nested groups (budgets/journal/recovery/update) instead of a flat key list — the
 // factory config + config/schema.json (draft-07) both derive from this file.
 //
 // Spec fields per group-key:
-//   type   'bool' | 'int' | 'number' | 'string'
+//   type   'bool' | 'int' | 'number' | 'string' | 'enum'
 //   min/max bounds for 'int'/'number'
+//   values allowed values for 'enum' (compared case-insensitively)
 //   help   one-line description
 
 export const CONFIG_SCHEMA = {
@@ -23,6 +24,13 @@ export const CONFIG_SCHEMA = {
   recovery: {
     autoInjectPrompt: { type: 'bool', help: 'Prepend the generated recovery block to the next session prompt. Default true' },
     stashUnsavedChanges: { type: 'bool', help: 'Advise stashing unsaved changes on a detected aborted session. Default true' },
+  },
+  // Self-update (series-standard kind-1): the SessionStart HOOK only SCHEDULES via a
+  // throttled stamp; the AGENT verifies + offers (/coalhearth:update). Orthogonal to
+  // the journal/resume behavior — its own off-switch.
+  update: {
+    updateMode: { type: 'enum', values: ['ask', 'auto', 'remind', 'off'], help: 'Self-update behavior at session start (ask, auto, remind, off). The hook never networks — the agent verifies + offers, consent-gated. Default ask' },
+    updateCheckDays: { type: 'int', min: 1, max: 365, help: 'Days between self-update checks/reminders (range 1-365; the hook CLAMPS an out-of-range value to the default on read). Default 14' },
   },
 };
 
@@ -45,6 +53,10 @@ export function validateValue(spec, v) {
       return null;
     case 'string':
       return typeof v === 'string' ? null : 'must be a string';
+    case 'enum':
+      return typeof v === 'string' && spec.values.includes(v.toLowerCase())
+        ? null
+        : `must be one of: ${spec.values.join(', ')}`;
     default:
       return `has an unknown spec type '${spec.type}'`;
   }
