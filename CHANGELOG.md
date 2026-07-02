@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.3] — 2026-07-02
+
+**Security fix — the orphan sweep's containment is now PHYSICAL (realpath), not lexical.** Caught by the new CI's very first run (all 6 matrix cells red): `sweepOrphans`'s `contained()` used `path.resolve` + `path.relative` — lexical resolution that never dereferences symlinks — so a scratch dir **symlinked outside the workspace passed the guard** and the sweep could delete through the symlink into foreign territory.
+
+### Fixed
+- **`ResumeEngine.sweepOrphans` realpath-and-contain** — both the workspace root and every sweep candidate are `fs.realpathSync`-resolved before the containment check (root too, or macOS's `/private`-symlinked tmpdir would no-op legit sweeps); an unresolvable candidate (absent/broken link) is never touched (fail-closed). Fail-silent per Phoenix-13.
+- **The symlink-escape test now actually runs everywhere** — the previous test created the symlink with type `'dir'` (EPERM on unprivileged Windows) and skipped via a bare `return` = a silent vacuous pass that hid the bug on the dev box; it now uses `'junction'` (unprivileged on Windows, ignored on POSIX) and skips **visibly** via `t.skip(...)` where a filesystem truly cannot link. Also removes the vestigial always-true `if (linked)` conditional CodeQL flagged.
+
+Gate: build + verify + 77/77 tests PASS (the symlink test now executes for real locally).
+
 ## [0.1.0-beta.2] — 2026-07-02
 
 **Skill-repo pattern conformance** — community docs, CI, self-update, zero-manifest. No change to the recovery core or the budget guardrail.

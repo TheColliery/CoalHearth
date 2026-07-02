@@ -187,7 +187,7 @@ test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the 
   }
 });
 
-test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a symlink out', () => {
+test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a symlink out', (t) => {
   const root = tmp();
   const outside = tmp();
   try {
@@ -195,21 +195,21 @@ test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a sy
     // Point an OWNED scratch dir at an OUTSIDE dir via symlink; the resolve-and-contain
     // guard must refuse to sweep files whose resolved path leaves root.
     fs.mkdirSync(path.join(root, '.claude', 'coalhearth'), { recursive: true });
-    let linked = false;
     try {
-      fs.symlinkSync(outside, path.join(root, '.claude', 'coalhearth', 'scratch'), 'dir');
-      linked = true;
+      // 'junction' creates unprivileged on Windows (no admin/Dev-Mode needed); the
+      // type arg is ignored on POSIX. A silent vacuous pass here hid a real escape
+      // bug until CI's first run — skip VISIBLY if the filesystem truly can't link.
+      fs.symlinkSync(outside, path.join(root, '.claude', 'coalhearth', 'scratch'), 'junction');
     } catch {
-      return; // symlink not permitted on this box (e.g. no admin on Windows) -> skip
+      t.skip('symlink/junction not permitted on this filesystem');
+      return;
     }
-    if (linked) {
-      new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }).sweepOrphans(root);
-      assert.strictEqual(
-        fs.existsSync(path.join(outside, 'probe_escape.mjs')),
-        true,
-        'a symlinked-out scratch dir must NOT be swept (resolve-and-contain)'
-      );
-    }
+    new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }).sweepOrphans(root);
+    assert.strictEqual(
+      fs.existsSync(path.join(outside, 'probe_escape.mjs')),
+      true,
+      'a symlinked-out scratch dir must NOT be swept (resolve-and-contain)'
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
