@@ -92,6 +92,32 @@ test('HandoffJournal.save returns false after exhausting retries on a persistent
   }
 });
 
+// Regression (audit 2026-07-02 MED): atomicityRetries is clamped to [1,5], so a
+// hostile `.coalhearth.json` (retries:50) can't spin save()'s SYNCHRONOUS busy-wait
+// backoff for seconds on the PostToolUse hot-path (the audit reproduced 25,504ms).
+test('HandoffJournal clamps atomicityRetries to a small max (no multi-second busy-wait)', () => {
+  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 50 }).retries, 5, 'clamped to 5');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 3 }).retries, 3, 'in-range kept');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 0 }).retries, 3, 'non-positive -> default');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp() }).retries, 3, 'absent -> default');
+
+  // A persistent write failure with a huge configured retry count must return fast.
+  const dir = tmp();
+  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 50 });
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = () => { const e = new Error('busy'); e.code = 'EBUSY'; throw e; };
+  try {
+    const t0 = Date.now();
+    const ok = journal.save({ status: 'in_progress' });
+    const elapsed = Date.now() - t0;
+    assert.strictEqual(ok, false);
+    assert.ok(elapsed < 1000, `save() returned in ${elapsed}ms — clamp holds it well under the 25.5s unclamped case`);
+  } finally {
+    fs.writeFileSync = realWrite;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- ResumeEngine -----------------------------------------------------------
 
 test('ResumeEngine.detectAbortedSession returns null when no journal exists', () => {
@@ -149,6 +175,21 @@ test('ResumeEngine.generateHandoffPrompt renders goal/checklist and ALWAYS advis
   assert.match(md, /\[x\] A/); // done rendered
   assert.match(md, /\[\/\] B/); // doing rendered
   assert.strictEqual(new ResumeEngine({ outputDirectory: tmp() }).generateHandoffPrompt(null), '', 'null -> empty');
+});
+
+// Regression (audit 2026-07-02 L7): recovery.stashUnsavedChanges was inert. It now
+// gates the stash-advice line in the recovery prompt (default on; false drops it).
+test('ResumeEngine.generateHandoffPrompt gates the stash-advice line on recovery.stashUnsavedChanges', () => {
+  const data = {
+    sessionId: 's1', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+    checklist: [], modifiedFiles: [], activePlan: { goal: 'X', nextSteps: [], constraints: [] },
+  };
+  const on = new ResumeEngine({ outputDirectory: tmp() }, {}).generateHandoffPrompt(data); // default on
+  const explicitOn = new ResumeEngine({ outputDirectory: tmp() }, { stashUnsavedChanges: true }).generateHandoffPrompt(data);
+  const off = new ResumeEngine({ outputDirectory: tmp() }, { stashUnsavedChanges: false }).generateHandoffPrompt(data);
+  assert.match(on, /git stash/i, 'default -> stash advice present');
+  assert.match(explicitOn, /git stash/i, 'explicit true -> present');
+  assert.doesNotMatch(off, /git stash/i, 'false -> stash advice dropped');
 });
 
 test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', () => {
@@ -267,7 +308,7 @@ test('config-schema validateValue enforces type + bounds', () => {
 test('config-schema validateConfig passes the factory shape and flags unknown group/key', () => {
   const factory = {
     budgets: { maxTurns: 30, maxTokens: 2000000, warningTurnThreshold: 5, warningTokenPercentage: 0.15 },
-    journal: { outputDirectory: '.claude/coalhearth', historyLimit: 5, atomicityRetries: 3 },
+    journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
     update: { updateMode: 'ask', updateCheckDays: 14 },
   };

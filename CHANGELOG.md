@@ -2,6 +2,23 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.4] — 2026-07-02
+
+**Two HIGH fixes + a hot-path MED + config de-rot** — surfaced by two independent CoalBoard nasa audits (fable/nasa + haiku/nasa mirrors) running the code, not asserting. No change to the recovery core's happy path.
+
+### Fixed
+- **HIGH — `\Z` silently dropped constraints on resume** (`lib/state-snapshot.js`). `parseConstraints` used `(?=^##\s|\Z)`; JS regex has no `\Z` anchor — it matched a literal "Z". When `## Constraints` / `## Working Rules` was the LAST section of `AGENTS.md` (the common layout) with no literal "Z" after it, the lazy body found no stop point and the whole match failed → constraints silently `[]`, so the resumed agent lost its standing rules. Replaced with `(?![\s\S])` (true end-of-input; flag-independent). Regression test: an `AGENTS.md` that ENDS on the Constraints list.
+- **HIGH — `_pruneOldLogs` could blind-delete an untrusted-config-aimed dir** (`lib/handoff-journal.js`). The ENOSPC prune did `readdirSync` + `unlinkSync` on every entry except the journal — a blind delete-all with no path containment, and `outputDirectory` is merged from the untrusted project `.coalhearth.json`, so a poisoned `{"journal":{"outputDirectory":"../secrets"}}` + a disk-full save could delete every file in an attacker-chosen directory (and it nuked the `*.corrupt.json` forensic quarantine even in-bounds). Now an **allow-list** (`error.log`, `*.tmp` only) with the same **realpath-and-contain** discipline `resume-engine.js` `sweepOrphans` uses (physical realpath of root + every candidate, fail-closed on unresolvable). The journal AND the corrupt-quarantine are kept. Regression tests: the quarantine + unrecognized files survive; a dir outside the owned journal dir is never touched.
+- **MED — `atomicityRetries` unclamped × synchronous busy-wait → PostToolUse stall** (`lib/handoff-journal.js`, `config/schema.json`). `save()` runs on the PostToolUse hot-path and its retry backoff is a synchronous spin, so a hostile `atomicityRetries: 50` spun the hook ~25.5s per tool call. Now clamped to **[1, 5]** at load (worst-case backoff ≈ 200ms) and bounded in the JSON schema (`maximum: 5`). Regression test: a huge configured retry count returns in < 1s.
+
+### Changed
+- **`recovery.autoInjectPrompt` + `recovery.stashUnsavedChanges` are now wired** (were inert config keys — audit L7). `autoInjectPrompt:false` suppresses the recovery-block injection (still detects + sweeps + marks resumed); `stashUnsavedChanges:false` drops the "consider `git stash`" advisory line from the recovery block (the hook still never stashes for you — Phoenix #5).
+
+### Removed
+- **`journal.historyLimit`** — assigned but never read (no journal-history rotation exists; the prune is need-driven, not count-driven). Dropped from the schema, factory config, and README (audit L8).
+
+Gate: build + verify + 84/84 tests PASS (77 + 7 new regression tests).
+
 ## [0.1.0-beta.3] — 2026-07-02
 
 **Security fix — the orphan sweep's containment is now PHYSICAL (realpath), not lexical.** Caught by the new CI's very first run (all 6 matrix cells red): `sweepOrphans`'s `contained()` used `path.resolve` + `path.relative` — lexical resolution that never dereferences symlinks — so a scratch dir **symlinked outside the workspace passed the guard** and the sweep could delete through the symlink into foreign territory.

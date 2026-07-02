@@ -39,7 +39,8 @@ function updateDue(config) {
 
 function main() {
   const config = loadConfig();
-  const engine = new ResumeEngine(config.journal || {});
+  const recovery = config.recovery || {};
+  const engine = new ResumeEngine(config.journal || {}, recovery);
   const aborted = engine.detectAbortedSession();
   if (aborted) {
     // Scoped resume-time orphan sweep (MEMORY.md Incident B): a killed worker leaves
@@ -52,8 +53,13 @@ function main() {
       // fail-silent: a failed sweep never blocks the resume
     }
 
-    const prompt = engine.generateHandoffPrompt(aborted);
-    if (prompt) console.log(prompt); // sanctioned SessionStart context-injection channel (Phoenix #13)
+    // recovery.autoInjectPrompt (default true): print the recovery block on the
+    // sanctioned SessionStart channel. false = detect + sweep + mark resumed, but
+    // suppress the injection (audit 2026-07-02 L7 — the flag was previously inert).
+    if (recovery.autoInjectPrompt !== false) {
+      const prompt = engine.generateHandoffPrompt(aborted);
+      if (prompt) console.log(prompt); // sanctioned SessionStart context-injection channel (Phoenix #13)
+    }
 
     // Mark resumed so the same journal doesn't re-inject every subsequent boot.
     try {

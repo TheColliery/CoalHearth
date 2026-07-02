@@ -17,8 +17,7 @@
       "type": "object",
       "properties": {
         "outputDirectory": { "type": "string", "default": ".claude/coalhearth" },
-        "historyLimit": { "type": "integer", "minimum": 0, "default": 5 },
-        "atomicityRetries": { "type": "integer", "minimum": 0, "default": 3 }
+        "atomicityRetries": { "type": "integer", "minimum": 1, "maximum": 5, "default": 3 }
       },
       "additionalProperties": false
     },

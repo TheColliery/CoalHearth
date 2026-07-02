@@ -10,7 +10,6 @@
   // Handoff journal (the recovery core — this is the part that matters).
   "journal": {
     "outputDirectory": ".claude/coalhearth",
-    "historyLimit": 5,
     "atomicityRetries": 3
   },
   // Resume-on-boot behavior.

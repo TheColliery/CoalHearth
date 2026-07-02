@@ -18,8 +18,7 @@ export const CONFIG_SCHEMA = {
   },
   journal: {
     outputDirectory: { type: 'string', help: 'Where session_handoff.json is written. Default .claude/coalhearth' },
-    historyLimit: { type: 'int', min: 0, help: 'How many prior handoff logs to retain before pruning. Default 5' },
-    atomicityRetries: { type: 'int', min: 0, help: 'Retries for the atomic tmp-then-rename journal write. Default 3' },
+    atomicityRetries: { type: 'int', min: 1, max: 5, help: 'Retries for the atomic tmp-then-rename journal write (clamped 1-5 — save() busy-waits synchronously on the hot-path). Default 3' },
   },
   recovery: {
     autoInjectPrompt: { type: 'bool', help: 'Prepend the generated recovery block to the next session prompt. Default true' },

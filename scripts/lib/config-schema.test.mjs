@@ -11,7 +11,11 @@ test('validateValue rejects a non-integer for an int spec', () => {
 });
 
 test('validateValue rejects below min', () => {
-  assert.match(validateValue(CONFIG_SCHEMA.journal.historyLimit, -1), />=/);
+  assert.match(validateValue(CONFIG_SCHEMA.journal.atomicityRetries, 0), />=/);
+});
+
+test('validateValue rejects atomicityRetries above the clamp max', () => {
+  assert.match(validateValue(CONFIG_SCHEMA.journal.atomicityRetries, 50), /<=/);
 });
 
 test('validateValue accepts a bool', () => {
@@ -25,7 +29,7 @@ test('validateValue rejects a non-bool for a bool spec', () => {
 test('validateConfig passes on the full factory shape', () => {
   const errors = validateConfig({
     budgets: { maxTurns: 30, maxTokens: 2000000, warningTurnThreshold: 5, warningTokenPercentage: 0.15 },
-    journal: { outputDirectory: '.claude/coalhearth', historyLimit: 5, atomicityRetries: 3 },
+    journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
   });
   assert.deepEqual(errors, []);

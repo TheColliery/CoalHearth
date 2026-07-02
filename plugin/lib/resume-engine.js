@@ -32,9 +32,13 @@ const STALE_WORKTREE_RE = /^ch-worker-/; // CoalHearth-owned stale worker worktr
 class ResumeEngine {
   /**
    * @param {Object} config CoalHearth journal configuration ({ outputDirectory }).
+   * @param {Object} [recovery] recovery.* flags ({ stashUnsavedChanges }); the
+   *   stash-advice line in the recovery prompt is gated on stashUnsavedChanges
+   *   (default true) — otherwise the key was inert (audit 2026-07-02 L7).
    */
-  constructor(config) {
+  constructor(config, recovery) {
     this.config = config || {};
+    this.recovery = recovery || {};
     this.outputDir = path.resolve(this.config.outputDirectory || '.claude/coalhearth');
   }
 
@@ -102,10 +106,17 @@ class ResumeEngine {
       ? `\n> ⚠️ A prior worker was killed and left artifacts behind — CoalHearth swept ${data._orphanSweep.scratch || 0} scratch file(s) / ${data._orphanSweep.worktrees || 0} stale worktree(s). **Partial work from those killed workers is unrecoverable** (they journaled nothing); re-run any missing sub-task from scratch.`
       : '';
 
+    // recovery.stashUnsavedChanges (default true): advise stashing before continuing.
+    // Advisory text only — the hook NEVER runs `git stash` itself (Phoenix #5, zero
+    // side-effects). Setting it false drops this line (audit 2026-07-02 L7 — was inert).
+    const stashNote = this.recovery.stashUnsavedChanges === false
+      ? ''
+      : '\n> Before continuing, consider `git stash` (or a WIP commit) to protect any uncommitted work the interrupted session left behind.';
+
     return `> [!IMPORTANT]
 > **CoalHearth Warm-Resume Recovery**
 > Session \`${data.sessionId || 'unknown'}\` (last update: ${data.timestamp || 'unknown'}) looks interrupted.
-> ${staleNote} **Do not blind-trust this snapshot** — verify it against the actual repo state (\`git status\`, \`git diff\`) before continuing; the journal may be stale or half-applied.${orphanNote}
+> ${staleNote} **Do not blind-trust this snapshot** — verify it against the actual repo state (\`git status\`, \`git diff\`) before continuing; the journal may be stale or half-applied.${orphanNote}${stashNote}
 
 ### Goal
 ${plan.goal || 'N/A'}

@@ -66,10 +66,9 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 | | `warningTurnThreshold` | `5` | Nudge when turns-remaining drops to this or fewer. |
 | | `warningTokenPercentage` | `0.15` | Nudge when estimated token headroom drops to this fraction or less. |
 | `journal` | `outputDirectory` | `.claude/coalhearth` | Where `session_handoff.json` is written. |
-| | `historyLimit` | `5` | Journal-history cap (pruned to free space under a disk-quota error). |
-| | `atomicityRetries` | `3` | Atomic write-then-rename retries before giving up (fail-silent). |
-| `recovery` | `autoInjectPrompt` | `true` | Inject the recovery block on resume. |
-| | `stashUnsavedChanges` | `true` | Stash-related resume behavior. |
+| | `atomicityRetries` | `3` | Atomic write-then-rename retries before giving up (fail-silent; clamped 1-5 — the retry backoff is a synchronous wait on the hot-path). |
+| `recovery` | `autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
+| | `stashUnsavedChanges` | `true` | Add a "consider `git stash`" advisory line to the recovery block. `false` drops it. The hook never stashes for you. |
 | `update` | `updateMode` | `ask` | Self-update handling: `ask` · `auto` · `remind` · `off`. The hook only schedules; the agent verifies + offers, consent-gated. |
 | | `updateCheckDays` | `14` | Days between self-update checks (1-365; out-of-range clamps to the default on read). |
 

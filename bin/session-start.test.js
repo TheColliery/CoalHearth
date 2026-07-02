@@ -81,6 +81,40 @@ test('in_progress journal: exits 0, prints the recovery block, marks resumed', (
   cleanup(home, cwd);
 });
 
+// Regression (audit 2026-07-02 L7): recovery.autoInjectPrompt:false must suppress the
+// recovery-block injection while STILL detecting + marking the journal resumed (so it
+// doesn't re-detect forever). Previously the flag was inert (always injected).
+test('autoInjectPrompt:false: exits 0, suppresses the recovery block, still marks resumed', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, '.claude', '.coalhearth.json'),
+    '{"update":{"updateMode":"off"},"recovery":{"autoInjectPrompt":false}}',
+    'utf8'
+  );
+  const outDir = path.join(cwd, '.claude', 'coalhearth');
+  fs.mkdirSync(outDir, { recursive: true });
+  const journalPath = path.join(outDir, 'session_handoff.json');
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify({
+      sessionId: 'abc-123', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+      checklist: [], modifiedFiles: [], activePlan: { goal: 'Ship the feature', nextSteps: [], constraints: [] },
+    }),
+    'utf8'
+  );
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.strictEqual(r.stdout, '', 'no recovery block injected when autoInjectPrompt:false');
+  const after = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  assert.strictEqual(after.status, 'resumed', 'journal still marked resumed (no re-detect loop)');
+
+  cleanup(home, cwd);
+});
+
 test('completed journal: exits 0, silent, does not touch the file', () => {
   const { home, cwd } = sandbox();
   muteUpdate(home);
