@@ -2,6 +2,11 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.7] — 2026-07-02
+
+### Fixed
+- **`mergeModifiedFiles` (state-snapshot) now realpath-resolves BOTH the workspace root and the touched file before relativizing.** On macOS `process.cwd()` returns the physical `/private/var/...` path while a tool payload's `file_path` is often the raw `/var/...` symlink, so the lexical `path.relative` spuriously started with `..` and stored the file as an absolute path instead of the clean relative one — beta.6's payload-derived `modifiedFiles` test failed on `macos-latest` (both Node lanes) for exactly this. realpath falls back through the file's existing parent dir (a half-applied edit may not be on disk yet), then the lexical path; never throws (Phoenix #4). Same realpath-both-sides class as the beta.5 stop-at-home fix — caught by the first CI run on macOS.
+
 ## [0.1.0-beta.6] — 2026-07-02
 
 **Three MED fixes from the round-2 CoalBoard audit (both boards)** — the PostToolUse hook is now truly spawn-free (Phoenix #5), the dead turn-budget path is gone, and the journal directory can no longer be aimed outside the workspace by an untrusted config.
