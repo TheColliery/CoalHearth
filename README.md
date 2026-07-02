@@ -57,7 +57,7 @@ That's it — the hooks activate on your next session. No API keys, no network, 
 
 ## ⚙️ Configure
 
-Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). A fully-commented factory template ships as [`.coalhearth.json`](.coalhearth.json); the schema is [`config/schema.json`](config/schema.json). Every key is optional and falls back to the default below.
+Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). A fully-commented factory template ships as [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json); the schema is [`config/schema.json`](config/schema.json). Every key is optional and falls back to the default below.
 
 | Group | Key | Default | What it does |
 |---|---|---|---|

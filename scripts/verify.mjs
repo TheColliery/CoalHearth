@@ -25,8 +25,8 @@ for (const [label, p] of [
   ['config/schema.json', path.join(repo, 'config', 'schema.json')],
   ['hooks/hooks.json', path.join(repo, 'hooks', 'hooks.json')],
   ['.claude-plugin/plugin.json', path.join(repo, '.claude-plugin', 'plugin.json')],
-  ['marketplace.json', path.join(repo, 'marketplace.json')],
-  ['.coalhearth.json', path.join(repo, '.coalhearth.json')],
+  ['.claude-plugin/marketplace.json', path.join(repo, '.claude-plugin', 'marketplace.json')],
+  ['platform-configs/.coalhearth.json', path.join(repo, 'platform-configs', '.coalhearth.json')],
 ]) { try { fs.existsSync(p) ? ok(label) : fail(`${label} missing`); } catch (e) { fail(`${label}: ${e.message}`); } }
 
 console.log('plugin manifest:');
@@ -44,14 +44,14 @@ try {
 
 console.log('marketplace.json:');
 try {
-  const mj = JSON.parse(fs.readFileSync(path.join(repo, 'marketplace.json'), 'utf8'));
+  const mj = JSON.parse(fs.readFileSync(path.join(repo, '.claude-plugin', 'marketplace.json'), 'utf8'));
   if (mj.plugins?.[0]?.source === './plugin') ok('marketplace.json points at ./plugin');
   else fail(`marketplace.json plugins[0].source = '${mj.plugins?.[0]?.source}' (want './plugin')`);
 } catch (e) { fail(`marketplace.json: ${e.message}`); }
 
 console.log('config (factory vs schema):');
 try {
-  let c = fs.readFileSync(path.join(repo, '.coalhearth.json'), 'utf8');
+  let c = fs.readFileSync(path.join(repo, 'platform-configs', '.coalhearth.json'), 'utf8');
   if (c.charCodeAt(0) === 0xFEFF) c = c.slice(1);
   const cfg = JSON.parse(stripJsonc(c));
   const errors = validateConfig(cfg);
