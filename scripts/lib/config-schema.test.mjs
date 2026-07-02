@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { CONFIG_SCHEMA, validateValue, validateConfig } from './config-schema.mjs';
 
 test('validateValue accepts a valid int within bounds', () => {
-  assert.equal(validateValue(CONFIG_SCHEMA.budgets.maxTurns, 30), null);
+  assert.equal(validateValue(CONFIG_SCHEMA.budgets.maxTokens, 2000000), null);
 });
 
 test('validateValue rejects a non-integer for an int spec', () => {
-  assert.match(validateValue(CONFIG_SCHEMA.budgets.maxTurns, 1.5), /integer/);
+  assert.match(validateValue(CONFIG_SCHEMA.budgets.maxTokens, 1.5), /integer/);
 });
 
 test('validateValue rejects below min', () => {
@@ -28,7 +28,7 @@ test('validateValue rejects a non-bool for a bool spec', () => {
 
 test('validateConfig passes on the full factory shape', () => {
   const errors = validateConfig({
-    budgets: { maxTurns: 30, maxTokens: 2000000, warningTurnThreshold: 5, warningTokenPercentage: 0.15 },
+    budgets: { maxTokens: 2000000, warningTokenPercentage: 0.15 },
     journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
   });

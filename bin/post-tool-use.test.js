@@ -67,7 +67,7 @@ test('task.md checklist is parsed into the journal', () => {
   }
 });
 
-test('no task.md / no git -> still succeeds with empty defaults (no-external-assumption)', () => {
+test('no task.md / no tool payload -> still succeeds with empty defaults (no-external-assumption)', () => {
   const cwd = mk();
   const home = mk();
   try {
@@ -89,14 +89,56 @@ test('near-limit config -> advisory nudge on stdout (best-effort, non-blocking)'
   const home = mk();
   try {
     fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    // Token-only guardrail: a tiny maxTokens + a large stdin payload -> the
+    // estimated headroom drops under the warning fraction -> one nudge line.
     fs.writeFileSync(
       path.join(cwd, '.coalhearth.json'),
-      JSON.stringify({ budgets: { maxTurns: 1, warningTurnThreshold: 5 } })
+      JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } })
     );
-    const r = run(cwd, home);
+    const r = run(cwd, home, 'x'.repeat(400)); // ~100 tok estimated -> 0% headroom
     assert.strictEqual(r.status, 0);
     assert.match(r.stdout, /\[CoalHearth\]/);
     assert.match(r.stdout, /advisory/);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// FIX (audit 2026-07-02 MED, Phoenix #5): modifiedFiles comes from the tool-call
+// payloads the hook OBSERVES — no git spawn. Accumulates across calls via the
+// journal, dedupes, and ignores non-file tools.
+test('modifiedFiles accumulates from Write/Edit payloads across hook runs, deduped, no git', () => {
+  const cwd = mk();
+  const home = mk();
+  const journalPath = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
+  const payload = (tool, file) =>
+    JSON.stringify({ tool_name: tool, tool_input: { file_path: file } });
+  try {
+    // 1st call: a Write names a file inside cwd -> recorded relative.
+    let r = run(cwd, home, payload('Write', path.join(cwd, 'src', 'a.js')));
+    assert.strictEqual(r.status, 0);
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(journalPath, 'utf8')).modifiedFiles,
+      [path.join('src', 'a.js')]
+    );
+    // 2nd call: an Edit on another file ACCUMULATES onto the prior list.
+    r = run(cwd, home, payload('Edit', path.join(cwd, 'src', 'b.js')));
+    assert.strictEqual(r.status, 0);
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(journalPath, 'utf8')).modifiedFiles,
+      [path.join('src', 'a.js'), path.join('src', 'b.js')]
+    );
+    // 3rd call: the same file re-touched -> deduped; a Read tool adds nothing.
+    r = run(cwd, home, payload('Write', path.join(cwd, 'src', 'a.js')));
+    assert.strictEqual(r.status, 0);
+    r = run(cwd, home, payload('Read', path.join(cwd, 'src', 'c.js')));
+    assert.strictEqual(r.status, 0);
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(journalPath, 'utf8')).modifiedFiles,
+      [path.join('src', 'a.js'), path.join('src', 'b.js')],
+      'dedup holds and a non-file tool contributes nothing'
+    );
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });

@@ -4,6 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { containedOutputDir } = require('./contained-dir.js');
 
 const JOURNAL_NAME = 'session_handoff.json';
 const RETRY_BASE_MS = 20; // ponytail: tiny sync backoff, not a real scheduler
@@ -18,19 +19,37 @@ const MAX_RETRIES = 5; // hard clamp: save() runs on the PostToolUse hot-path an
 const PRUNABLE_RE = /^(?:error\.log|.*\.tmp)$/;
 
 class HandoffJournal {
-  constructor(config) {
+  /**
+   * @param {Object} config journal config ({ outputDirectory, atomicityRetries }).
+   * @param {string} [root] workspace root the outputDirectory is realpath-contained
+   *   under (default process.cwd()). An untrusted project `.coalhearth.json`
+   *   outputDirectory escaping root clamps to the default owned dir; if even that
+   *   fails containment, outputDir is null and save()/load()/prune no-op
+   *   (fail-closed — audit 2026-07-02 MED, see lib/contained-dir.js).
+   */
+  constructor(config, root) {
     this.config = config || {};
-    this.outputDir = path.resolve(this.config.outputDirectory || '.claude/coalhearth');
+    this.outputDir = containedOutputDir(this.config.outputDirectory, root);
     // Clamp to [1, MAX_RETRIES]: a non-positive/absent value -> 3 (default), an
     // over-large one -> MAX_RETRIES, so the synchronous busy-wait backoff stays bounded.
     const wanted = Number.isInteger(this.config.atomicityRetries) && this.config.atomicityRetries > 0
       ? this.config.atomicityRetries
       : 3;
     this.retries = Math.min(wanted, MAX_RETRIES);
+  }
 
+  /**
+   * Best-effort read of the last saved journal. Returns the parsed object or
+   * null on any failure (absent, corrupt, uncontained dir) — never throws.
+   */
+  load() {
+    if (!this.outputDir) return null;
     try {
-      fs.mkdirSync(this.outputDir, { recursive: true });
-    } catch (_) {}
+      const data = JSON.parse(fs.readFileSync(path.join(this.outputDir, JOURNAL_NAME), 'utf8'));
+      return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   /**
@@ -39,6 +58,7 @@ class HandoffJournal {
    * @param {Object} state
    */
   save(state) {
+    if (!this.outputDir) return false; // fail-closed: no contained dir -> never write
     const targetPath = path.join(this.outputDir, JOURNAL_NAME);
     const tempPath = targetPath + '.tmp';
 
@@ -80,12 +100,15 @@ class HandoffJournal {
 
   // FMEA "Disk Quota Exceeded": free space for the journal retry by deleting ONLY
   // CoalHearth-owned transient junk (error.log, *.tmp leftovers) — an ALLOW-LIST, not
-  // a blind delete-all. Root + every target are realpath-and-contained BEFORE any
-  // unlink (same discipline as resume-engine.js sweepOrphans), so an untrusted
-  // `.coalhearth.json` `{journal:{outputDirectory:"../secrets"}}` cannot aim the prune
-  // outside the owned journal dir on ENOSPC (audit 2026-07-02 HIGH). We deliberately
-  // KEEP the *.corrupt.json forensic quarantine and any unrecognized file.
+  // a blind delete-all (audit 2026-07-02 HIGH). Two containment layers: the
+  // constructor already realpath-contains outputDir under the WORKSPACE root (so an
+  // untrusted `{journal:{outputDirectory:"../secrets"}}` never anchors the prune
+  // outside it — audit 2026-07-02 MED, round 2), and every target here is
+  // realpath-and-contained inside outputDir (same discipline as resume-engine.js
+  // sweepOrphans) so a symlinked FILE inside the dir can't redirect an unlink out.
+  // We deliberately KEEP the *.corrupt.json forensic quarantine and any unrecognized file.
   _pruneOldLogs() {
+    if (!this.outputDir) return; // fail-closed: no contained dir -> nothing to prune
     try {
       let root;
       try {

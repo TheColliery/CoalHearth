@@ -5,7 +5,7 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 ## Attack surface
 - **Zero dependencies** — no third-party packages, so no dependency-CVE surface (nothing to `npm audit`; the lockfile-scan step other projects need is N/A here).
 - **No network** — the engine is entirely local filesystem; it never makes a network request.
-- **Node builtins only** — `fs`, `path`, `os`, `crypto`.
+- **Node builtins only** — `fs`, `path`, `os`. **No child processes** — the hooks spawn nothing (the earlier best-effort `git status` spawn was removed; modified files come from the tool-call payloads the hook observes).
 
 ## Hook safety (Phoenix-13)
 - The `SessionStart` and `PostToolUse` hooks are **fail-silent**: all logic is wrapped in try/catch, they exit 0 on every path, and they never crash the host agent.
@@ -13,6 +13,7 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 
 ## Filesystem safety
 - **Path-contained orphan sweep.** The resume-time cleanup removes only known scratch/worktree name-patterns, only inside **CoalHearth-owned** dirs (`.claude/coalhearth/scratch`, `.agents/coalhearth/scratch`, and CoalHearth-owned stale worktrees), resolve-and-contained under the workspace root. It NEVER touches the user's own tree (e.g. your `scripts/`) and never does a blind recursive delete.
+- **Contained journal directory.** `journal.outputDirectory` (mergeable from an untrusted project `.coalhearth.json`) is realpath-contained under the workspace root at construction — a path escaping the workspace (e.g. `"../../victim"`) clamps to the default owned dir, so neither the journal write, the ENOSPC prune, nor the corrupt-quarantine can be aimed outside.
 - **Atomic journal writes** (temp-write + rename, with retry/backoff); a corrupt journal is quarantined aside rather than crashing the boot; a disk-quota error prunes old logs and keeps the core state.
 
 ## Config parsing

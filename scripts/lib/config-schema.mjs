@@ -10,14 +10,19 @@
 //   help   one-line description
 
 export const CONFIG_SCHEMA = {
+  // TOMBSTONED (round-2 CoalBoard audit, 2026-07-02 — dead-path removal): `maxTurns`
+  // (int) and `warningTurnThreshold` (int) removed. The turn nudge was structurally
+  // dead: the hook builds a FRESH BudgetTracker per PostToolUse (Phoenix #6,
+  // stateless — nothing persists a turn count), so currentTurns never exceeded 1 and
+  // the turn branch could not fire unless maxTurns <= threshold+1. The budget
+  // guardrail is token-only now. Do NOT re-add without a persistence design.
+  // (Same tombstone-by-removal pattern as CoalTipple's rankingMode/hardEnforce.)
   budgets: {
-    maxTurns: { type: 'int', min: 1, help: 'Turns before the session is considered budget-exhausted (advisory). Default 30' },
     maxTokens: { type: 'int', min: 1, help: 'Token ceiling for the char-heuristic budget estimate (advisory, not precise). Default 2000000' },
-    warningTurnThreshold: { type: 'int', min: 0, help: 'Turns remaining that trigger a warning nudge. Default 5' },
     warningTokenPercentage: { type: 'number', min: 0, max: 1, help: 'Fraction of maxTokens remaining that triggers a warning nudge. Default 0.15' },
   },
   journal: {
-    outputDirectory: { type: 'string', help: 'Where session_handoff.json is written. Default .claude/coalhearth' },
+    outputDirectory: { type: 'string', help: 'Where session_handoff.json is written (realpath-contained under the workspace root; an escaping path falls back to the default). Default .claude/coalhearth' },
     atomicityRetries: { type: 'int', min: 1, max: 5, help: 'Retries for the atomic tmp-then-rename journal write (clamped 1-5 — save() busy-waits synchronously on the hot-path). Default 3' },
   },
   recovery: {

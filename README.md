@@ -22,7 +22,7 @@
 
 A session limit-hit or a crash loses in-flight work — the plan, the checklist, the list of files you were mid-edit on. CoalHearth **reduces that loss**:
 
-- **The recovery core.** A `PostToolUse` hook builds a best-effort snapshot of the session (goal + checklist from `task.md`, constraints from `AGENTS.md`, modified files from `git status`) and journals it **atomically** every step to `session_handoff.json`.
+- **The recovery core.** A `PostToolUse` hook builds a best-effort snapshot of the session (goal + checklist from `task.md`, constraints from `AGENTS.md`, modified files accumulated from the file-editing tool calls the hook observes — no `git` spawn, no child processes) and journals it **atomically** every step to `session_handoff.json`.
 - **Warm-resume on boot.** On the next session's `SessionStart`, if the prior session's journal is still marked `in_progress` or `limit_reached`, CoalHearth injects a markdown **recovery block** — the goal, the checklist, the files it was touching, the planned next steps — so you resume from context instead of reconstructing it by hand.
 - **The recovery block never asks you to blind-trust it.** It always tells the agent to **verify against `git status` / `git diff`** first — the journal may be stale or half-applied.
 
@@ -30,7 +30,7 @@ That recovery core is the value. Everything else is secondary.
 
 ## 📉 Budget guardrail (secondary, advisory)
 
-Alongside the journal, the same hook tracks turns and a char-heuristic token estimate. When headroom looks low (few turns left, or estimated token headroom below the configured percentage), it emits **one advisory line** suggesting the agent prefer inline work over spawning subagents — because a fanned-out worker that dies on the limit returns nothing.
+Alongside the journal, the same hook keeps a char-heuristic token estimate. When the estimated token headroom drops below the configured percentage, it emits **one advisory line** suggesting the agent prefer inline work over spawning subagents — because a fanned-out worker that dies on the limit returns nothing.
 
 This is a **best-effort nudge, not a hard block.** The model decides whether to actually collapse to inline; nothing is enforced.
 
@@ -61,11 +61,9 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 
 | Group | Key | Default | What it does |
 |---|---|---|---|
-| `budgets` | `maxTurns` | `30` | Turn ceiling the guardrail measures headroom against. |
-| | `maxTokens` | `2000000` | Token ceiling for the char-heuristic estimate. |
-| | `warningTurnThreshold` | `5` | Nudge when turns-remaining drops to this or fewer. |
+| `budgets` | `maxTokens` | `2000000` | Token ceiling for the char-heuristic estimate. |
 | | `warningTokenPercentage` | `0.15` | Nudge when estimated token headroom drops to this fraction or less. |
-| `journal` | `outputDirectory` | `.claude/coalhearth` | Where `session_handoff.json` is written. |
+| `journal` | `outputDirectory` | `.claude/coalhearth` | Where `session_handoff.json` is written. Realpath-contained under the workspace root — a path escaping it (e.g. from an untrusted repo's config) falls back to the default. |
 | | `atomicityRetries` | `3` | Atomic write-then-rename retries before giving up (fail-silent; clamped 1-5 — the retry backoff is a synchronous wait on the hot-path). |
 | `recovery` | `autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
 | | `stashUnsavedChanges` | `true` | Add a "consider `git stash`" advisory line to the recovery block. `false` drops it. The hook never stashes for you. |
@@ -78,7 +76,7 @@ Check for updates any time with **`/coalhearth:update`** — the agent compares 
 
 ## 🪝 The two hooks
 
-Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes** beyond an optional best-effort `git status`, and they emit only their one sanctioned channel.
+Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes**, and they emit only their one sanctioned channel.
 
 - **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
 - **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically, then runs the advisory budget check and prints the one nudge line only when headroom is low.

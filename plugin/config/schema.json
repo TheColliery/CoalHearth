@@ -6,9 +6,7 @@
     "budgets": {
       "type": "object",
       "properties": {
-        "maxTurns": { "type": "integer", "minimum": 1, "default": 30 },
         "maxTokens": { "type": "integer", "minimum": 1, "default": 2000000 },
-        "warningTurnThreshold": { "type": "integer", "minimum": 0, "default": 5 },
         "warningTokenPercentage": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15 }
       },
       "additionalProperties": false

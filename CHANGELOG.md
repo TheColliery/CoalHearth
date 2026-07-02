@@ -2,6 +2,17 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.6] — 2026-07-02
+
+**Three MED fixes from the round-2 CoalBoard audit (both boards)** — the PostToolUse hook is now truly spawn-free (Phoenix #5), the dead turn-budget path is gone, and the journal directory can no longer be aimed outside the workspace by an untrusted config.
+
+### Fixed
+- **MED — Phoenix #5 violation: the PostToolUse hook spawned `git status` on EVERY tool call** (`lib/state-snapshot.js`). "Never spawn child processes" is absolute for Phoenix-13 hooks; the spawn also cost per-call latency on big repos and parsed `--porcelain` without `-z`. Removed entirely — `modifiedFiles` now **accumulates from the file paths the hook itself observes** in `Write`/`Edit`/`MultiEdit`/`NotebookEdit` tool payloads (prior journal list + the current call's file, deduped, relativized under the workspace), which is a *more* accurate "what changed this session" than `git status` (that also lists pre-session dirt) and needs no child process at all. `HandoffJournal` gained a fail-silent `load()` for the accumulation read-back. Both hooks are now spawn-free; README/SECURITY updated to say so without the old `git status` carve-out.
+- **MED — the turn-budget path was structurally dead** (`lib/budget-tracker.js`). The hook constructs a fresh `BudgetTracker` each PostToolUse (Phoenix #6, stateless — nothing persists a turn count), so `currentTurns` never exceeded 1 and the turn nudge could not fire unless `maxTurns <= warningTurnThreshold + 1`. YAGNI-removed: the tracker is **token-only** (the token branch CAN fire, on a large single payload); `maxTurns` + `warningTurnThreshold` are removed from `scripts/lib/config-schema.mjs` (tombstoned — do not re-add without a persistence design), `config/schema.json`, the factory config, and the README table.
+- **MED — `journal.outputDirectory` escaped the workspace (REPRODUCED)** (`lib/handoff-journal.js`, `lib/resume-engine.js`, new `lib/contained-dir.js`). The constructors anchored to the raw config value, so an untrusted project `.coalhearth.json` `{"journal":{"outputDirectory":"../../victim"}}` made `save()` WRITE and the ENOSPC prune DELETE in an arbitrary directory outside the workspace — the beta.4 prune containment only contained *within* that attacker-supplied dir. The output dir is now **realpath-contained under the workspace root at construction** (shared `containedOutputDir`, realpath BOTH sides, fail-closed on unresolvable): an escaping path clamps to the default owned dir; if even the default cannot be contained, the journal/resume no-op. Covers every write path through it — the journal save, the ENOSPC prune, the corrupt-quarantine, and the mark-resumed write. Regression tests: an escaping `outputDirectory` writes nothing and prunes nothing outside; both classes clamp.
+
+Gate: build + verify + 91/91 tests PASS (84 + 7 new regression tests; the case-9 hermetic hook test converted from git-derived to payload-derived).
+
 ## [0.1.0-beta.5] — 2026-07-02
 
 **The stop-at-home config walk is now symlink-correct (realpath both sides)** — the series one-flock sweep; same class as CoalFace v0.1.0-beta.2, which proved the bug live on macOS CI.

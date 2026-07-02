@@ -264,7 +264,7 @@ test('case 7b: config resolution stops at home (no walk above the sandbox home)'
   try {
     muteUpdate(home); // keep the strict-silence assertion about config isolation only
     // If the walk escaped home it would find THIS bogus config; a clean run proves it didn't.
-    fs.writeFileSync(marker, '{"budgets":{"maxTurns":-999}}');
+    fs.writeFileSync(marker, '{"budgets":{"maxTokens":-999}}');
     const ss = run(SESSION_START, nested, home);
     assertGraceful(ss);
     assert.strictEqual(ss.stdout, '', 'no journal + no leaked config -> silent clean boot');
@@ -302,29 +302,29 @@ test('case 8: /compact context-loss -> journal survives, SessionStart re-injects
   }
 });
 
-// (9) HALF-APPLIED edits -> resume detects via git status + flags reconcile.
-test('case 9: half-applied edits -> git-derived modifiedFiles + reconcile advice', () => {
+// (9) HALF-APPLIED edits -> the file the dying session was mid-edit on is journaled
+// (from the tool payload the hook OBSERVED — no git spawn, Phoenix #5) + resume
+// advises reconciling against the working tree, never blind-trust.
+test('case 9: half-applied edits -> payload-derived modifiedFiles + reconcile advice', () => {
   const { home, cwd } = sandbox();
   try {
-    // A real git repo with a half-applied (staged-but-uncommitted / dirty) edit.
-    const git = (args) =>
-      spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home } });
-    const init = git(['init']);
-    if (init.status !== 0) return; // git absent on the box -> skip (no-external-assumption)
-    git(['config', 'user.email', 't@t']);
-    git(['config', 'user.name', 't']);
+    // The session died right after a Write touched half.js — the edit may be
+    // half-applied on disk. The hook saw the Write payload and journals the path.
     fs.writeFileSync(path.join(cwd, 'half.js'), 'half applied\n');
-
-    // REAL PostToolUse builds the state snapshot from git status -> journals half.js.
-    const ptu = run(POST_TOOL_USE, cwd, home);
+    const payload = JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(cwd, 'half.js') },
+    });
+    const ptu = run(POST_TOOL_USE, cwd, home, payload);
     assertGraceful(ptu);
     const j = readJournal(cwd);
-    assert.ok(j.modifiedFiles.includes('half.js'), 'git status half-applied edit captured');
+    assert.ok(j.modifiedFiles.includes('half.js'), 'payload-observed half-applied edit captured');
 
     // Boot: recovery advises reconcile against the working tree.
     const ss = run(SESSION_START, cwd, home);
     assertGraceful(ss);
     assert.match(ss.stdout, /VERIFY against git|verify it against the actual repo state|working tree/i);
+    assert.match(ss.stdout, /half\.js/, 'the half-applied file is listed for reconciliation');
   } finally {
     clean(home, cwd);
   }

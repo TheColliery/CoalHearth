@@ -34,13 +34,13 @@ test('findProjectRoot finds a .coalhearth.json marker above cwd but below home',
 test('loadMergedConfig merges project over global per group, never throws on missing files', () => {
   const home = mkSandboxHome();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ budgets: { maxTurns: 30, maxTokens: 100 } }));
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.5 } }));
   const projectDir = path.join(home, 'proj');
   fs.mkdirSync(projectDir, { recursive: true });
-  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ budgets: { maxTurns: 99 } }));
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 99 } }));
   const merged = loadMergedConfig({ cwd: projectDir, home });
-  assert.equal(merged.budgets.maxTurns, 99); // project wins
-  assert.equal(merged.budgets.maxTokens, 100); // global key survives shallow merge
+  assert.equal(merged.budgets.maxTokens, 99); // project wins
+  assert.equal(merged.budgets.warningTokenPercentage, 0.5); // global key survives shallow merge
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -68,12 +68,12 @@ test('loadMergedConfig is prototype-pollution safe (a poisoned project config ca
   // a NESTED one inside a real group.
   fs.writeFileSync(
     path.join(projectDir, '.coalhearth.json'),
-    '{ "__proto__": { "polluted": true }, "budgets": { "__proto__": { "polluted2": true }, "maxTurns": 5 } }'
+    '{ "__proto__": { "polluted": true }, "budgets": { "__proto__": { "polluted2": true }, "maxTokens": 5 } }'
   );
   const merged = loadMergedConfig({ cwd: projectDir, home });
   assert.equal({}.polluted, undefined, 'Object.prototype NOT polluted (top-level __proto__)');
   assert.equal({}.polluted2, undefined, 'Object.prototype NOT polluted (nested __proto__)');
-  assert.equal(merged.budgets.maxTurns, 5, 'legit keys still load past the guard');
+  assert.equal(merged.budgets.maxTokens, 5, 'legit keys still load past the guard');
   assert.equal(Object.prototype.hasOwnProperty.call(merged, '__proto__'), false, '__proto__ dropped from the merged config');
   fs.rmSync(home, { recursive: true, force: true });
 });

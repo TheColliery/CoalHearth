@@ -32,7 +32,7 @@ function tmp() {
 test('HandoffJournal.save writes atomically (no .tmp left) and returns true', () => {
   const dir = tmp();
   try {
-    const ok = new HandoffJournal({ outputDirectory: dir }).save({ status: 'in_progress' });
+    const ok = new HandoffJournal({ outputDirectory: dir }, dir).save({ status: 'in_progress' });
     assert.strictEqual(ok, true);
     const written = JSON.parse(fs.readFileSync(path.join(dir, 'session_handoff.json'), 'utf8'));
     assert.strictEqual(written.status, 'in_progress');
@@ -49,7 +49,7 @@ test('HandoffJournal.save is fail-silent (returns false, no throw) on unserializ
     const circular = {};
     circular.self = circular;
     let ok;
-    assert.doesNotThrow(() => { ok = new HandoffJournal({ outputDirectory: dir }).save(circular); });
+    assert.doesNotThrow(() => { ok = new HandoffJournal({ outputDirectory: dir }, dir).save(circular); });
     assert.strictEqual(ok, false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -59,7 +59,7 @@ test('HandoffJournal.save is fail-silent (returns false, no throw) on unserializ
 test('HandoffJournal.save prunes non-journal files on ENOSPC then succeeds, keeping the core json', () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'error.log'), 'stale\n');
-  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 2 });
+  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 2 }, dir);
   const realWrite = fs.writeFileSync;
   let n = 0;
   fs.writeFileSync = (...a) => {
@@ -79,7 +79,7 @@ test('HandoffJournal.save prunes non-journal files on ENOSPC then succeeds, keep
 
 test('HandoffJournal.save returns false after exhausting retries on a persistent lock (EBUSY)', () => {
   const dir = tmp();
-  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 2 });
+  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 2 }, dir);
   const realWrite = fs.writeFileSync;
   fs.writeFileSync = () => { const e = new Error('busy'); e.code = 'EBUSY'; throw e; };
   try {
@@ -96,14 +96,16 @@ test('HandoffJournal.save returns false after exhausting retries on a persistent
 // hostile `.coalhearth.json` (retries:50) can't spin save()'s SYNCHRONOUS busy-wait
 // backoff for seconds on the PostToolUse hot-path (the audit reproduced 25,504ms).
 test('HandoffJournal clamps atomicityRetries to a small max (no multi-second busy-wait)', () => {
-  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 50 }).retries, 5, 'clamped to 5');
-  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 3 }).retries, 3, 'in-range kept');
-  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp(), atomicityRetries: 0 }).retries, 3, 'non-positive -> default');
-  assert.strictEqual(new HandoffJournal({ outputDirectory: tmp() }).retries, 3, 'absent -> default');
+  const d = tmp();
+  assert.strictEqual(new HandoffJournal({ outputDirectory: d, atomicityRetries: 50 }, d).retries, 5, 'clamped to 5');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: d, atomicityRetries: 3 }, d).retries, 3, 'in-range kept');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: d, atomicityRetries: 0 }, d).retries, 3, 'non-positive -> default');
+  assert.strictEqual(new HandoffJournal({ outputDirectory: d }, d).retries, 3, 'absent -> default');
+  fs.rmSync(d, { recursive: true, force: true });
 
   // A persistent write failure with a huge configured retry count must return fast.
   const dir = tmp();
-  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 50 });
+  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 50 }, dir);
   const realWrite = fs.writeFileSync;
   fs.writeFileSync = () => { const e = new Error('busy'); e.code = 'EBUSY'; throw e; };
   try {
@@ -123,7 +125,7 @@ test('HandoffJournal clamps atomicityRetries to a small max (no multi-second bus
 test('ResumeEngine.detectAbortedSession returns null when no journal exists', () => {
   const dir = tmp();
   try {
-    assert.strictEqual(new ResumeEngine({ outputDirectory: dir }).detectAbortedSession(), null);
+    assert.strictEqual(new ResumeEngine({ outputDirectory: dir }, {}, dir).detectAbortedSession(), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -132,7 +134,7 @@ test('ResumeEngine.detectAbortedSession returns null when no journal exists', ()
 test('ResumeEngine.detectAbortedSession returns data for in_progress/limit_reached, null for completed', () => {
   const dir = tmp();
   try {
-    const engine = new ResumeEngine({ outputDirectory: dir });
+    const engine = new ResumeEngine({ outputDirectory: dir }, {}, dir);
     const p = path.join(dir, 'session_handoff.json');
     for (const s of ['in_progress', 'limit_reached']) {
       fs.writeFileSync(p, JSON.stringify({ status: s, sessionId: s }));
@@ -150,7 +152,7 @@ test('ResumeEngine.detectAbortedSession returns data for in_progress/limit_reach
 test('ResumeEngine.detectAbortedSession quarantines a corrupt journal and boots clean', () => {
   const dir = tmp();
   try {
-    const engine = new ResumeEngine({ outputDirectory: dir });
+    const engine = new ResumeEngine({ outputDirectory: dir }, {}, dir);
     fs.writeFileSync(path.join(dir, 'session_handoff.json'), '{ broken json');
     assert.strictEqual(engine.detectAbortedSession(), null, 'corrupt -> null (boot clean)');
     assert.strictEqual(fs.existsSync(path.join(dir, 'session_handoff.json')), false, 'corrupt removed');
@@ -161,7 +163,8 @@ test('ResumeEngine.detectAbortedSession quarantines a corrupt journal and boots 
 });
 
 test('ResumeEngine.generateHandoffPrompt renders goal/checklist and ALWAYS advises verify-vs-git (never blind-trust)', () => {
-  const md = new ResumeEngine({ outputDirectory: tmp() }).generateHandoffPrompt({
+  const d = tmp();
+  const md = new ResumeEngine({ outputDirectory: d }, {}, d).generateHandoffPrompt({
     sessionId: 's1',
     timestamp: '2026-07-01T00:00:00.000Z',
     status: 'limit_reached',
@@ -174,7 +177,8 @@ test('ResumeEngine.generateHandoffPrompt renders goal/checklist and ALWAYS advis
   assert.match(md, /VERIFY against git|git status|working tree/i);
   assert.match(md, /\[x\] A/); // done rendered
   assert.match(md, /\[\/\] B/); // doing rendered
-  assert.strictEqual(new ResumeEngine({ outputDirectory: tmp() }).generateHandoffPrompt(null), '', 'null -> empty');
+  assert.strictEqual(new ResumeEngine({ outputDirectory: d }, {}, d).generateHandoffPrompt(null), '', 'null -> empty');
+  fs.rmSync(d, { recursive: true, force: true });
 });
 
 // Regression (audit 2026-07-02 L7): recovery.stashUnsavedChanges was inert. It now
@@ -184,12 +188,14 @@ test('ResumeEngine.generateHandoffPrompt gates the stash-advice line on recovery
     sessionId: 's1', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
     checklist: [], modifiedFiles: [], activePlan: { goal: 'X', nextSteps: [], constraints: [] },
   };
-  const on = new ResumeEngine({ outputDirectory: tmp() }, {}).generateHandoffPrompt(data); // default on
-  const explicitOn = new ResumeEngine({ outputDirectory: tmp() }, { stashUnsavedChanges: true }).generateHandoffPrompt(data);
-  const off = new ResumeEngine({ outputDirectory: tmp() }, { stashUnsavedChanges: false }).generateHandoffPrompt(data);
+  const d = tmp();
+  const on = new ResumeEngine({ outputDirectory: d }, {}, d).generateHandoffPrompt(data); // default on
+  const explicitOn = new ResumeEngine({ outputDirectory: d }, { stashUnsavedChanges: true }, d).generateHandoffPrompt(data);
+  const off = new ResumeEngine({ outputDirectory: d }, { stashUnsavedChanges: false }, d).generateHandoffPrompt(data);
   assert.match(on, /git stash/i, 'default -> stash advice present');
   assert.match(explicitOn, /git stash/i, 'explicit true -> present');
   assert.doesNotMatch(off, /git stash/i, 'false -> stash advice dropped');
+  fs.rmSync(d, { recursive: true, force: true });
 });
 
 test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', () => {
@@ -212,7 +218,7 @@ test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the 
     // Out-of-scope probe file at root (must survive — not in an allow-listed dir):
     fs.writeFileSync(path.join(root, 'probe_root.mjs'), 'x');
 
-    const counts = new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }).sweepOrphans(root);
+    const counts = new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }, {}, root).sweepOrphans(root);
 
     assert.strictEqual(counts.scratch, 2, 'both OWNED scratch files counted');
     assert.strictEqual(counts.worktrees, 1, 'the ch-worker worktree counted');
@@ -245,7 +251,7 @@ test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a sy
       t.skip('symlink/junction not permitted on this filesystem');
       return;
     }
-    new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }).sweepOrphans(root);
+    new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }, {}, root).sweepOrphans(root);
     assert.strictEqual(
       fs.existsSync(path.join(outside, 'probe_escape.mjs')),
       true,
@@ -254,6 +260,22 @@ test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a sy
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+// Regression (audit 2026-07-02 MED, round 2): ResumeEngine's quarantine +
+// mark-resumed writes go through outputDir, so its constructor routes through the
+// same realpath containment as HandoffJournal — an untrusted outputDirectory
+// escaping the workspace clamps to the default owned dir.
+test('ResumeEngine clamps an outputDirectory escaping the workspace root', () => {
+  const base = tmp();
+  const workspace = path.join(base, 'ws');
+  fs.mkdirSync(workspace, { recursive: true });
+  try {
+    const engine = new ResumeEngine({ outputDirectory: path.join('..', 'victim') }, {}, workspace);
+    assert.strictEqual(engine.outputDir, path.join(workspace, '.claude', 'coalhearth'), 'escape clamped to the default owned dir');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
   }
 });
 
@@ -269,23 +291,28 @@ test('BudgetTracker.estimateFromChars uses 4 chars/tok for ASCII, ~1.5 for non-A
   assert.strictEqual(new BudgetTracker({}).estimateFromChars(null, true), 0, 'null -> 0 (no throw)');
 });
 
-test('BudgetTracker.evaluateLimits flags near-turn-limit as shouldBlockSpawning (advisory)', () => {
-  const t = new BudgetTracker({ maxTurns: 3, warningTurnThreshold: 5 });
+// TOKEN-ONLY (audit 2026-07-02 MED): the turn branch was structurally dead — a fresh
+// tracker per PostToolUse (Phoenix #6, stateless) meant currentTurns never exceeded 1 —
+// and is removed along with maxTurns/warningTurnThreshold (tombstoned in the schema).
+test('BudgetTracker.evaluateLimits flags low token headroom as shouldBlockSpawning (advisory)', () => {
+  const t = new BudgetTracker({ maxTokens: 100, warningTokenPercentage: 0.15 });
+  t.estimateFromChars('a'.repeat(360), true); // 90 tok used -> 10% headroom <= 15%
   const r = t.evaluateLimits();
-  assert.strictEqual(r.shouldBlockSpawning, true, 'turnsRemaining(3) <= threshold(5)');
-  assert.match(r.reason, /turns remaining/i);
+  assert.strictEqual(r.shouldBlockSpawning, true, '10% headroom <= 15% threshold');
+  assert.match(r.reason, /token headroom/i);
   assert.strictEqual(r.limitReached, false);
 });
 
-test('BudgetTracker.evaluateLimits reports limitReached once turns are exhausted', () => {
-  const t = new BudgetTracker({ maxTurns: 1, warningTurnThreshold: 0 });
-  t.incrementTurn(); // 1 used, 0 remaining
+test('BudgetTracker.evaluateLimits reports limitReached once the token estimate is exhausted', () => {
+  const t = new BudgetTracker({ maxTokens: 10 });
+  t.estimateFromChars('a'.repeat(80), true); // 20 tok used, 10 max -> exhausted
   const r = t.evaluateLimits();
-  assert.strictEqual(r.limitReached, true, 'no turns remaining -> limitReached');
+  assert.strictEqual(r.limitReached, true, 'no token headroom -> limitReached');
+  assert.strictEqual(r.shouldBlockSpawning, true);
 });
 
 test('BudgetTracker.evaluateLimits stays OK with headroom (advisory, never a hard promise)', () => {
-  const t = new BudgetTracker({ maxTurns: 30, warningTurnThreshold: 5, maxTokens: 1000000 });
+  const t = new BudgetTracker({ maxTokens: 1000000 });
   t.estimateFromChars('a'.repeat(4), true); // 1 token used, ~100% headroom
   const r = t.evaluateLimits();
   assert.strictEqual(r.shouldBlockSpawning, false);
@@ -307,7 +334,7 @@ test('config-schema validateValue enforces type + bounds', () => {
 
 test('config-schema validateConfig passes the factory shape and flags unknown group/key', () => {
   const factory = {
-    budgets: { maxTurns: 30, maxTokens: 2000000, warningTurnThreshold: 5, warningTokenPercentage: 0.15 },
+    budgets: { maxTokens: 2000000, warningTokenPercentage: 0.15 },
     journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
     update: { updateMode: 'ask', updateCheckDays: 14 },
@@ -316,7 +343,20 @@ test('config-schema validateConfig passes the factory shape and flags unknown gr
   assert.ok(Object.keys(CONFIG_SCHEMA).length === 4, 'four config groups (budgets/journal/recovery/update)');
   assert.deepStrictEqual(validateConfig({ nope: {} }), ["group 'nope' not in schema"]);
   assert.deepStrictEqual(validateConfig({ budgets: { bogus: 1 } }), ["'budgets.bogus' not in schema"]);
-  assert.deepStrictEqual(validateConfig({ budgets: { maxTurns: 0 } }), ["'budgets.maxTurns' must be >= 1"]);
+  assert.deepStrictEqual(validateConfig({ budgets: { maxTokens: 0 } }), ["'budgets.maxTokens' must be >= 1"]);
   assert.match(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'sometimes'), /must be one of/);
   assert.strictEqual(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'OFF'), null, 'enum compares case-insensitively');
+});
+
+// Tombstone (round-2 audit, 2026-07-02): the dead turn path's config keys are REMOVED
+// from the schema — a config still carrying them is flagged unknown, never silently
+// accepted (same tombstone-by-removal pattern as CoalTipple's rankingMode).
+test('tombstones: maxTurns + warningTurnThreshold are REMOVED from the schema (turn path dead)', () => {
+  assert.strictEqual(CONFIG_SCHEMA.budgets.maxTurns, undefined, 'maxTurns tombstoned');
+  assert.strictEqual(CONFIG_SCHEMA.budgets.warningTurnThreshold, undefined, 'warningTurnThreshold tombstoned');
+  assert.deepStrictEqual(
+    validateConfig({ budgets: { maxTurns: 30 } }),
+    ["'budgets.maxTurns' not in schema"],
+    'a stale config carrying the removed key is reported, not silently honored'
+  );
 });
