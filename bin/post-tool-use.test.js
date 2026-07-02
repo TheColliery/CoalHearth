@@ -14,7 +14,12 @@ const { spawnSync } = require('node:child_process');
 const HOOK = path.join(__dirname, 'post-tool-use.js');
 
 function mk() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ptu-'));
+  // realpath the tmpdir sandbox: on macOS os.tmpdir() (/var) is a symlink to
+  // /private/var, and the spawned hook's process.cwd() resolves to the
+  // /private/var form. Resolving here keeps the payload path and the hook's cwd
+  // in the same physical form so the hook's lexical path.relative yields the
+  // clean relative modifiedFiles entry the assertions expect (no-op off macOS).
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ptu-')));
 }
 
 function run(cwd, home, stdin) {

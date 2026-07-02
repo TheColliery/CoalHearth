@@ -2,6 +2,11 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.9] — 2026-07-02
+
+### Fixed
+- **Completes the beta.8 macOS test-sandbox fix — a third hermetic sandbox needed the same realpath.** beta.8 realpath-resolved the `hooks.test.mjs` and `state-snapshot.test.js` tmpdir sandboxes, but the `bin/post-tool-use.test.js` `mk()` helper (`coalhearth-ptu-`) was still raw, so its "modifiedFiles accumulates from Write/Edit payloads across hook runs" case stored the file absolute (`/var/folders/.../src/a.js`) instead of relative (`src/a.js`) on `macos-latest` — the one remaining CI failure. Now realpath'd like the other two; no-op off macOS.
+
 ## [0.1.0-beta.8] — 2026-07-02
 
 ### Fixed
