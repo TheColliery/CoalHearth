@@ -6,10 +6,11 @@
 // is sanctioned here beyond the advisory nudge below, but the rule still holds).
 //
 // Flow: load config -> read the hook stdin payload -> build the state snapshot
-// (task.md/AGENTS.md + the file THIS tool call touched, accumulated onto the prior
-// journal's list, best-effort) -> HandoffJournal.save() it atomically (the recovery
-// core — this is the part that matters) -> BudgetTracker advisory nudge if the
-// estimated token headroom is low (secondary, best-effort).
+// (task.md/AGENTS.md + the file THIS tool call touched + any Agent/Task spawn it
+// observed, each accumulated onto the prior journal's list, best-effort) ->
+// HandoffJournal.save() it atomically (the recovery core — this is the part that
+// matters) -> BudgetTracker advisory nudge if the estimated token headroom is low
+// (secondary, best-effort).
 'use strict';
 
 // Tools whose payload names a file they modify; anything else (Read, Bash, ...)
@@ -21,6 +22,31 @@ const FILE_TOOL_KEYS = {
   MultiEdit: 'file_path',
   NotebookEdit: 'notebook_path',
 };
+
+// The sub-agent spawn tool is `Agent` (legacy alias `Task`); match both so a
+// platform/version reporting either is covered (Incident E).
+const SPAWN_TOOL_NAMES = new Set(['Agent', 'Task']);
+
+// Extract an in-flight-subagent record from a spawn tool_call payload (Incident E).
+// Captures only what the payload GIVES: the `description` + `subagent_type` from
+// tool_input (the stable Agent-tool arg schema) and, best-effort, an output/residue
+// path IF tool_response carries one under any plausible key (the exact tool_response
+// shape is undocumented, so this is probe-not-require — a missing path is normal).
+// Returns null for a non-spawn tool. No throw (caller is fail-silent regardless).
+function extractSpawn(payload) {
+  if (!payload || !SPAWN_TOOL_NAMES.has(payload.tool_name)) return null;
+  const inp = (payload.tool_input && typeof payload.tool_input === 'object') ? payload.tool_input : {};
+  const resp = (payload.tool_response && typeof payload.tool_response === 'object') ? payload.tool_response : {};
+  const str = (v) => (typeof v === 'string' && v ? v : undefined);
+  return {
+    description: str(inp.description) || '(no description)',
+    subagentType: str(inp.subagent_type),
+    // Probe a few plausible residue-path keys; undocumented + version-dependent, so
+    // best-effort. Absent -> undefined (the recovery block just omits it).
+    outputPath: str(resp.output_file) || str(resp.outputPath) || str(resp.output_path),
+    spawnedAt: new Date().toISOString(),
+  };
+}
 
 try {
   const { loadConfig } = require('../lib/load-config.js');
@@ -37,24 +63,30 @@ try {
     // no stdin payload -- the journal save below still works, just with no touched file
   }
 
-  // The PostToolUse payload ({tool_name, tool_input, ...}); garbage stdin -> null.
+  // The PostToolUse payload ({tool_name, tool_input, tool_response, ...}); garbage
+  // stdin -> both stay undefined.
   let touchedFile;
+  let spawn;
   try {
     const payload = JSON.parse(raw);
     const key = payload && FILE_TOOL_KEYS[payload.tool_name];
     const p = key && payload.tool_input ? payload.tool_input[key] : undefined;
     if (typeof p === 'string' && p) touchedFile = p;
+    spawn = extractSpawn(payload); // an Agent/Task spawn -> an in-flight record (Incident E)
   } catch {
-    // not JSON -- no touched file to record
+    // not JSON -- nothing to record
   }
 
   const journal = new HandoffJournal(cfg.journal || {});
   // Accumulate onto the prior save's list ONLY while it is this session's own
   // in-progress journal; a resumed/completed prior journal starts the list fresh.
   const prior = journal.load();
+  const sameSession = prior && prior.status === 'in_progress';
   const state = buildStateSnapshot(process.cwd(), {
-    priorModifiedFiles: prior && prior.status === 'in_progress' ? prior.modifiedFiles : [],
+    priorModifiedFiles: sameSession ? prior.modifiedFiles : [],
     touchedFile,
+    priorInFlightAgents: sameSession ? prior.inFlightAgents : [],
+    spawn,
   });
   journal.save(state);
 

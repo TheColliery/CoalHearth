@@ -150,6 +150,51 @@ test('modifiedFiles accumulates from Write/Edit payloads across hook runs, dedup
   }
 });
 
+// Incident E (MEMORY.md Field Evidence): the hook journals every Agent/Task spawn so
+// a resume knows which subs were in-flight. Captures description + subagent_type from
+// tool_input and a best-effort residue path from tool_response; accumulates across
+// runs; a non-spawn tool adds nothing.
+test('inFlightAgents: an Agent spawn is journaled (description/type/residue), a non-spawn tool adds none', () => {
+  const cwd = mk();
+  const home = mk();
+  const journalPath = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
+  const read = () => JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  try {
+    // 1st: an Agent spawn with a tool_response carrying an output_file residue path.
+    let r = run(cwd, home, JSON.stringify({
+      tool_name: 'Agent',
+      tool_input: { description: 'Scan module X', subagent_type: 'coalmine-scanner', prompt: 'go' },
+      tool_response: { output_file: '/tmp/tasks/abc.output' },
+    }));
+    assert.strictEqual(r.status, 0);
+    let agents = read().inFlightAgents;
+    assert.strictEqual(agents.length, 1, 'the spawn is recorded');
+    assert.strictEqual(agents[0].description, 'Scan module X');
+    assert.strictEqual(agents[0].subagentType, 'coalmine-scanner');
+    assert.strictEqual(agents[0].outputPath, '/tmp/tasks/abc.output');
+    assert.ok(agents[0].spawnedAt, 'a spawn timestamp is stamped');
+
+    // 2nd: a legacy `Task` name ACCUMULATES a second record.
+    r = run(cwd, home, JSON.stringify({
+      tool_name: 'Task',
+      tool_input: { description: 'Review the diff', subagent_type: 'code-reviewer' },
+    }));
+    assert.strictEqual(r.status, 0);
+    agents = read().inFlightAgents;
+    assert.strictEqual(agents.length, 2, 'Task alias accumulates');
+    assert.strictEqual(agents[1].description, 'Review the diff');
+    assert.strictEqual(agents[1].outputPath, undefined, 'no tool_response -> no residue path (best-effort)');
+
+    // 3rd: a non-spawn tool (Write) records the file but adds NO agent.
+    r = run(cwd, home, JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'a.js') } }));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(read().inFlightAgents.length, 2, 'a non-spawn tool contributes no agent');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('garbage stdin -> exit 0, no crash (Phoenix fail-silent)', () => {
   const cwd = mk();
   const home = mk();

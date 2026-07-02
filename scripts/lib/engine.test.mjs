@@ -21,6 +21,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const { HandoffJournal } = require(path.join(REPO, 'lib', 'handoff-journal.js'));
 const { ResumeEngine } = require(path.join(REPO, 'lib', 'resume-engine.js'));
 const { BudgetTracker } = require(path.join(REPO, 'lib', 'budget-tracker.js'));
+const { containedOutputDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
 import { validateValue, validateConfig, CONFIG_SCHEMA } from './config-schema.mjs';
 
 function tmp() {
@@ -198,6 +199,33 @@ test('ResumeEngine.generateHandoffPrompt gates the stash-advice line on recovery
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+// Incident E (MEMORY.md Field Evidence): the recovery block LISTS in-flight subagents
+// at interruption so a resume knows which subs were running + where residue lives. The
+// section is honestly scoped (verify/re-spawn — it does not recover the sub's work).
+test('ResumeEngine.generateHandoffPrompt lists in-flight subagents (Incident E), None when absent', () => {
+  const d = tmp();
+  const engine = new ResumeEngine({ outputDirectory: d }, {}, d);
+  const base = {
+    sessionId: 's1', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+    checklist: [], modifiedFiles: [], activePlan: { goal: 'X', nextSteps: [], constraints: [] },
+  };
+  const withAgents = engine.generateHandoffPrompt({
+    ...base,
+    inFlightAgents: [
+      { description: 'Scan module X', subagentType: 'coalmine-scanner', outputPath: '/tmp/tasks/abc.output', spawnedAt: '2026-07-01T00:00:01.000Z' },
+      { description: 'Review the diff', subagentType: undefined, outputPath: undefined, spawnedAt: '2026-07-01T00:00:02.000Z' },
+    ],
+  });
+  assert.match(withAgents, /In-flight subagents at interruption/, 'section header present');
+  assert.match(withAgents, /Scan module X/);
+  assert.match(withAgents, /\[coalmine-scanner\]/, 'subagent type rendered when present');
+  assert.match(withAgents, /residue: `\/tmp\/tasks\/abc\.output`/, 'residue path rendered when present');
+  assert.match(withAgents, /Review the diff/);
+  // No inFlightAgents -> the section renders "None" (never a crash / stray field).
+  assert.match(engine.generateHandoffPrompt(base), /In-flight subagents at interruption \(verify\/re-spawn as needed\)\n+None/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', () => {
   const root = tmp();
   try {
@@ -276,6 +304,55 @@ test('ResumeEngine clamps an outputDirectory escaping the workspace root', () =>
     assert.strictEqual(engine.outputDir, path.join(workspace, '.claude', 'coalhearth'), 'escape clamped to the default owned dir');
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// --- contained-dir ----------------------------------------------------------
+
+// Regression (audit 2026-07-02 L3): containedOutputDir must run the PHYSICAL
+// containment check BEFORE mkdir, so a lexically-inside dir that symlink-escapes
+// root never leaks an incidental empty dir OUTSIDE root (the old order mkdir'd
+// first, then returned null on the failed containment — fail-closed on the return,
+// but the outside dir already existed). Repro (show-me lens): root/.claude junctioned
+// to a victim + outputDirectory ".claude/coalhearth" must NOT create victim/coalhearth.
+test('containedOutputDir creates NO outside dir when a path symlink-escapes root (check-before-mkdir)', (t) => {
+  // realpath the sandboxes: macOS os.tmpdir() is a /var->/private/var symlink; the
+  // relative containment compare needs like-for-like physical paths (no-op elsewhere).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-root-')));
+  const victim = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-victim-')));
+  try {
+    // Junction root/.claude -> victim (unprivileged on Windows; type ignored on POSIX).
+    try {
+      fs.symlinkSync(victim, path.join(root, '.claude'), 'junction');
+    } catch {
+      t.skip('symlink/junction not permitted on this filesystem');
+      return;
+    }
+    const out = containedOutputDir('.claude/coalhearth', root);
+    // The configured path resolves through the junction to victim/coalhearth (outside
+    // root) -> rejected; the default `.claude/coalhearth` routes through the SAME
+    // junction -> also rejected -> fail-closed null.
+    assert.strictEqual(out, null, 'a fully-escaping config + default -> null (fail-closed)');
+    assert.strictEqual(
+      fs.existsSync(path.join(victim, 'coalhearth')),
+      false,
+      'NO dir is created outside root before the containment check refuses'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(victim, { recursive: true, force: true });
+  }
+});
+
+// The happy path still works: a legit in-workspace dir (no symlink) is created and returned.
+test('containedOutputDir creates + returns a legit in-workspace dir (happy path intact)', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-ok-')));
+  try {
+    const out = containedOutputDir('.claude/coalhearth', root);
+    assert.strictEqual(out, path.join(root, '.claude', 'coalhearth'), 'returns the contained dir');
+    assert.strictEqual(fs.existsSync(out), true, 'and creates it');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

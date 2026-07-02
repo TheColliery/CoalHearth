@@ -2,6 +2,17 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.10] — 2026-07-02
+
+**The beta→1.0 graduation-gate item — sub-flight tracking (Incident E) — plus two board LOW fixes.**
+
+### Added
+- **Sub-flight tracking: the PostToolUse hook now journals every fanned-out subagent spawn (Incident E, MEMORY.md Field Evidence).** When a board/swarm's workers die on a session limit or user-stop, their in-flight work is lost AND main had no record of what was running — proven live twice (Incidents A + E). The hook already parses each tool-call payload; on an `Agent` (or legacy `Task`) spawn it now records `{description, subagentType?, outputPath?, spawnedAt}` into a new `inFlightAgents` journal array, accumulated across hook runs like `modifiedFiles`. The recovery block gains an **"In-flight subagents at interruption (verify/re-spawn as needed)"** section listing each, so a resumed session knows which subs were running and where their residue lives — turning what main did BY HAND this session into data. **Honest scope (stated in code + PRIVACY):** this does NOT recover a dead sub's *work* (that would need the sub itself to journal, which the parent can't force) — it RECORDS that the sub existed + where residue may live, so main/human can reconstruct or re-spawn. `description`/`subagent_type` come from the documented Agent-tool arg schema; the residue path is a best-effort probe of `tool_response` (its exact shape is undocumented/version-dependent, so a missing path is normal).
+
+### Fixed
+- **LOW — `lib/contained-dir.js` created the output dir BEFORE the physical containment check**, so a lexically-inside path that symlink-escapes root leaked an incidental empty dir OUTSIDE root before the function correctly returned null (fail-closed on the return, but the outside dir already existed). The physical check now runs BEFORE `mkdirSync`: the candidate's nearest existing ancestor is realpath-resolved (following any symlink in the existing prefix) and re-joined with the not-yet-created tail, contained under the realpath'd root; only a contained candidate is created. A `root/.claude`-junctioned-to-victim + `outputDirectory:".claude/coalhearth"` now creates nothing outside root. Happy path (a legit in-workspace dir) intact.
+- **LOW — `PRIVACY.md` doc-stale**: the journal's modified-file names were described as read "from `task.md` / `git status`", but beta.6 made the hook spawn-free (no `git`). Now matches README/SECURITY: the names come from the `Write`/`Edit`/etc. tool-call payloads the hook observes.
+
 ## [0.1.0-beta.9] — 2026-07-02
 
 ### Fixed

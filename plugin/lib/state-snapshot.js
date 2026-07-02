@@ -90,13 +90,42 @@ function mergeModifiedFiles(cwd, priorFiles, touchedFile) {
   return files;
 }
 
+// Accumulate in-flight subagent spawns (Incident E, MEMORY.md Field Evidence): the
+// PostToolUse hook sees every Agent/Task spawn call, so recording each lets a resume
+// LIST which subs were running at interruption + where their residue lives. HONEST
+// SCOPE: this does NOT recover a dead sub's WORK (that would need the sub itself to
+// journal, which the parent can't force) — it RECORDS the sub existed, so main/human
+// can re-spawn or reconstruct. Prior list + at most this call's one spawn, deduped
+// on the full record (a re-run never re-adds the same spawn — the hook fires once
+// per tool call — but the guard is cheap and defensive). Order-preserving.
+function mergeInFlightAgents(priorAgents, spawn) {
+  const agents = Array.isArray(priorAgents)
+    ? priorAgents.filter((a) => a && typeof a === 'object' && !Array.isArray(a))
+    : [];
+  if (spawn && typeof spawn === 'object') {
+    const dup = agents.some(
+      (a) =>
+        a.description === spawn.description &&
+        a.subagentType === spawn.subagentType &&
+        a.outputPath === spawn.outputPath &&
+        a.spawnedAt === spawn.spawnedAt
+    );
+    if (!dup) agents.push(spawn);
+  }
+  return agents;
+}
+
 /**
  * Builds the HandoffJournal state snapshot from the local workspace.
  * @param {string} [cwd] workspace root to read from (default process.cwd()).
- * @param {{priorModifiedFiles?: string[], touchedFile?: string}} [opts]
+ * @param {{priorModifiedFiles?: string[], touchedFile?: string,
+ *          priorInFlightAgents?: Array, spawn?: Object}} [opts]
  *   priorModifiedFiles = the previous journal's accumulated list (same session);
- *   touchedFile = the file path the CURRENT tool call modified, if any.
- * @returns {{status:string, checklist:Array, modifiedFiles:string[], activePlan:Object}}
+ *   touchedFile = the file path the CURRENT tool call modified, if any;
+ *   priorInFlightAgents = the previous journal's accumulated spawn records;
+ *   spawn = an in-flight-subagent record if THIS tool call was an Agent/Task spawn.
+ * @returns {{status:string, checklist:Array, modifiedFiles:string[],
+ *            inFlightAgents:Array, activePlan:Object}}
  */
 function buildStateSnapshot(cwd = process.cwd(), opts = {}) {
   const { goal, checklist, nextSteps } = parseTaskMd(cwd);
@@ -104,6 +133,7 @@ function buildStateSnapshot(cwd = process.cwd(), opts = {}) {
     status: 'in_progress',
     checklist,
     modifiedFiles: mergeModifiedFiles(cwd, opts.priorModifiedFiles, opts.touchedFile),
+    inFlightAgents: mergeInFlightAgents(opts.priorInFlightAgents, opts.spawn),
     activePlan: {
       goal,
       nextSteps,

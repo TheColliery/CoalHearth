@@ -102,6 +102,18 @@ class ResumeEngine {
       .map((item) => `- [${item.status === 'done' ? 'x' : item.status === 'doing' ? '/' : ' '}] ${item.task}`)
       .join('\n') || 'None';
     const files = (data.modifiedFiles || []).map((f) => `- \`${f}\``).join('\n') || 'None';
+    // In-flight subagents at interruption (Incident E). HONEST SCOPE: this lists that
+    // a sub was RUNNING + where its residue may live — it does NOT recover the sub's
+    // work (a killed sub journals nothing); the resumed session verifies/re-spawns.
+    const agents = (data.inFlightAgents || [])
+      .filter((a) => a && typeof a === 'object')
+      .map((a) => {
+        const type = a.subagentType ? ` [${a.subagentType}]` : '';
+        const out = a.outputPath ? ` — residue: \`${a.outputPath}\`` : '';
+        const at = a.spawnedAt ? ` (spawned ${a.spawnedAt})` : '';
+        return `- ${a.description || '(no description)'}${type}${out}${at}`;
+      })
+      .join('\n') || 'None';
     const nextSteps = (plan.nextSteps || []).map((s) => `- ${s}`).join('\n') || 'None';
     const constraints = (plan.constraints || []).map((c) => `- ${c}`).join('\n') || 'None';
     const staleNote = data.status === 'limit_reached'
@@ -132,6 +144,9 @@ ${checklist}
 
 ### Modified files (VERIFY against git before trusting)
 ${files}
+
+### In-flight subagents at interruption (verify/re-spawn as needed)
+${agents}
 
 ### Planned next steps
 ${nextSteps}
