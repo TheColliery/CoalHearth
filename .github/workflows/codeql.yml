@@ -4,22 +4,14 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # skip CI only for NON-shipped docs — a SHIPPED markdown artifact (commands/*.md) MUST run CI
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      - 'PRIVACY.md'
-      - 'SECURITY.md'
+      # CodeQL analyzes js/ts only — NO markdown needs a security scan, so skip ALL docs (a doc-only commit doesn't run CodeQL). Shipped SKILL.md/commands consistency is ci.yml's job (verify dist-sync), not CodeQL's.
+      - '**.md'
       - 'LICENSE'
   pull_request:
     branches: [main]
     paths-ignore:
-      # skip CI only for NON-shipped docs — a SHIPPED markdown artifact (commands/*.md) MUST run CI
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      - 'PRIVACY.md'
-      - 'SECURITY.md'
+      # CodeQL analyzes js/ts only — NO markdown needs a security scan, so skip ALL docs (a doc-only commit doesn't run CodeQL). Shipped SKILL.md/commands consistency is ci.yml's job (verify dist-sync), not CodeQL's.
+      - '**.md'
       - 'LICENSE'
   schedule:
     - cron: '0 6 * * 1'
