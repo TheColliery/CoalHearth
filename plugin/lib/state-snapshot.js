@@ -71,31 +71,19 @@ function parseConstraints(dir) {
     .map((m) => m[1].trim());
 }
 
-// Resolve a path to its PHYSICAL form (symlinks followed) before comparison.
-// macOS process.cwd() returns the realpath (/private/var/...) while a tool
-// payload's file_path is often the raw symlink (/var/...), so a lexical
-// path.relative between the two spuriously starts with '..' and the file gets
-// stored as an ugly absolute path instead of the clean relative one (CI caught
-// this on macOS). realpath needs the target on disk — a half-applied edit's
-// file may not exist yet, so fall back through its existing parent dir, then to
-// the lexical path. Never throws (fail-silent, Phoenix #4).
-function physical(p) {
-  try { return fs.realpathSync(p); } catch { /* not on disk yet */ }
-  try { return path.join(fs.realpathSync(path.dirname(p)), path.basename(p)); } catch { return p; }
-}
-
 // Accumulate "what changed this session" from what the hook observes: the prior
-// journal's list + the file the current tool call touched. Pure fs merge (a
-// read-only realpath, no spawn, no git — Phoenix #5). Paths are stored relative
-// to cwd when inside it (readable in the recovery block), absolute otherwise.
-// Both sides are realpath-resolved so the relative form is symlink-correct on
-// macOS. Deduped, order-preserving.
+// journal's list + the file the current tool call touched. Pure lexical merge —
+// no spawn, no git (Phoenix #5), no realpath on the hot path. Paths are stored
+// relative to cwd when inside it (readable in the recovery block), absolute
+// otherwise. Deduped, order-preserving. (A symlinked workspace where cwd and the
+// payload path disagree on the /private prefix is a rare cosmetic case — the
+// file is still captured, just absolute; not worth a hot-path realpath. The
+// hermetic tests realpath their own tmpdir sandbox so the macOS /private-symlink
+// artifact doesn't make an equality assertion flap.)
 function mergeModifiedFiles(cwd, priorFiles, touchedFile) {
   const files = Array.isArray(priorFiles) ? priorFiles.filter((f) => typeof f === 'string' && f) : [];
   if (typeof touchedFile === 'string' && touchedFile) {
-    const root = physical(path.resolve(cwd));
-    const abs = physical(path.resolve(cwd, touchedFile));
-    const rel = path.relative(root, abs);
+    const rel = path.relative(cwd, path.resolve(cwd, touchedFile));
     const entry = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : touchedFile;
     if (!files.includes(entry)) files.push(entry);
   }

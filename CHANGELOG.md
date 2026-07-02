@@ -2,10 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.8] — 2026-07-02
+
+### Fixed
+- **The macOS `modifiedFiles` CI failure is a test-sandbox artifact, not a production bug — corrects beta.7's approach.** beta.7 added a hot-path `realpath` to `mergeModifiedFiles`, which was itself CI-red: `realpath` needs the target on disk, but a not-yet-written file left the root resolved (`/private/var`) and the file lexical (`/var`) — a NEW asymmetry that broke two unit tests too (fail 2 → 3 on macOS). Root cause: `os.tmpdir()` on macOS is `/var` symlinked to `/private/var`, so a spawned hook's `process.cwd()` resolves to `/private/var` while the test's payload path stays `/var` — a hermetic-isolation quirk, not something a real (non-symlinked) workspace hits. Reverted the hot-path realpath (production code is lexical again; a symlinked-workspace user at worst gets an absolute path in the advisory journal — cosmetic) and instead **realpath the tmpdir sandboxes in the hermetic tests** (`hooks.test.mjs` `sandbox()`, `state-snapshot.test.js` `tmpDir()`) so the paths asserted against match the physical form the hook sees. Same "realpath the sandbox in tests" lesson as the beta.5 stop-at-home CI catch.
+
 ## [0.1.0-beta.7] — 2026-07-02
 
 ### Fixed
-- **`mergeModifiedFiles` (state-snapshot) now realpath-resolves BOTH the workspace root and the touched file before relativizing.** On macOS `process.cwd()` returns the physical `/private/var/...` path while a tool payload's `file_path` is often the raw `/var/...` symlink, so the lexical `path.relative` spuriously started with `..` and stored the file as an absolute path instead of the clean relative one — beta.6's payload-derived `modifiedFiles` test failed on `macos-latest` (both Node lanes) for exactly this. realpath falls back through the file's existing parent dir (a half-applied edit may not be on disk yet), then the lexical path; never throws (Phoenix #4). Same realpath-both-sides class as the beta.5 stop-at-home fix — caught by the first CI run on macOS.
+- **`mergeModifiedFiles` (state-snapshot) attempted to realpath-resolve BOTH the workspace root and the touched file before relativizing** (superseded by beta.8 — this hot-path realpath was CI-red on the file-not-yet-on-disk asymmetry; the fix belongs in the test sandbox, not production). On macOS `process.cwd()` returns the physical `/private/var/...` path while a tool payload's `file_path` is often the raw `/var/...` symlink, so the lexical `path.relative` spuriously started with `..` and stored the file as an absolute path instead of the clean relative one — beta.6's payload-derived `modifiedFiles` test failed on `macos-latest` (both Node lanes) for exactly this. realpath falls back through the file's existing parent dir (a half-applied edit may not be on disk yet), then the lexical path; never throws (Phoenix #4). Same realpath-both-sides class as the beta.5 stop-at-home fix — caught by the first CI run on macOS.
 
 ## [0.1.0-beta.6] — 2026-07-02
 

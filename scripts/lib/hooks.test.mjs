@@ -34,8 +34,13 @@ const CORRUPT_REL = path.join('.claude', 'coalhearth', 'session_handoff.corrupt.
 // A fresh sandbox: an isolated HOME and an isolated cwd, both under os.tmpdir().
 // HOME/USERPROFILE/TEMP/TMP all redirected so no real state is touched or read.
 function sandbox() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-home-'));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cwd-'));
+  // realpath the tmpdir sandboxes: on macOS os.tmpdir() is /var -> /private/var
+  // (a symlink), and a spawned hook's process.cwd() returns the resolved
+  // /private/var form. Resolving here keeps the paths we pass and assert against
+  // in the SAME physical form the hook sees, so a lexical path.relative in the
+  // hook (modifiedFiles) yields the clean relative path the assertions expect.
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-home-')));
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cwd-')));
   return { home, cwd };
 }
 function clean(...dirs) {
