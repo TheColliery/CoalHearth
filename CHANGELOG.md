@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [0.1.0-beta.5] — 2026-07-02
+
+**The stop-at-home config walk is now symlink-correct (realpath both sides)** — the series one-flock sweep; same class as CoalFace v0.1.0-beta.2, which proved the bug live on macOS CI.
+
+### Fixed
+- **`findProjectRoot` compared lexical paths, so the stop-at-home guard never fired under a symlinked home** (`lib/load-config.js`, `scripts/lib/config-load.mjs`). On macOS, `process.cwd()` returns the physical `/private/var/...` path while `os.homedir()` returns the raw `/var/...` symlink — the lexical `dir === homeAbs` NEVER matched, the walk escaped above home, and a `.coalhearth.json` above home could be read as project config. Both sides now resolve through `realpathSync` (fail-open to a lexical resolve when the path has no realpath) before comparing — the same realpath-and-contain discipline `sweepOrphans` (beta.3) and `_pruneOldLogs` (beta.4) already use, now applied to the config walk. Stop-at-home is unweakened; the walk stays lexical after the physical anchor. Test sandbox dirs are now realpath'd at creation so the suite asserts physical paths on every OS (CoalHearth's tests previously passed on macOS only by assertion luck — they never routed through `process.cwd()`).
+
+Gate: build + verify + 84/84 tests PASS.
+
 ## [0.1.0-beta.4] — 2026-07-02
 
 **Two HIGH fixes + a hot-path MED + config de-rot** — surfaced by two independent CoalBoard nasa audits (fable/nasa + haiku/nasa mirrors) running the code, not asserting. No change to the recovery core's happy path.

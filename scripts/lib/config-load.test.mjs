@@ -6,7 +6,9 @@ import path from 'node:path';
 import { findProjectRoot, projectConfigPath, loadMergedConfig } from './config-load.mjs';
 
 function mkSandboxHome() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-test-'));
+  // realpath the sandbox: findProjectRoot compares PHYSICAL paths (macOS tmpdir is a
+  // /var -> /private/var symlink), so the test's dirs must be physical to agree on every OS.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-test-')));
 }
 
 test('findProjectRoot stops at home and never walks above it', () => {

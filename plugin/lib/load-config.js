@@ -22,12 +22,24 @@ function globalConfigPath(home) {
   return path.join(claudeBaseDir(home), '.coalhearth.json');
 }
 
+// realpath a dir to its PHYSICAL path, falling back to a lexical resolve if realpath
+// throws (an absent dir has no realpath). On macOS os.tmpdir()/HOME is a symlink:
+// process.cwd() returns the realpath (/private/var/...) while os.homedir() returns the
+// raw symlink (/var/...), so a lexical `dir === homeAbs` NEVER matches and the walk
+// escapes above home. Same realpath discipline as sweepOrphans/_pruneOldLogs
+// (beta.3/beta.4); same fix as CoalFace v0.1.0-beta.2. Read-only + fail-open —
+// Phoenix-13 safe.
+function physical(p) {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
 // Walk up from cwd for `.coalhearth.json` / `.git`; NEVER walk above home (a config
 // above the sandboxed home would leak into a hermetic test — hooks-safety §3, the
-// 2026-07-01 lesson also applied in CoalBoard's findProjectCfg).
+// 2026-07-01 lesson also applied in CoalBoard's findProjectCfg). Compare PHYSICAL
+// paths on both sides; the walk stays lexical after that (dirname of a physical path).
 function findProjectRoot(startDir, home) {
-  let dir = path.resolve(startDir);
-  const homeAbs = path.resolve(home);
+  let dir = physical(startDir);
+  const homeAbs = physical(home);
   while (true) {
     if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.coalhearth.json'))) return dir;
     if (dir === homeAbs) return startDir;
