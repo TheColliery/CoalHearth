@@ -46,7 +46,9 @@ Honest sell: **less lost work on an interruption, plus an early low-headroom nud
 
 ## 🚀 Install
 
-**Claude Code** — one command (this also wires the two hooks: `SessionStart` = resume, `PostToolUse` = journal):
+**Claude Code only** — CoalHearth *is* two Phoenix-13 hooks (`SessionStart` = resume, `PostToolUse` = journal), and no other agent platform runs Claude Code hooks. There is no install for other agents by design; a file-based port for a non-hook platform would be a future redesign, not the shipped thing.
+
+**Claude Code** — one command (this also wires the two hooks):
 
 ```bash
 claude plugin marketplace add TheColliery/CoalHearth
