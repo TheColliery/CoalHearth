@@ -59,22 +59,15 @@ That's it — the hooks activate on your next session. No API keys, no network, 
 
 ## ⚙️ Configure
 
-Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). A fully-commented factory template ships as [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json); the schema is [`config/schema.json`](config/schema.json). Every key is optional and falls back to the default below.
+Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). Every key is optional. The high-impact keys:
 
-| Group | Key | Default | What it does |
-|---|---|---|---|
-| `budgets` | `maxTokens` | `2000000` | Token ceiling for the char-heuristic estimate. |
-| | `warningTokenPercentage` | `0.15` | Nudge when estimated token headroom drops to this fraction or less. |
-| `journal` | `outputDirectory` | `.claude/coalhearth` | Where `session_handoff.json` is written. Realpath-contained under the workspace root — a path escaping it (e.g. from an untrusted repo's config) falls back to the default. |
-| | `atomicityRetries` | `3` | Atomic write-then-rename retries before giving up (fail-silent; clamped 1-5 — the retry backoff is a synchronous wait on the hot-path). |
-| `recovery` | `autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
-| | `stashUnsavedChanges` | `true` | Add a "consider `git stash`" advisory line to the recovery block. `false` drops it. The hook never stashes for you. |
-| `update` | `updateMode` | `ask` | Self-update handling: `ask` · `auto` · `remind` · `off`. The hook only schedules; the agent verifies + offers, consent-gated. |
-| | `updateCheckDays` | `14` | Days between self-update checks (1-365; out-of-range clamps to the default on read). |
+| Key | Default | What it does |
+|---|---|---|
+| `recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
+| `budgets.maxTokens` | `2000000` | Token ceiling for the advisory char-heuristic estimate (see the honest frame above). |
+| `budgets.warningTokenPercentage` | `0.15` | Nudge when estimated token headroom drops to this fraction or less. |
 
-> The `budgets` numbers are **advisory thresholds for a best-effort heuristic**, not a precise limit read — see the honest frame above.
-
-Check for updates any time with **`/coalhearth:update`** — the agent compares the latest release tag to the installed version and offers `claude plugin update coalhearth@coalhearth`. The hook never networks; the check is the agent's, run with your consent.
+Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
 
 ## 🪝 The two hooks
 
