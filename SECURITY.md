@@ -18,8 +18,18 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 ## Config parsing
 - The `.coalhearth.json` parse is **prototype-pollution-guarded** — `__proto__` / `constructor` / `prototype` keys are dropped at parse time, so an untrusted project config (e.g. one shipped by a cloned repo) cannot pollute `Object.prototype` through the config merge.
 
+<!-- version-transition: SkillSpector scan — re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface, maintainer-commanded), NOT per release; bump the version/score/date/commit below only after a real re-scan. -->
+## Independent scanning — NVIDIA SkillSpector
+
+First scan: CoalHearth **v0.1.0-beta.3** dist (`plugin/`, commit `aba7ccb`), on **2026-07-02**, with [NVIDIA SkillSpector](https://github.com/NVIDIA/skillspector) **v2.3.9** (self-reported — the tool ships no tagged releases; the version is the `uvx`-from-git HEAD, `326a2b4`), static stage (`--no-llm`, the documented FP-prone baseline). Re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface), not per release — this pins the last version actually verified.
+
+**Score 53/100 · 5 findings · all false positive:**
+
+- `MEDIUM · EA2 Autonomous Decision` (`bin/session-start.js:8`, matched "no consent") — the match is the hook's header **comment** explaining that a headless run is safe by construction ("the hook only PRINTS — it never asks anything, so there's no consent step to skip"). The hook detects an aborted session, runs the path-contained orphan sweep (allow-listed CoalHearth-owned patterns only — see Filesystem safety), and prints the recovery block on the sanctioned SessionStart channel; it executes no destructive or high-impact operation autonomously.
+- `HIGH · RA1 Self-Modification` ×4 (`bin/session-start.js` + `commands/update.md`, matched "self-update") — the consent-gated **Self-Updating** added in v0.1.0-beta.2, the same static false positive its siblings carry. The hook only SCHEDULES a throttled check (a timestamp stamp at `~/.claude/.coalhearth-update-check` — no network ever); the `/coalhearth:update` agent procedure verifies the tag online and **offers** `claude plugin update` — it never auto-applies, and the skill never rewrites its own files. Two of the four hits are the hook's explanatory comment + its offer-directive string; the other two are the update command's own description and prose.
+
 ## Honest scope
-CoalHearth **reduces** the damage of a session limit-hit; it does not prevent one or guarantee recovery (the recovery block always instructs verification against git — the journal may be stale). As a brand-new plugin (v0.1.0) it has **not** yet been through an external security scan (e.g. SkillSpector); that provenance will be recorded here when it is.
+CoalHearth **reduces** the damage of a session limit-hit; it does not prevent one or guarantee recovery (the recovery block always instructs verification against git — the journal may be stale). External scan provenance is recorded in "Independent scanning" above.
 
 ## Reporting
 Report a suspected vulnerability by opening an issue on this repository.
