@@ -29,6 +29,16 @@ Last scan: CoalHearth **v1.0.0** dist (`plugin/`, commit `3b0587a`), on **2026-0
 - `MEDIUM · EA2 Autonomous Decision` (`bin/session-start.js:8`, matched "no consent") — the match is the hook's header **comment** explaining that a headless run is safe by construction ("the hook only PRINTS — it never asks anything, so there's no consent step to skip"). The hook detects an aborted session, runs the path-contained orphan sweep (allow-listed CoalHearth-owned patterns only — see Filesystem safety), and prints the recovery block on the sanctioned SessionStart channel; it executes no destructive or high-impact operation autonomously.
 - `HIGH · RA1 Self-Modification` ×4 (`bin/session-start.js` + `commands/update.md`, matched "self-update") — the consent-gated **Self-Updating** added in v0.1.0-beta.2, the same static false positive its siblings carry. The hook only SCHEDULES a throttled check (a timestamp stamp at `~/.claude/.coalhearth-update-check` — no network ever); the `/coalhearth:update` agent procedure verifies the tag online and **offers** `claude plugin update` — it never auto-applies, and the skill never rewrites its own files. Two of the four hits are the hook's explanatory comment + its offer-directive string; the other two are the update command's own description and prose.
 
+## Commit & tag signatures
+
+Every release tag and maintainer commit is SSH-signed (`gpg.format=ssh`); GitHub shows the Verified badge on them. Automated Dependabot / CI commits are unsigned by design (they carry no maintainer key), so verify a signed release tag — the artifact a release consumer trusts:
+
+```bash
+echo "* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtqTWGKhX1Dk9nZP8ns13Wl5zsO1Cz3VlTS6m1p2fP9" > coalhearth_signers
+git config gpg.ssh.allowedSignersFile ./coalhearth_signers
+git tag -v "$(git describe --tags --abbrev=0)"
+```
+
 ## Honest scope
 CoalHearth **reduces** the damage of a session limit-hit; it does not prevent one or guarantee recovery (the recovery block always instructs verification against git — the journal may be stale). External scan provenance is recorded in "Independent scanning" above.
 
