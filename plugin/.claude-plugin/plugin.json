@@ -5,6 +5,6 @@
   "author": { "name": "HetCreep" },
   "homepage": "https://github.com/TheColliery/CoalHearth",
   "repository": "https://github.com/TheColliery/CoalHearth",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["session-memory", "warm-resume", "budget-guardrail", "handoff", "recovery", "skills", "hooks"]
 }
