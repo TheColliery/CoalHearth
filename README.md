@@ -7,7 +7,7 @@
 **A session warm-resume + budget-guardrail engine.** A hook journals your session's state every step; if the next session finds the prior one was interrupted, it injects a markdown recovery block so you continue where you left off. A secondary, advisory budget nudge warns before a fan-out spawn when headroom looks low.
 
 ![version](https://img.shields.io/github/v/tag/TheColliery/CoalHearth?label=version&color=blue)
-![license](https://img.shields.io/badge/license-MIT-blue)
+![license](https://img.shields.io/badge/license-Apache_2.0-blue)
 ![status](https://img.shields.io/badge/status-stable-brightgreen)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
@@ -90,4 +90,4 @@ Zero-dependency, offline, no API keys.
 
 ## 📄 License
 
-MIT License. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

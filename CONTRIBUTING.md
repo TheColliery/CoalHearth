@@ -60,4 +60,4 @@ Bump version in `.claude-plugin/plugin.json` ➡️ add a `CHANGELOG.md` entry �
 
 ## 📄 License & Conduct
 
-Contributions are licensed under the [MIT License](LICENSE). Please assume good faith and be respectful. Report security issues per [SECURITY.md](SECURITY.md).
+Contributions are licensed under the [Apache License 2.0](LICENSE). Please assume good faith and be respectful. Report security issues per [SECURITY.md](SECURITY.md).
