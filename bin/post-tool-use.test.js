@@ -189,6 +189,21 @@ test('inFlightAgents: an Agent spawn is journaled (description/type/residue), a 
     r = run(cwd, home, JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'a.js') } }));
     assert.strictEqual(r.status, 0);
     assert.strictEqual(read().inFlightAgents.length, 2, 'a non-spawn tool contributes no agent');
+
+    // 4th: a Workflow run is journaled by its own identifier shape (name/scriptPath,
+    // no description/subagent_type) — the 2026-07-08 field evidence: a limit-hit
+    // mid-workflow left zero outer-session record of the run's existence.
+    r = run(cwd, home, JSON.stringify({
+      tool_name: 'Workflow',
+      tool_input: { name: 'verify-chapters', script: 'export const meta = {}' },
+      tool_response: { transcriptDir: '/tmp/workflows/wf_abc123' },
+    }));
+    assert.strictEqual(r.status, 0);
+    agents = read().inFlightAgents;
+    assert.strictEqual(agents.length, 3, 'a Workflow spawn accumulates');
+    assert.strictEqual(agents[2].description, 'verify-chapters', 'workflow name serves as the description');
+    assert.strictEqual(agents[2].subagentType, 'workflow', 'tagged as a workflow run');
+    assert.strictEqual(agents[2].outputPath, '/tmp/workflows/wf_abc123', 'transcriptDir probed as the residue path');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });

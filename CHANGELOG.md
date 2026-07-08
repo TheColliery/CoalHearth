@@ -2,7 +2,12 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
-## [1.1.0] - 2026-07-08
+## [1.2.0] - 2026-07-09
+
+**MINOR** — the in-flight tracker learns the third spawn shape. Field-driven: a 52-agent `Workflow` run hit a session limit (8 workers dead) and the outer session had ZERO record the run existed — `Workflow` was not in the spawn-tool set, so the recovery block could not point the next session at the run's own `journal.jsonl`.
+
+### Added
+- **`Workflow` runs are journaled into `inFlightAgents`** (`bin/post-tool-use.js`): the spawn-tool set gains `Workflow`; the record uses the workflow's `name`/`scriptPath` as its description, tags `subagentType: 'workflow'`, and probes `transcriptDir`/`scriptPath` as the residue path (the run's own `journal.jsonl` lives there — CoalHearth records that the run EXISTED and where its journal is; the per-agent truth stays in that journal, honest-scope unchanged). Hermetic test extended (a Workflow spawn accumulates with name/tag/residue asserted).
 
 **MINOR** — the measurement standard-system lands.
 

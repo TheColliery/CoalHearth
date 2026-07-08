@@ -24,8 +24,13 @@ const FILE_TOOL_KEYS = {
 };
 
 // The sub-agent spawn tool is `Agent` (legacy alias `Task`); match both so a
-// platform/version reporting either is covered (Incident E).
-const SPAWN_TOOL_NAMES = new Set(['Agent', 'Task']);
+// platform/version reporting either is covered (Incident E). `Workflow` is the
+// multi-agent orchestration tool — its internal fan-out is invisible to this hook
+// (it runs its own journal), but the RUN's existence + residue location is not:
+// a limit-hit mid-workflow leaves the run's own journal.jsonl as the recovery
+// point, and the resume block must point the next session at it (field evidence
+// 2026-07-08: 52-agent workflow, 8 dead on a session limit, zero outer-session record).
+const SPAWN_TOOL_NAMES = new Set(['Agent', 'Task', 'Workflow']);
 
 // Extract an in-flight-subagent record from a spawn tool_call payload (Incident E).
 // Captures only what the payload GIVES: the `description` + `subagent_type` from
@@ -39,11 +44,14 @@ function extractSpawn(payload) {
   const resp = (payload.tool_response && typeof payload.tool_response === 'object') ? payload.tool_response : {};
   const str = (v) => (typeof v === 'string' && v ? v : undefined);
   return {
-    description: str(inp.description) || '(no description)',
-    subagentType: str(inp.subagent_type),
+    // Agent/Task carry `description`; Workflow carries `name`/`scriptPath` instead —
+    // fall through so a workflow run is journaled by its own identifier.
+    description: str(inp.description) || str(inp.name) || str(inp.scriptPath) || '(no description)',
+    subagentType: str(inp.subagent_type) || (payload.tool_name === 'Workflow' ? 'workflow' : undefined),
     // Probe a few plausible residue-path keys; undocumented + version-dependent, so
-    // best-effort. Absent -> undefined (the recovery block just omits it).
-    outputPath: str(resp.output_file) || str(resp.outputPath) || str(resp.output_path),
+    // best-effort. Absent -> undefined (the recovery block just omits it). For a
+    // Workflow the real recovery point is the run's own journal.jsonl/transcript dir.
+    outputPath: str(resp.output_file) || str(resp.outputPath) || str(resp.output_path) || str(resp.transcriptDir) || str(resp.scriptPath),
     spawnedAt: new Date().toISOString(),
   };
 }
