@@ -2,9 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
-## [Unreleased]
+## [1.1.0] - 2026-07-08
+
+**MINOR** — the measurement standard-system lands.
+
+### Added
+- **`/coalhearth:stats`** (`commands/stats.md`) — the standardized measurement command (series standard-system #5): the current session's journal state (last update, modified files, in-flight subagents), resume events (did this session warm-resume, and did the snapshot match reality), and the advisory budget estimate when surfaced (labeled approximate). Read-only; honest empty state.
 
 ### Changed
+- **Self-update wording aligned to the series gold phrasing** (one-flock conform): the SessionStart nudge and `commands/update.md` now say *web-check the latest tag vs the installed `plugin.json` version … if git/network is unavailable, say so and suggest updating manually later (never assume)* — the `git ls-remote` hard-coupling is gone (git remains a usable means, not an assumed one).
 - Relicensed from MIT to Apache-2.0. `LICENSE` is now the Apache License 2.0 (verbatim); a new `NOTICE` carries the attribution; the `plugin.json` `license` field is `Apache-2.0`. No code or behavior change.
 
 ## [1.0.0] — 2026-07-02

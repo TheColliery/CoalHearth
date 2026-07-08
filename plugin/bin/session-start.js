@@ -74,7 +74,7 @@ function main() {
   // Orthogonal to the resume path (its own off-switch is update.updateMode) — rides the
   // same sanctioned SessionStart context-injection channel.
   if (updateDue(config)) {
-    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check (compare the latest git tag via `git ls-remote` to the installed version, then offer `claude plugin update coalhearth@coalhearth`). Consent-gated; the hook only scheduled it.');
+    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.');
   }
 }
 
