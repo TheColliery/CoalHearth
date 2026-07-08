@@ -59,7 +59,7 @@ That's it — the hooks activate on your next session. No API keys, no network, 
 
 ## ⚙️ Configure
 
-Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). Every key is optional. The high-impact keys:
+Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir** — project wins), so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional. The high-impact keys:
 
 | Key | Default | What it does |
 |---|---|---|
