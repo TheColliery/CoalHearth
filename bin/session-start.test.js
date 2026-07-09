@@ -81,6 +81,40 @@ test('in_progress journal: exits 0, prints the recovery block, marks resumed', (
   cleanup(home, cwd);
 });
 
+// Regression (CoalBoard nasa audit 2026-07-09 L6): a read-only journal (stand-in for a
+// read-only filesystem) makes the mark-resumed write fail. Previously this was swallowed
+// silently, so the SAME recovery block would re-inject every subsequent boot forever with
+// no explanation. The hook must now say so in the block itself, and stay fail-silent
+// (exit 0, no stderr) either way.
+test('read-only journal (mark-resumed write fails): still exits 0, still prints recovery, says it may repeat', () => {
+  const { home, cwd } = sandbox();
+  muteUpdate(home);
+  const outDir = path.join(cwd, '.claude', 'coalhearth');
+  fs.mkdirSync(outDir, { recursive: true });
+  const journalPath = path.join(outDir, 'session_handoff.json');
+  fs.writeFileSync(
+    journalPath,
+    JSON.stringify({
+      sessionId: 'abc-123', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+      checklist: [], modifiedFiles: [], activePlan: { goal: 'Ship the feature', nextSteps: [], constraints: [] },
+    }),
+    'utf8'
+  );
+  fs.chmodSync(journalPath, 0o444); // simulate a read-only fs: the mark-resumed write will throw
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.ok(r.stdout.includes('CoalHearth Warm-Resume Recovery'), 'recovery block still injected');
+  assert.ok(r.stdout.toLowerCase().includes('may repeat'), 'honest note that the block may repeat');
+
+  const after = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  assert.strictEqual(after.status, 'in_progress', 'write failed -> status could not be marked resumed');
+
+  cleanup(home, cwd); // rmSync(force:true) removes the read-only file fine on this platform
+});
+
 // Regression (audit 2026-07-02 L7): recovery.autoInjectPrompt:false must suppress the
 // recovery-block injection while STILL detecting + marking the journal resumed (so it
 // doesn't re-detect forever). Previously the flag was inert (always injected).

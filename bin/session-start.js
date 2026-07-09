@@ -53,21 +53,28 @@ function main() {
       // fail-silent: a failed sweep never blocks the resume
     }
 
-    // recovery.autoInjectPrompt (default true): print the recovery block on the
-    // sanctioned SessionStart channel. false = detect + sweep + mark resumed, but
-    // suppress the injection (audit 2026-07-02 L7 — the flag was previously inert).
-    if (recovery.autoInjectPrompt !== false) {
-      const prompt = engine.generateHandoffPrompt(aborted);
-      if (prompt) console.log(prompt); // sanctioned SessionStart context-injection channel (Phoenix #13)
-    }
-
-    // Mark resumed so the same journal doesn't re-inject every subsequent boot.
+    // Mark resumed FIRST (before printing) so we know whether it stuck — a stuck
+    // write (e.g. a read-only filesystem) must not re-inject the SAME prompt every
+    // boot forever with no explanation (CoalBoard nasa audit 2026-07-09 L6). Never
+    // retried elsewhere (Phoenix #10: no writes outside the sandbox root) — a
+    // genuinely read-only fs cannot be marked, so the honest fallback is to say so.
+    let markedResumed = true;
     try {
       const journalPath = path.join(engine.outputDir, 'session_handoff.json');
       fs.writeFileSync(journalPath, JSON.stringify({ ...aborted, status: 'resumed' }, null, 2), 'utf8');
     } catch {
-      // fail-silent: a stuck "resumed" write just means the prompt may repeat next boot —
-      // non-fatal, never blocks startup.
+      markedResumed = false; // fail-silent (Phoenix #4): non-fatal, never blocks startup
+    }
+
+    // recovery.autoInjectPrompt (default true): print the recovery block on the
+    // sanctioned SessionStart channel. false = detect + sweep + mark resumed, but
+    // suppress the injection (audit 2026-07-02 L7 — the flag was previously inert).
+    if (recovery.autoInjectPrompt !== false) {
+      let prompt = engine.generateHandoffPrompt(aborted);
+      if (prompt && !markedResumed) {
+        prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
+      }
+      if (prompt) console.log(prompt); // sanctioned SessionStart context-injection channel (Phoenix #13)
     }
   }
 

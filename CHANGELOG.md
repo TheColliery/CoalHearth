@@ -2,12 +2,22 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [1.2.1] - 2026-07-09
+
+**PATCH** — two LOW fixes from the CoalBoard nasa full-mirror audit (2026-07-09, finding L6). No new capability.
+
+### Fixed
+- **CHANGELOG double-MINOR**: the v1.2.0 release commit renamed the existing `## [1.1.0]` heading in place instead of inserting a new heading above it, so this file stacked two unrelated MINOR change-sets (the 1.1.0 `/coalhearth:stats` + self-update conform, and the 1.2.0 Workflow-tracking work) under one `## [1.2.0]` heading with two `**MINOR**` labels. Both versions were already tagged correctly (`v1.1.0` @ 2026-07-08, `v1.2.0` @ 2026-07-09) — only this file's bookkeeping was wrong. Split back into their own headings below; no version was renumbered, no tag touched.
+- **Read-only-fs resume re-inject** (`bin/session-start.js`): the mark-resumed write ran *after* the recovery block was already printed, and any failure (e.g. a read-only journal directory) was swallowed silently — so a filesystem that can never persist "resumed" re-injected the identical recovery block on every subsequent boot, forever, with no indication why. The mark-resumed write now runs first; on failure the recovery block itself gains a one-line honest note ("could not mark this session resumed … this recovery block may repeat next session"). Still Phoenix-13 fail-silent (exit 0, no new writes, no retry outside the sandbox root) — a genuinely read-only fs cannot be fixed by more code, so the fix is honesty, not persistence. Hermetic regression test: a read-only journal file still exits 0 and now says "may repeat".
+
 ## [1.2.0] - 2026-07-09
 
 **MINOR** — the in-flight tracker learns the third spawn shape. Field-driven: a 52-agent `Workflow` run hit a session limit (8 workers dead) and the outer session had ZERO record the run existed — `Workflow` was not in the spawn-tool set, so the recovery block could not point the next session at the run's own `journal.jsonl`.
 
 ### Added
 - **`Workflow` runs are journaled into `inFlightAgents`** (`bin/post-tool-use.js`): the spawn-tool set gains `Workflow`; the record uses the workflow's `name`/`scriptPath` as its description, tags `subagentType: 'workflow'`, and probes `transcriptDir`/`scriptPath` as the residue path (the run's own `journal.jsonl` lives there — CoalHearth records that the run EXISTED and where its journal is; the per-agent truth stays in that journal, honest-scope unchanged). Hermetic test extended (a Workflow spawn accumulates with name/tag/residue asserted).
+
+## [1.1.0] - 2026-07-08
 
 **MINOR** — the measurement standard-system lands.
 
