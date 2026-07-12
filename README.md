@@ -10,6 +10,9 @@
 ![license](https://img.shields.io/badge/license-Apache_2.0-blue)
 ![status](https://img.shields.io/badge/status-stable-brightgreen)
 
+![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
+![Antigravity: planned](https://img.shields.io/badge/Antigravity-planned-lightgrey)
+
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
 **Part of [TheColliery](https://github.com/TheColliery)** — siblings: **[CoalMine](https://github.com/HetCreep/CoalMine)** (quality canaries) · **[CoalTipple](https://github.com/TheColliery/CoalTipple)** (model/effort routing) · **[CoalBoard](https://github.com/TheColliery/CoalBoard)** (consensus board) · **[CoalFace](https://github.com/TheColliery/CoalFace)** (fan-out discipline) · **[CoalWash](https://github.com/TheColliery/CoalWash)** (memory defrag) · **[CoalLedger](https://github.com/TheColliery/CoalLedger)** (docs health).
@@ -46,9 +49,11 @@ Honest sell: **less lost work on an interruption, plus an early low-headroom nud
 
 ## 🚀 Install
 
-**Claude Code only** — CoalHearth *is* two Phoenix-13 hooks (`SessionStart` = resume, `PostToolUse` = journal), and no other agent platform runs Claude Code hooks. There is no install for other agents by design; a file-based port for a non-hook platform would be a future redesign, not the shipped thing.
+CoalHearth *is* two Phoenix-13 hooks (`SessionStart` = resume, `PostToolUse` = journal), so it installs wherever a platform runs those hooks.
 
-**Claude Code** — one command (this also wires the two hooks):
+### Claude Code — validated
+
+One command (this also wires the two hooks):
 
 ```bash
 claude plugin marketplace add TheColliery/CoalHearth
@@ -56,6 +61,14 @@ claude plugin install coalhearth@coalhearth
 ```
 
 That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
+
+### Antigravity — planned (not yet installable)
+
+Antigravity 2.0 added a hook layer (confirmed 2026-07-12), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. But the port is **not built yet**: the two hooks must be ported to AG's `hooks.json`, plus a session-id resume shim (AG has no one-shot `SessionStart`). Until that adapter ships there is nothing to copy that would actually run, so AG stays **planned**, not works-with.
+
+### Other agents — not supported
+
+CoalHearth is hook-only; a platform with no hook layer has nothing to run, and there is no read/analyze mode to load by hand (the way CoalMine or CoalLedger ship one). No file-copy or ZIP-upload install path applies here.
 
 ## ⚙️ Configure
 
