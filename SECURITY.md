@@ -8,8 +8,8 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 - **Node builtins only** — `fs`, `path`, `os`. **No child processes** — the hooks spawn nothing (the earlier best-effort `git status` spawn was removed; modified files come from the tool-call payloads the hook observes).
 
 ## Hook safety (Phoenix-13)
-- The `SessionStart` and `PostToolUse` hooks are **fail-silent**: all logic is wrapped in try/catch, they exit 0 on every path, and they never crash the host agent.
-- The only output is the sanctioned `SessionStart` context injection (the recovery block); nothing else is written to stdout/stderr.
+- The `SessionStart` and `PostToolUse` hooks — and their Antigravity adapters (`bin/ag-pre-invocation.js`, `bin/ag-post-tool-use.js`, thin shims over the same shared core) — are **fail-silent**: all logic is wrapped in try/catch, they exit 0 on every path, and they never crash the host agent.
+- The only output is the sanctioned context injection (the recovery block — `SessionStart` stdout on Claude Code, one `{"additionalContext"}` JSON line on Antigravity); nothing else is written to stdout/stderr.
 
 ## Filesystem safety
 - **Path-contained orphan sweep.** The resume-time cleanup removes only known scratch/worktree name-patterns, only inside **CoalHearth-owned** dirs (`.claude/coalhearth/scratch`, `.agents/coalhearth/scratch`, and CoalHearth-owned stale worktrees), resolve-and-contained under the workspace root. It NEVER touches the user's own tree (e.g. your `scripts/`) and never does a blind recursive delete.

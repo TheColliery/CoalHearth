@@ -22,6 +22,7 @@ const TESTS = [
   'lib/load-config.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
+  'bin/ag-hooks.test.js',
 ];
 
 const missing = TESTS.filter((t) => !fs.existsSync(path.join(repo, t)));

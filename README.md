@@ -11,7 +11,7 @@
 ![status](https://img.shields.io/badge/status-stable-brightgreen)
 
 ![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
-![Antigravity: planned](https://img.shields.io/badge/Antigravity-planned-lightgrey)
+![Antigravity: wired](https://img.shields.io/badge/Antigravity-wired-yellow)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
@@ -49,7 +49,7 @@ Honest sell: **less lost work on an interruption, plus an early low-headroom nud
 
 ## 🚀 Install
 
-CoalHearth *is* two Phoenix-13 hooks (`SessionStart` = resume, `PostToolUse` = journal), so it installs wherever a platform runs those hooks.
+CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever a platform runs hooks — on Claude Code as `SessionStart` + `PostToolUse`, on Antigravity as `PreInvocation` + `PostToolUse` (adapters over the same shared core).
 
 ### Claude Code — validated
 
@@ -62,9 +62,21 @@ claude plugin install coalhearth@coalhearth
 
 That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
 
-### Antigravity — planned (not yet installable)
+### Antigravity — wired (live AG validation pending)
 
-Antigravity 2.0 added a hook layer (confirmed 2026-07-12), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. But the port is **not built yet**: the two hooks must be ported to AG's `hooks.json`, plus a session-id resume shim (AG has no one-shot `SessionStart`). Until that adapter ships there is nothing to copy that would actually run, so AG stays **planned**, not works-with.
+Antigravity 2.0 added a real hook engine (`hooks.json`; empirically confirmed 2026-07-12, corroborated against the official docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is now **built and hermetically tested** against that verified spec. **wired** = the adapter exists, is tested, and installs as documented; what is *not* yet proven is a live AG session delivering the injected recovery block into the agent — one real AG run flips this to validated. No "works on Antigravity" claim until then.
+
+AG has no plugin manager, so the install is a file copy:
+
+```powershell
+git clone https://github.com/TheColliery/CoalHearth.git --depth 1
+# global (all workspaces):
+Copy-Item -Recurse CoalHearth "$env:USERPROFILE\.gemini\config\skills\coalhearth"
+```
+
+Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<workspace>/.agents/hooks.json` (per project) **or** `~/.gemini/config/hooks.json` (global), and replace `__COALHEARTH_DIR__` with the copied directory. Event mapping (AG never fires `SessionStart`): warm-resume rides the **first `PreInvocation`** of a session — a per-session temp marker keeps it once-per-session, since PreInvocation fires per model call — and the journal rides `PostToolUse`.
+
+Known limits on AG: delivery of the injected `additionalContext` is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
 ### Other agents — not supported
 
@@ -88,6 +100,8 @@ Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, n
 
 - **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
 - **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically, then runs the advisory budget check and prints the one nudge line only when headroom is low.
+
+On Antigravity the same two jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume, first PreInvocation of a session) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js)); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. Same Phoenix-13 discipline on both platforms.
 
 ## 📊 Benchmark
 

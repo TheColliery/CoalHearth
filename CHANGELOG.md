@@ -2,6 +2,20 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [1.3.0] - 2026-07-14
+
+**MINOR** — CoalHearth runs on Antigravity. AG 2.0 shipped a real hook engine (`hooks.json`; empirical pilot 2026-07-12, corroborated against the official docs 2026-07-13), retiring the "Claude Code only — no other agent platform runs hooks" premise. The port is built + hermetically tested against that verified spec; live AG validation is still pending (tier: **wired**, not validated — delivery of the injected context into the agent is emitted per spec, unproven end-to-end; one real AG session run flips it).
+
+### Added
+- **Antigravity adapters.** [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) — warm-resume rides the FIRST `PreInvocation` of a session (AG never fires `SessionStart`); a per-session tmp marker keeps it once-per-session (PreInvocation fires per MODEL call), written BEFORE the emit per the v1.2.1 write-ordering lesson, with an honest "may repeat" note on write-fail. [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) — the journal step per tool call, with a defensive payload normalize (AG core fields are snake_case, camelCase accepted; an unmapped tool name is a no-op, never a wrong write). Emit = one `{"additionalContext"}` JSON line, AG's sanctioned injection channel.
+- **`platform-configs/hooks.json`** — the AG wiring template (named-group wrapper, external-script commands; copy to `<workspace>/.agents/hooks.json` or `~/.gemini/config/hooks.json`, replace `__COALHEARTH_DIR__`).
+- **`lib/journal-step.js`** — the journal core both platforms share; `bin/post-tool-use.js` (Claude Code) is now a thin adapter over it, behavior identical.
+- **16 hermetic AG-hook tests** (`bin/ag-hooks.test.js`, spawning the real hook files sandboxed) → 113 total.
+- Deliberately NOT ported: the self-update nudge — its payload (`claude plugin update coalhearth@coalhearth`) is Claude-Code-plugin-specific; AG installs by file-copy, so that instruction would be wrong there.
+
+### Fixed
+- **Cross-session journal contamination on the new AG path** (rot-canary HIGH, 2026-07-13 — caught and fixed pre-release): `lib/journal-step.js` treats a prior `in_progress` journal as the CURRENT session's accumulator, so a dead session left unmarked would leak its `modifiedFiles`/`inFlightAgents` into the next session's first save, growing unbounded across crash chains. The AG resume shim now marks the journal `resumed` BEFORE emitting (the Claude Code path already did), restoring the status-proxy invariant; regression test included. Tradeoff accepted, same as Claude Code's: a session that dies before its first tool call won't re-offer that recovery.
+
 ## [1.2.1] - 2026-07-09
 
 **PATCH** — two LOW fixes from the CoalBoard nasa full-mirror audit (2026-07-09, finding L6). No new capability.
