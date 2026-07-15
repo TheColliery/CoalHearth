@@ -1,9 +1,13 @@
-// Hermetic spawn tests for the Antigravity adapters (hooks-safety.md §7): spawn the REAL
-// bin/ag-pre-invocation.js / bin/ag-post-tool-use.js as child processes with AG-SHAPED
-// fixture stdin (both snake_case and camelCase toolCall variants), a sandboxed
+// Hermetic spawn tests for the non-Claude-Code adapters (hooks-safety.md §7): spawn the
+// REAL bin/ag-pre-invocation.js / bin/ag-post-tool-use.js as child processes with
+// platform-shaped fixture stdin (both snake_case and camelCase variants), a sandboxed
 // TEMP/HOME/TMPDIR + cwd so real state can never leak, and assert the three surfaces:
-// exit 0 on every path; stdout silent EXCEPT the sanctioned additionalContext JSON;
+// exit 0 on every path; stdout silent EXCEPT the platform's sanctioned channel;
 // the expected state effect (journal written / recovery emitted / once-per-session guard).
+// The default argv here is 'PreInvocation' (the AG branch) — the original AG tests double
+// as the regression suite proving the platform-mode dispatch left AG byte-identical; the
+// v1.4.0 'SessionStart' (Gemini) + 'FileCopy' (Copilot CLI/Devin CLI/Kiro/Augment) modes
+// have their own section at the end.
 // Run: node --test bin/ag-hooks.test.js
 'use strict';
 
@@ -26,8 +30,10 @@ function mk() {
 
 // TMPDIR/TEMP/TMP -> the sandbox `home`, so the once-per-session marker os.tmpdir() writes
 // lands in an isolated throwaway dir (never the real tmp, never a cross-test collision).
-function run(script, cwd, home, stdin, extraEnv) {
-  return spawnSync(process.execPath, [script, 'PreInvocation'], {
+// `mode` (appended, optional) = the platform-dispatch argv; default 'PreInvocation' keeps
+// every pre-existing call on the AG branch.
+function run(script, cwd, home, stdin, extraEnv, mode) {
+  return spawnSync(process.execPath, [script, mode || 'PreInvocation'], {
     cwd,
     env: {
       ...process.env,
@@ -513,6 +519,146 @@ test('ptu: garbage stdin -> exit 0 silent, journal still written with empty defa
     assert.strictEqual(r.stdout, '');
     assert.strictEqual(r.stderr, '');
     assert.deepStrictEqual(readJournal(cwd).modifiedFiles, []);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// =====================================================================================
+// v1.4.0 config-only platform modes — argv 'SessionStart' (Gemini CLI: nested
+// hookSpecificOutput emit, NO marker) and 'FileCopy' (Copilot CLI / Devin CLI / Kiro /
+// Augment: plain CC stdout, NO marker). The AG tests above (argv 'PreInvocation') are
+// the regression suite proving the dispatch left the default AG branch untouched.
+// =====================================================================================
+
+test('pre gemini: in_progress journal -> NESTED hookSpecificOutput emit, marked resumed, NO tmp marker', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const r = run(PRE, cwd, home, SID, null, 'SessionStart');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const obj = JSON.parse(r.stdout.trim());
+    assert.match(obj.hookSpecificOutput.additionalContext, /Warm-Resume Recovery/, 'the block rides Gemini\'s nested field');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(obj, 'additionalContext'), false, 'no flat AG key — Gemini silently drops it');
+    assert.strictEqual(readJournal(cwd).status, 'resumed', 'contamination guard holds on Gemini too');
+    assert.strictEqual(markerCount(home), 0, 'a genuine per-session SessionStart needs no marker');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pre gemini: NO session key -> still resumes (native one-shot event needs no dedupe key, unlike AG)', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const r = run(PRE, cwd, home, JSON.stringify({ cwd }), null, 'SessionStart'); // no session_id/transcript_path
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const obj = JSON.parse(r.stdout.trim());
+    assert.match(obj.hookSpecificOutput.additionalContext, /Warm-Resume Recovery/, 'keyless payload must NOT block a named-mode resume');
+    assert.strictEqual(markerCount(home), 0);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pre gemini: nothing to resume -> exit 0 silent, no marker', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    const r = run(PRE, cwd, home, SID, null, 'SessionStart');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stdout, '', 'no aborted journal -> nothing injected');
+    assert.strictEqual(r.stderr, '');
+    assert.strictEqual(markerCount(home), 0);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pre filecopy: in_progress journal -> PLAIN stdout block (CC parity, not JSON), marked resumed, no marker', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const r = run(PRE, cwd, home, SID, null, 'FileCopy');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.match(r.stdout, /Warm-Resume Recovery/, 'the block rides plain stdout (the CC-shaped platforms\' channel)');
+    assert.ok(!r.stdout.trimStart().startsWith('{'), 'plain markdown, never a JSON wrapper');
+    assert.strictEqual(readJournal(cwd).status, 'resumed');
+    assert.strictEqual(markerCount(home), 0, 'a real session-start event needs no marker');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('ptu gemini (AfterTool): write_file + replace journaled via the shared normalizer; near-limit nudge SUPPRESSED', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    // A tiny budget so the advisory WOULD fire — proving the Gemini suppression, not a quiet pass.
+    fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
+    const r1 = run(PTU, cwd, home, JSON.stringify({
+      tool_name: 'write_file', // Gemini's write tool
+      tool_input: { file_path: path.join(cwd, 'src', 'g.js'), content: 'x'.repeat(400) },
+    }), null, 'AfterTool');
+    assert.strictEqual(r1.status, 0);
+    assert.strictEqual(r1.stdout, '', 'near-limit on Gemini -> nudge suppressed (no verified AfterTool inject channel)');
+    assert.strictEqual(r1.stderr, '');
+    assert.deepStrictEqual(readJournal(cwd).modifiedFiles, [path.join('src', 'g.js')], 'write_file mapped to a journal step');
+
+    const r2 = run(PTU, cwd, home, JSON.stringify({
+      tool_name: 'replace', // Gemini's edit tool
+      tool_input: { file_path: path.join(cwd, 'h.js'), old_string: 'a', new_string: 'b'.repeat(400) },
+    }), null, 'AfterTool');
+    assert.strictEqual(r2.status, 0);
+    assert.strictEqual(r2.stdout, '', 'suppressed on the edit-tool path too');
+    assert.deepStrictEqual(readJournal(cwd).modifiedFiles, [path.join('src', 'g.js'), 'h.js'], 'replace accumulates onto the same session');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('ptu filecopy: near-limit -> the plain [CoalHearth] stdout nudge (CC parity, not JSON), journal written', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
+    const r = run(PTU, cwd, home, JSON.stringify({ tool_name: 'run_command', tool_input: { command: 'x'.repeat(400) } }), null, 'FileCopy');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.match(r.stdout, /^\[CoalHearth\] /, 'the CC-shaped platforms get bin/post-tool-use.js\'s exact channel');
+    assert.match(r.stdout, /prefer inline/);
+    assert.ok(!r.stdout.trimStart().startsWith('{'), 'plain line, never a JSON wrapper');
+    assert.strictEqual(readJournal(cwd).status, 'in_progress', 'the journal step ran regardless');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('ptu filecopy: camelCase toolName + toolInput (Copilot-CLI shape) -> recorded', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    const r = run(PTU, cwd, home, JSON.stringify({
+      toolName: 'Write',
+      toolInput: { file_path: path.join(cwd, 'c.js') },
+    }), null, 'FileCopy');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stdout, '', 'happy path silent');
+    assert.strictEqual(r.stderr, '');
+    assert.deepStrictEqual(readJournal(cwd).modifiedFiles, ['c.js'], 'the camelCase toolInput probe is live');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });

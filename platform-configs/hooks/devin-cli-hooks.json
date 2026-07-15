@@ -1,0 +1,16 @@
+{
+  "$comment": "Devin CLI ONLY — place as .devin/hooks.v1.json. Devin Desktop (ex-Windsurf) is a SEPARATE product running its own snake_case 'Cascade Hooks' vocabulary (pre/post_write_code, post_cascade_response — NO session-start-class event, so CoalHearth's resume has no anchor there; no Cascade config is shipped, see the README). The CLI's hooks are PascalCase, Claude-Code-shaped events + the same nested entry shape (verified 2026-07-15 — an explicit CC-schema clone), so both adapters run marker-free in their plain Claude-Code stdout shape via the trailing 'FileCopy' argument. The exact Devin response/inject schema is UNVERIFIED end-to-end (the CC shape is the config side only) — flag if the recovery block never appears. No matcher on PostToolUse: CoalHearth journals EVERY tool call (spawns and files both). Adjust C:/path/to/CoalHearth in every command. Tier: wired — built + hermetically tested vs the primary docs; NO live Devin CLI session has run this wiring yet.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy" }]
+      }
+    ]
+  }
+}

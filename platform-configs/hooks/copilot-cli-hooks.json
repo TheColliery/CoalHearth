@@ -1,0 +1,24 @@
+{
+  "$comment": "GitHub Copilot CLI — a DISTINCT product from the VS Code / agent-mode surface (which uses PascalCase events; do not mix the two vocabularies). Place this file as .github/hooks/coalhearth.json (repo) or ~/.copilot/hooks/coalhearth.json (user). camelCase events per the CLI's own docs (verified 2026-07-15); each entry ships both a bash and a powershell command string for Windows parity. Copilot has a real per-session sessionStart, so the trailing 'FileCopy' argument runs the adapters marker-free in their plain Claude-Code stdout shape — sessionStart's exact context-inject field is UNVERIFIED, so that plain shape is a best-guess; flag if the recovery block never appears. postToolUse journals every tool call (field casing unverified — the reader probes both snake_case and camelCase). Adjust C:/path/to/CoalHearth in every command. Tier: wired — built + hermetically tested vs the primary docs; NO live Copilot CLI session has run this wiring yet.",
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy",
+        "powershell": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy",
+        "powershell": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

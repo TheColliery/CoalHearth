@@ -1,0 +1,11 @@
+{
+  "$comment": "Kiro — a MERGE SNIPPET: hooks live INSIDE the agent config, not a standalone file. Copy the 'hooks' block below into .kiro/agents/<name>.json (project) or ~/.kiro/agents/<name>.json (user). Lower-camel event casing per Kiro's schema-reference page (kiro.dev/docs/cli/hooks, 2026-07-15): agentSpawn is the session-start-class event (fires when the agent spawns), postToolUse the per-tool one — the pair CoalHearth needs, run marker-free in the plain Claude-Code stdout shape via the trailing 'FileCopy' argument. Kiro's response/context-inject schema is entirely UNVERIFIED — the plain shape is a best-guess; flag if the recovery block never appears. Payload field casing is also unverified (the reader probes both snake_case and camelCase; an unknown tool name is simply not journaled, never a wrong write). Adjust C:/path/to/CoalHearth in every command. Tier: wired — built + hermetically tested vs the primary docs; NO live Kiro session has run this wiring yet.",
+  "hooks": {
+    "agentSpawn": [
+      { "command": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy", "timeout_ms": 10000 }
+    ],
+    "postToolUse": [
+      { "command": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy", "timeout_ms": 10000 }
+    ]
+  }
+}

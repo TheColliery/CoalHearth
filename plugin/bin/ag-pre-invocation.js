@@ -1,16 +1,34 @@
 #!/usr/bin/env node
-// CoalHearth resume shim — Antigravity (AG 2.0 hooks.json) adapter, the SessionStart
-// replacement. AG has NO one-shot session-start event (SessionStart is a valid name but
-// never fires in the AG CLI/IDE — pilot 2026-07-12), so warm-resume rides the FIRST
-// `PreInvocation` of a session, guarded so it runs EXACTLY ONCE per session.
+// CoalHearth resume shim — the ONE session-start entry for every non-Claude-Code hook
+// platform, discriminated by an argv mode (the CoalMine v3.11 pattern: named modes are
+// exact-matched BEFORE the generic-truthy AG branch, so a named mode never falls through
+// into the AG shape). Claude Code keeps its own bin/session-start.js.
 //
-// Why a guard is needed (and the journal-status transition is not enough): PreInvocation
+//   'SessionStart' -> Gemini CLI: a GENUINE per-session SessionStart (fires startup/
+//                     resume/clear), so no marker workaround is needed — fire as-is.
+//                     Emit = Gemini's NESTED {"hookSpecificOutput":{"additionalContext"}}
+//                     (geminicli.com/docs/hooks/reference, verified 2026-07-15 — the flat
+//                     AG shape is silently DROPPED by Gemini's SessionStart).
+//   'FileCopy'     -> the CC-shaped file-copy platforms (Copilot CLI sessionStart /
+//                     Devin CLI SessionStart / Kiro agentSpawn / Augment SessionStart):
+//                     each has a real session-start-class event (no marker), and their
+//                     hook protocols model Claude Code's — emit = the plain CC stdout
+//                     block (Augment's stdout inject is doc-verified; the rest are
+//                     best-guess, named in each config's $comment).
+//   anything else  -> Antigravity (the shipped template passes 'PreInvocation'): the
+//                     original adapter below — AG has NO one-shot session-start event
+//                     (SessionStart is a valid name but never fires in the AG CLI/IDE —
+//                     pilot 2026-07-12), so warm-resume rides the FIRST `PreInvocation`
+//                     of a session, guarded so it runs EXACTLY ONCE per session.
+//
+// Why AG needs a guard (and the journal-status transition is not enough): PreInvocation
 // fires per model call (many times/session), and ag-post-tool-use.js re-writes the
 // journal to `in_progress` after each tool call — so a status check alone would re-inject
 // the recovery block every turn. The guard is a per-session marker file in os.tmpdir()
 // (Phoenix #6 — session state in tmp, scoped by session id): first PreInvocation writes
 // it and runs the resume check; every later PreInvocation of the same session sees it and
-// returns immediately (the ~5ms happy path).
+// returns immediately (the ~5ms happy path). The named modes skip the guard AND the
+// session-key requirement entirely — their events already fire once per session.
 //
 // v1.2.1 write-ordering lesson (bin/session-start.js) is PRESERVED: the guard marker is
 // written BEFORE the recovery block is emitted; if that write fails (e.g. a read-only
@@ -18,14 +36,14 @@
 // re-inject-every-turn loop. Phoenix-13 throughout: fail-silent, zero-dep, no network, no
 // child process, no process.exit(); the ONLY emit is the sanctioned additionalContext JSON.
 //
-// NOT validated live on AG: whether AG delivers PreInvocation `additionalContext` into the
-// agent's context (re-prompt semantics) is pilot-UNCONFIRMED. The injection KEY is correct
-// per spec; delivery is a separate later step. Nothing here claims validated-on-AG.
+// NOT validated live on ANY of these platforms (tier: wired): the emit shapes follow each
+// platform's primary docs, but no live session has proven delivery of the injected context
+// into the agent. Nothing here claims validated-on-<platform>.
 //
-// Deliberately NOT ported: the self-update nudge that session-start.js schedules. Its
-// payload ("run claude plugin update coalhearth@coalhearth") is Claude-Code-plugin-specific;
-// AG installs by file-copy (~/.gemini/config/skills), so a CC plugin command would be a
-// wrong instruction on AG. The AG self-update path is a separate design item, not this port.
+// Deliberately NOT ported to any mode: the self-update nudge that session-start.js
+// schedules. Its payload ("run claude plugin update coalhearth@coalhearth") is
+// Claude-Code-plugin-specific; every platform this file serves installs by file-copy,
+// so a CC plugin command would be a wrong instruction there.
 'use strict';
 
 const fs = require('node:fs');
@@ -34,6 +52,13 @@ const path = require('node:path');
 const { ResumeEngine } = require('../lib/resume-engine.js');
 const { loadConfig } = require('../lib/load-config.js');
 const { firstString } = require('../lib/journal-step.js');
+
+// The argv mode table lives in the file header. Exact-match-first (CoalMine's ordering
+// rule): 'SessionStart'/'FileCopy' are claimed here; ANY other value — the shipped AG
+// template's 'PreInvocation', or none — is the Antigravity branch.
+const MODE = process.argv[2] || '';
+const GEMINI = MODE === 'SessionStart';
+const FILE_COPY = MODE === 'FileCopy';
 
 // Deterministic djb2 (Phoenix #8: same input -> same marker name, no random/time). Turns
 // an arbitrary session key (UUID or a transcript path) into a filesystem-safe token, so
@@ -60,45 +85,50 @@ function main() {
   const wsCwd = firstString(payload, ['cwd', 'Cwd']);
   if (wsCwd) { try { process.chdir(wsCwd); } catch { /* keep spawn cwd */ } }
 
-  // A per-session key is REQUIRED to guarantee once-per-session (core AG fields are
-  // snake_case; accept camelCase defensively). Absent -> we cannot dedupe across turns,
-  // so skip silently (Phoenix #12) rather than risk re-injecting on every PreInvocation.
-  const key = firstString(payload, ['session_id', 'sessionId', 'transcript_path', 'transcriptPath']);
-  if (!key) return;
-
-  // The once-per-session guard is an ATOMIC create-exclusive latch (CodeQL js/insecure-
-  // temporary-file, one-flock fix 2026-07-14). The marker lives in a private per-tool
-  // subdir (mode 0o700 — closes the shared-/tmp exposure on Unix, a no-op on Windows), and
-  // is created with the `wx` flag (O_CREAT|O_EXCL): the write atomically FAILS with EEXIST
-  // if the path already exists in ANY form (a prior turn's marker, or an attacker's planted
-  // file/symlink) — that EEXIST IS the "already ran this session" signal, so it kills the
-  // old check-then-write TOCTOU race AND refuses to write through a symlink target in one
-  // syscall.
-  // The wx flag guards the marker FILE; the subdir needs its own guard: mkdirSync(recursive)
-  // SILENTLY succeeds on a PRE-PLANTED symlink at markerDir (following it, the 0o700 mode NOT
-  // applied), so the wx marker would then write THROUGH it into an attacker's dir. lstatSync
-  // (does NOT follow the link) rejects a symlink subdir before the write — routed to the SAME
-  // per-repo branch as a marker-write failure (CF/CM fail-closed skip; CH emits with the note).
-  // ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
-  // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
-  // is bounded (~one tiny file per session).
-  const markerDir = path.join(os.tmpdir(), 'coalhearth');
-  const marker = path.join(markerDir, `ag-resume-${hashKey(key)}.marker`);
-  // Write the guard BEFORE emitting (v1.2.1 ordering). EEXIST -> this session already ran ->
-  // silent return. Any OTHER failure (read-only / unwritable tmp) -> markerWritten=false:
-  // the block still emits (CH's recovery payload is worth repeating) with an honest "may
-  // repeat" note appended below.
   let markerWritten = true;
-  try {
-    fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
-    if (fs.lstatSync(markerDir).isSymbolicLink()) {
-      markerWritten = false; // symlink subdir: refuse to write through it; emit with the may-repeat note
-    } else {
-      fs.writeFileSync(marker, '', { flag: 'wx' });
+  if (!GEMINI && !FILE_COPY) {
+    // AG only. The named modes ride a genuine once-per-session event, so they need
+    // neither the key nor the marker below — a missing key must not block THEIR resume.
+
+    // A per-session key is REQUIRED to guarantee once-per-session (core AG fields are
+    // snake_case; accept camelCase defensively). Absent -> we cannot dedupe across turns,
+    // so skip silently (Phoenix #12) rather than risk re-injecting on every PreInvocation.
+    const key = firstString(payload, ['session_id', 'sessionId', 'transcript_path', 'transcriptPath']);
+    if (!key) return;
+
+    // The once-per-session guard is an ATOMIC create-exclusive latch (CodeQL js/insecure-
+    // temporary-file, one-flock fix 2026-07-14). The marker lives in a private per-tool
+    // subdir (mode 0o700 — closes the shared-/tmp exposure on Unix, a no-op on Windows), and
+    // is created with the `wx` flag (O_CREAT|O_EXCL): the write atomically FAILS with EEXIST
+    // if the path already exists in ANY form (a prior turn's marker, or an attacker's planted
+    // file/symlink) — that EEXIST IS the "already ran this session" signal, so it kills the
+    // old check-then-write TOCTOU race AND refuses to write through a symlink target in one
+    // syscall.
+    // The wx flag guards the marker FILE; the subdir needs its own guard: mkdirSync(recursive)
+    // SILENTLY succeeds on a PRE-PLANTED symlink at markerDir (following it, the 0o700 mode NOT
+    // applied), so the wx marker would then write THROUGH it into an attacker's dir. lstatSync
+    // (does NOT follow the link) rejects a symlink subdir before the write — routed to the SAME
+    // per-repo branch as a marker-write failure (CF/CM fail-closed skip; CH emits with the note).
+    // ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
+    // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
+    // is bounded (~one tiny file per session).
+    const markerDir = path.join(os.tmpdir(), 'coalhearth');
+    const marker = path.join(markerDir, `ag-resume-${hashKey(key)}.marker`);
+    // Write the guard BEFORE emitting (v1.2.1 ordering). EEXIST -> this session already ran ->
+    // silent return. Any OTHER failure (read-only / unwritable tmp) -> markerWritten=false:
+    // the block still emits (CH's recovery payload is worth repeating) with an honest "may
+    // repeat" note appended below.
+    try {
+      fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+      if (fs.lstatSync(markerDir).isSymbolicLink()) {
+        markerWritten = false; // symlink subdir: refuse to write through it; emit with the may-repeat note
+      } else {
+        fs.writeFileSync(marker, '', { flag: 'wx' });
+      }
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return; // this session already did its resume check
+      markerWritten = false;
     }
-  } catch (err) {
-    if (err && err.code === 'EEXIST') return; // this session already did its resume check
-    markerWritten = false;
   }
 
   const config = loadConfig();
@@ -143,9 +173,22 @@ function main() {
   if (!markedResumed) {
     prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session, and the interrupted session\'s file list may bleed into this session\'s journal.\n';
   }
-  // The sanctioned AG context-injection channel (Phoenix #13): additionalContext JSON,
-  // camelCase key (pilot-confirmed; snake_case was AG's own agent's WRONG guess).
-  console.log(JSON.stringify({ additionalContext: prompt }));
+  // One sanctioned emit per platform (Phoenix #13):
+  if (GEMINI) {
+    // Gemini's SessionStart injects ONLY via the nested hookSpecificOutput field
+    // (geminicli.com/docs/hooks/reference, verified 2026-07-15) — the flat AG shape
+    // is silently dropped there. Same shape CoalMine's geminiMain ships (one-flock).
+    console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: prompt } }));
+  } else if (FILE_COPY) {
+    // CC-parity plain stdout block — the CC-shaped platforms' session-start channel
+    // (bin/session-start.js's exact channel; Augment's stdout inject is doc-verified,
+    // the rest best-guess per each config's $comment).
+    console.log(prompt);
+  } else {
+    // The sanctioned AG context-injection channel: additionalContext JSON,
+    // camelCase key (pilot-confirmed; snake_case was AG's own agent's WRONG guess).
+    console.log(JSON.stringify({ additionalContext: prompt }));
+  }
 }
 
 try {

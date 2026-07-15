@@ -1,21 +1,42 @@
 #!/usr/bin/env node
-// CoalHearth PostToolUse hook — Antigravity (AG 2.0 hooks.json) adapter.
-// AG shipped a real IDE hook engine (2026-07-12); its PostToolUse maps directly to
-// CoalHearth's journal step. Phoenix-13 identical to the CC adapter: fail-silent,
-// zero-dep, no network, no child process, no process.exit().
+// CoalHearth post-tool journal hook — the ONE entry for every non-Claude-Code hook
+// platform, discriminated by an argv mode (mirrors bin/ag-pre-invocation.js; named modes
+// exact-matched BEFORE the generic-truthy AG branch). Claude Code keeps bin/post-tool-use.js.
 //
-// The ONLY AG-specific work here is normalizing AG's payload shape into the
+//   'AfterTool'    -> Gemini CLI (its post-tool event name). Journal identical; the
+//                     advisory budget nudge is SUPPRESSED there (named divergence: the
+//                     only Gemini inject channel verified 2026-07-15 is SessionStart's
+//                     nested hookSpecificOutput field — AfterTool documents none, and
+//                     the nudge is secondary-advisory, so Phoenix #13 zero-noise wins
+//                     over a best-guess emit Gemini's parser might surface as garbage).
+//   'FileCopy'     -> the CC-shaped file-copy platforms (Copilot CLI postToolUse /
+//                     Devin CLI PostToolUse / Kiro postToolUse / Augment PostToolUse):
+//                     journal identical; the nudge rides the plain CC stdout line
+//                     (bin/post-tool-use.js's exact channel, best-guess per config).
+//   anything else  -> Antigravity (the shipped template passes 'PostToolUse'): the
+//                     original adapter — AG shipped a real IDE hook engine (2026-07-12);
+//                     the nudge emits AG's flat {"additionalContext"} JSON.
+//
+// Phoenix-13 identical to the CC adapter on every branch: fail-silent, zero-dep, no
+// network, no child process, no process.exit().
+//
+// The ONLY platform-specific work here is normalizing the payload shape into the
 // Claude-Code shape lib/journal-step.js parses (one-flock: the parse/save/budget
 // logic is the SHARED core, not re-implemented). Written DEFENSIVELY per the pilot's
-// honest scope: AG's full PostToolUse payload shape was not captured, so every field
-// is read tolerantly (snake_case core fields, camelCase `toolCall.*`) and an unknown
-// tool name degrades to a no-op contribution (never crash) — the session state still
-// journals; only that one tool's touched-file/spawn is skipped.
+// honest scope: no platform's full post-tool payload shape was captured, so every field
+// is read tolerantly (snake_case core fields, camelCase `toolCall.*`/`toolInput`) and an
+// unknown tool name degrades to a no-op contribution (never crash) — the session state
+// still journals; only that one tool's touched-file/spawn is skipped.
 //
-// NOT validated live on AG: whether AG's PostToolUse actually fires with this payload
-// is pilot-confirmed for the event, but the full field shape is not — hence the
-// defensive reader. No claim here is "validated on AG".
+// NOT validated live on any of these platforms (tier: wired) — hence the defensive
+// reader. No claim here is "validated on <platform>".
 'use strict';
+
+// Exact-match-first (CoalMine's ordering rule): 'AfterTool'/'FileCopy' are claimed here;
+// ANY other value — the shipped AG template's 'PostToolUse', or none — is the AG branch.
+const MODE = process.argv[2] || '';
+const GEMINI = MODE === 'AfterTool';
+const FILE_COPY = MODE === 'FileCopy';
 
 const {
   FILE_TOOL_KEYS,
@@ -25,10 +46,11 @@ const {
   recordStep,
 } = require('../lib/journal-step.js');
 
-// AG file-editing tool names -> normalized to CC 'Write' (its path arg becomes file_path).
-// `write_to_file` is the one the pilot doc names; the rest are plausible AG/Gemini-family
-// candidates, UNVERIFIED — safe because an unmapped tool degrades to a no-op (below).
-// Extend as AG's tool schema is confirmed.
+// File-editing tool names -> normalized to CC 'Write' (its path arg becomes file_path).
+// AG: `write_to_file` is the one the pilot doc names; the other AG entries are plausible
+// family candidates, UNVERIFIED — safe because an unmapped tool degrades to a no-op
+// (below). Gemini CLI: `write_file` + `replace` ARE its two file tools (primary docs,
+// verified 2026-07-15 — the same pair CoalMine's Gemini config matches on).
 const AG_FILE_TOOLS = new Set([
   'write_to_file',
   'edit_file',
@@ -36,6 +58,8 @@ const AG_FILE_TOOLS = new Set([
   'create_file',
   'apply_diff',
   'multiedit',
+  'write_file', // Gemini CLI
+  'replace',    // Gemini CLI (its edit tool; args carry file_path)
 ]);
 // Plausible path-arg keys inside an AG file-tool's args — probed in order (the exact
 // key is unverified; missing all of them -> no path recorded, still no crash).
@@ -53,8 +77,10 @@ function normalizeAgToolPayload(ag) {
   if (!ag || typeof ag !== 'object') return {};
   const toolCall = pickObject(ag.toolCall) || {};
   const name = firstString(ag, ['tool_name', 'toolName']) || firstString(toolCall, ['name']) || '';
-  const args = pickObject(ag.tool_input) || pickObject(toolCall.args) || {};
-  const resp = pickObject(ag.tool_response) || pickObject(ag.toolResult) || pickObject(toolCall.result) || {};
+  // camelCase toolInput/toolResponse = the Copilot-CLI-shape probe (its events are
+  // camelCase; field casing unverified, so both casings are read — CoalMine parity).
+  const args = pickObject(ag.tool_input) || pickObject(ag.toolInput) || pickObject(toolCall.args) || {};
+  const resp = pickObject(ag.tool_response) || pickObject(ag.toolResponse) || pickObject(ag.toolResult) || pickObject(toolCall.result) || {};
 
   // Already CC vocab (a file tool or Agent/Task/Workflow) -> pass through unchanged;
   // the shared parser handles it natively (also the path if AG ever emits CC-shaped names).
@@ -119,14 +145,21 @@ try {
     spawn: parsed.spawn,
     budgetText: raw,
   });
-  if (analysis.shouldBlockSpawning) {
-    // Advisory only, never a hard block (CH never blocks a tool). AG's ONLY sanctioned
-    // emit is additionalContext JSON — so emit valid JSON, never a raw line that could
-    // confuse AG's hook-response parser. If AG doesn't deliver PostToolUse
-    // additionalContext, this is harmlessly ignored (delivery is pilot-unconfirmed).
-    console.log(JSON.stringify({
-      additionalContext: `[CoalHearth] ${analysis.reason} (advisory, best-effort estimate) -- prefer inline over spawning subagents.`,
-    }));
+  // Advisory only, never a hard block (CH never blocks a tool). On Gemini the nudge is
+  // suppressed entirely (the named divergence in the header) — the journal above, the
+  // core value, recorded regardless.
+  if (analysis.shouldBlockSpawning && !GEMINI) {
+    const msg = `[CoalHearth] ${analysis.reason} (advisory, best-effort estimate) -- prefer inline over spawning subagents.`;
+    if (FILE_COPY) {
+      // CC-parity plain stdout line (bin/post-tool-use.js's exact channel) for the
+      // CC-shaped file-copy platforms; harmlessly ignored where a platform drops it.
+      process.stdout.write(msg);
+    } else {
+      // AG's ONLY sanctioned emit is additionalContext JSON — emit valid JSON, never a
+      // raw line that could confuse AG's hook-response parser. If AG doesn't deliver
+      // PostToolUse additionalContext, this is harmlessly ignored (pilot-unconfirmed).
+      console.log(JSON.stringify({ additionalContext: msg }));
+    }
   }
 } catch {
   // Phoenix #4: fail-silent, never crash the host.

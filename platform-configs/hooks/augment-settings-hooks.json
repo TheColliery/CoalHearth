@@ -1,0 +1,16 @@
+{
+  "$comment": "Augment Code — a MERGE SNIPPET: merge the 'hooks' key into ~/.augment/settings.json (user) or <workspace>/.augment/settings.json (project; the cascade is system -> workspace -> user). PascalCase events, same matcher+hooks[] entry shape as Claude Code (docs.augmentcode.com/cli/hooks, verified 2026-07-15: SessionStart injects context via stdout — the ONE file-copy platform whose inject channel is doc-verified, so the plain Claude-Code stdout shape via the trailing 'FileCopy' argument matches by the book). PostToolUse journals every tool call (no narrowing matcher: CoalHearth records spawns and files both); its payload field casing is unverified — the reader probes both. Adjust C:/path/to/CoalHearth in every command. Tier: wired — built + hermetically tested vs the primary docs; NO live Augment session has run this wiring yet.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy", "timeout": 10 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{ "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy", "timeout": 10 }]
+      }
+    ]
+  }
+}

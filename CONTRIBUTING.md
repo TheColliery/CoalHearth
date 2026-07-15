@@ -33,7 +33,7 @@ node scripts/test.mjs           # zero-dependency test suite (node --test, expli
 
 ## 🖥️ Supported Platforms
 
-CoalHearth is **Claude Code only, by design** — the hooks ARE the product (`SessionStart` = resume, `PostToolUse` = journal), and other agent platforms do not run Claude Code hooks. There is no skill directory to port: without the hook lifecycle there is nothing left to run. If another platform ships a compatible hook system, open an issue.
+CoalHearth is **hook-only by design** — the hooks ARE the product (a session-start-class event = resume, a per-tool event = journal). It runs wherever a platform ships that event **pair**: Claude Code (validated, plugin) plus the wired config-only ports — Antigravity, Gemini CLI, Copilot CLI, Devin CLI, Kiro, Augment (see the README compat matrix and [`platform-configs/hooks/`](platform-configs/hooks/)). There is no skill directory to port: without a hook lifecycle there is nothing left to run, and a platform missing half the pair (session-start only, or per-tool only) cannot carry the product. If a platform ships the pair and isn't in the matrix, open an issue.
 
 ---
 

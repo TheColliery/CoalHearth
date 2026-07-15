@@ -12,6 +12,7 @@
 
 ![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
 ![Antigravity: wired](https://img.shields.io/badge/Antigravity-wired-yellow)
+![Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment: wired](https://img.shields.io/badge/Gemini_CLI_·_Copilot_CLI_·_Devin_CLI_·_Kiro_·_Augment-wired-yellow)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
@@ -49,7 +50,23 @@ Honest sell: **less lost work on an interruption, plus an early low-headroom nud
 
 ## 🚀 Install
 
-CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever a platform runs hooks — on Claude Code as `SessionStart` + `PostToolUse`, on Antigravity as `PreInvocation` + `PostToolUse` (adapters over the same shared core).
+CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever a platform runs hooks **and** has both a session-start-class event and a per-tool event — the pair the product needs (journal without resume is write-only; resume without journal has nothing to read). All platforms run the same shared core through thin adapter entry points.
+
+**Compat matrix** (tier honesty: **validated** = proven in live sessions · **wired** = built + hermetically tested against the platform's primary docs, 2026-07-15 fetch — NOT yet run live on that platform; a claim "works on X" waits for a real run):
+
+| Platform | Tier | Events (resume + journal) | Wiring |
+|---|---|---|---|
+| Claude Code | **validated** | `SessionStart` + `PostToolUse` | plugin (automatic) |
+| Antigravity 2.0 | **wired** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
+| Gemini CLI ¹ | **wired** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
+| GitHub Copilot CLI | **wired** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
+| Devin CLI | **wired** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/devin-cli-hooks.json`](platform-configs/hooks/devin-cli-hooks.json) |
+| Kiro | **wired** | `agentSpawn` + `postToolUse` | [`platform-configs/hooks/kiro-agent-hooks.json`](platform-configs/hooks/kiro-agent-hooks.json) |
+| Augment Code | **wired** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/augment-settings-hooks.json`](platform-configs/hooks/augment-settings-hooks.json) |
+| Junie | not supported | `SessionStart` is its ONLY event — no per-tool event means no journal, so resume would have nothing to read | — |
+| Devin Desktop (Cascade Hooks) | not supported | its snake_case vocabulary (`pre/post_write_code`, `post_cascade_response`, …) has no session-start-class event — no resume anchor; a separate surface from Devin CLI | — |
+
+¹ Gemini CLI audience caveat: individual/AI-Pro/Ultra tiers were cut off 2026-06-18 — it is a business-tier product (Standard/Enterprise) now.
 
 ### Claude Code — validated
 
@@ -78,9 +95,13 @@ Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<wo
 
 Known limits on AG: delivery of the injected `additionalContext` is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
+### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — wired (config-only ports)
+
+Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences (e.g. the advisory nudge is suppressed on Gemini) live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **wired**, not validated — no live session on these platforms has run the wiring yet.
+
 ### Other agents — not supported
 
-CoalHearth is hook-only; a platform with no hook layer has nothing to run, and there is no read/analyze mode to load by hand (the way CoalMine or CoalLedger ship one). No file-copy or ZIP-upload install path applies here.
+CoalHearth is hook-only, and it needs the session-start + per-tool event **pair**: a platform with no hook layer has nothing to run; a platform missing half the pair can't carry the product (Junie — session-start only; Devin Desktop's Cascade vocabulary — no session-start; see the matrix). Platforms whose hook surface is plugin CODE rather than a config file (OpenCode, Cline CLI) are a separate future lane. There is no read/analyze mode to load by hand (the way CoalMine or CoalLedger ship one).
 
 ## ⚙️ Configure
 
@@ -101,7 +122,7 @@ Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, n
 - **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
 - **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically, then runs the advisory budget check and prints the one nudge line only when headroom is low.
 
-On Antigravity the same two jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume, first PreInvocation of a session) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js)); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. Same Phoenix-13 discipline on both platforms.
+On every other platform the same two jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js)); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. A trailing argument in each platform's config picks the emit shape (Antigravity flat JSON · Gemini nested `hookSpecificOutput` · plain Claude-Code stdout for the CC-shaped file-copy platforms); the parsing/journal logic never forks. Same Phoenix-13 discipline everywhere.
 
 ## 📊 Benchmark
 
