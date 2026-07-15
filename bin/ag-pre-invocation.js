@@ -73,7 +73,13 @@ function main() {
   // if the path already exists in ANY form (a prior turn's marker, or an attacker's planted
   // file/symlink) — that EEXIST IS the "already ran this session" signal, so it kills the
   // old check-then-write TOCTOU race AND refuses to write through a symlink target in one
-  // syscall. ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
+  // syscall.
+  // The wx flag guards the marker FILE; the subdir needs its own guard: mkdirSync(recursive)
+  // SILENTLY succeeds on a PRE-PLANTED symlink at markerDir (following it, the 0o700 mode NOT
+  // applied), so the wx marker would then write THROUGH it into an attacker's dir. lstatSync
+  // (does NOT follow the link) rejects a symlink subdir before the write — routed to the SAME
+  // per-repo branch as a marker-write failure (CF/CM fail-closed skip; CH emits with the note).
+  // ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
   // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
   // is bounded (~one tiny file per session).
   const markerDir = path.join(os.tmpdir(), 'coalhearth');
@@ -85,7 +91,11 @@ function main() {
   let markerWritten = true;
   try {
     fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(marker, '', { flag: 'wx' });
+    if (fs.lstatSync(markerDir).isSymbolicLink()) {
+      markerWritten = false; // symlink subdir: refuse to write through it; emit with the may-repeat note
+    } else {
+      fs.writeFileSync(marker, '', { flag: 'wx' });
+    }
   } catch (err) {
     if (err && err.code === 'EEXIST') return; // this session already did its resume check
     markerWritten = false;

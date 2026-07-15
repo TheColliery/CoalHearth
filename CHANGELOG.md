@@ -2,6 +2,13 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [1.3.2] - 2026-07-15
+
+**PATCH** — security hardening follow-up to v1.3.1.
+
+### Security
+- **Marker subdir hardened against a pre-planted symlink** (`bin/ag-pre-invocation.js`): an `lstatSync` no-follow check rejects a symlink at the marker subdir (which `mkdirSync(recursive)` would otherwise follow, bypassing the `0o700` mode), then routes to the existing recovery path — the resume block still emits with the honest "may repeat" note (named divergence kept). One-flock with CoalMine v3.11.1 / CoalFace v0.3.2. Completes the CodeQL `js/insecure-temporary-file` mitigation. Tests 20/20.
+
 ## [1.3.1] - 2026-07-15
 
 **PATCH** — closes a CodeQL HIGH (`js/insecure-temporary-file`) on the Antigravity resume shim's once-per-session marker; a hermetic-test sandbox leak fix rides along.

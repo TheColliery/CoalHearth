@@ -236,6 +236,38 @@ test('pre: a pre-existing marker path -> EEXIST silent skip (no re-inject even w
   }
 });
 
+// Security (dir-symlink residual): mkdirSync(recursive) FOLLOWS a pre-planted symlink at the
+// marker subdir (silently succeeding, 0o700 unapplied), so the wx marker would write THROUGH it.
+// CH's divergence (vs CF/CM's fail-closed skip): reject the symlink dir -> markerWritten=false ->
+// STILL emit the recovery block (worth repeating) with the honest may-repeat note; the marker is
+// NOT written into the attacker dir.
+test('pre: a pre-planted SYMLINK at the marker subdir -> no marker in the target, block still emits with the may-repeat note (dir-symlink close)', (t) => {
+  const cwd = mk();
+  const home = mk();
+  const target = mk(); // attacker-controlled dir the planted symlink points at
+  try {
+    writeJournal(cwd, IN_PROGRESS); // resumable: an un-guarded run WOULD emit AND drop a marker
+    const markerDir = path.join(home, 'coalhearth'); // os.tmpdir()/coalhearth (TMPDIR -> home)
+    try {
+      fs.symlinkSync(target, markerDir, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch {
+      t.skip('symlink/junction unavailable (needs privilege) — cannot exercise the dir-symlink guard');
+      return; // t.skip does not stop the body; return so the case is skipped, never a vacuous pass
+    }
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const ctx = parseInject(r.stdout);
+    assert.match(ctx, /Warm-Resume Recovery/, 'CH still emits its recovery block (emit-with-note divergence)');
+    assert.match(ctx.toLowerCase(), /may repeat/, 'honest note when the guard marker could not persist (symlink dir refused)');
+    assert.strictEqual(fs.readdirSync(target).length, 0, 'no marker written THROUGH the symlink into the attacker dir');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
+
 test('pre: recovery.autoInjectPrompt:false -> detect+sweep silent, no additionalContext, still marks resumed', () => {
   const cwd = mk();
   const home = mk();
