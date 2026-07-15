@@ -66,19 +66,30 @@ function main() {
   const key = firstString(payload, ['session_id', 'sessionId', 'transcript_path', 'transcriptPath']);
   if (!key) return;
 
-  const marker = path.join(os.tmpdir(), `coalhearth-ag-resume-${hashKey(key)}.marker`);
-  // ponytail: session-scoped tmp marker, reaped by the OS tmp cleaner. AG's Stop event is
-  // per-RESPONSE (fires many times/session), so there is no safe per-session "completion"
-  // hook to delete it on — deleting on Stop would break the guard. Accumulation is bounded
-  // (~one tiny file per session) and OS-reaped; add opportunistic GC only if it ever matters.
-  let alreadyRan = false;
-  try { alreadyRan = fs.existsSync(marker); } catch { /* unreadable tmp -> treat as first run */ }
-  if (alreadyRan) return; // this session already did its once-per-session resume check
-
-  // Write the guard BEFORE emitting (v1.2.1 ordering). A failed write means the next
-  // PreInvocation will re-run -> the emitted block appends an honest "may repeat" note.
+  // The once-per-session guard is an ATOMIC create-exclusive latch (CodeQL js/insecure-
+  // temporary-file, one-flock fix 2026-07-14). The marker lives in a private per-tool
+  // subdir (mode 0o700 — closes the shared-/tmp exposure on Unix, a no-op on Windows), and
+  // is created with the `wx` flag (O_CREAT|O_EXCL): the write atomically FAILS with EEXIST
+  // if the path already exists in ANY form (a prior turn's marker, or an attacker's planted
+  // file/symlink) — that EEXIST IS the "already ran this session" signal, so it kills the
+  // old check-then-write TOCTOU race AND refuses to write through a symlink target in one
+  // syscall. ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
+  // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
+  // is bounded (~one tiny file per session).
+  const markerDir = path.join(os.tmpdir(), 'coalhearth');
+  const marker = path.join(markerDir, `ag-resume-${hashKey(key)}.marker`);
+  // Write the guard BEFORE emitting (v1.2.1 ordering). EEXIST -> this session already ran ->
+  // silent return. Any OTHER failure (read-only / unwritable tmp) -> markerWritten=false:
+  // the block still emits (CH's recovery payload is worth repeating) with an honest "may
+  // repeat" note appended below.
   let markerWritten = true;
-  try { fs.writeFileSync(marker, String(Date.now()), 'utf8'); } catch { markerWritten = false; }
+  try {
+    fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(marker, '', { flag: 'wx' });
+  } catch (err) {
+    if (err && err.code === 'EEXIST') return; // this session already did its resume check
+    markerWritten = false;
+  }
 
   const config = loadConfig();
   const recovery = config.recovery || {};

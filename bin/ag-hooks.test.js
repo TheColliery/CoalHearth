@@ -51,12 +51,20 @@ function writeJournal(cwd, state) {
 function readJournal(cwd) {
   return JSON.parse(fs.readFileSync(path.join(cwd, JOURNAL_REL), 'utf8'));
 }
+// Markers now live in a private per-tool subdir os.tmpdir()/coalhearth (created 0o700),
+// each named ag-resume-<hash>.marker (CodeQL js/insecure-temporary-file fix 2026-07-14).
 function markerCount(home) {
   try {
-    return fs.readdirSync(home).filter((n) => /^coalhearth-ag-resume-.*\.marker$/.test(n)).length;
+    return fs.readdirSync(path.join(home, 'coalhearth')).filter((n) => /^ag-resume-.*\.marker$/.test(n)).length;
   } catch {
-    return 0;
+    return 0; // subdir absent -> zero markers (e.g. the no-key path never creates it)
   }
+}
+// Replicate the adapter's djb2 so a test can pre-plant the EXACT marker path (EEXIST case).
+function hashKey(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (((h << 5) + h + s.charCodeAt(i)) >>> 0);
+  return h.toString(36);
 }
 // The sanctioned AG channel: stdout must be EMPTY or exactly one additionalContext JSON.
 function parseInject(stdout) {
@@ -147,6 +155,8 @@ test('pre: once-per-session guard -> 1st PreInvocation emits, 2nd (same session)
 test('pre: accepts camelCase sessionId and the transcript_path fallback', () => {
   const cwd = mk();
   const home = mk();
+  const cwd2 = mk();
+  const home2 = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
     const camel = run(PRE, cwd, home, JSON.stringify({ sessionId: 'camel-1' }));
@@ -154,15 +164,15 @@ test('pre: accepts camelCase sessionId and the transcript_path fallback', () => 
     assert.match(parseInject(camel.stdout), /Warm-Resume Recovery/, 'camelCase sessionId is honored');
 
     // No session_id at all -> falls back to transcript_path as the per-session key.
-    const cwd2 = mk();
     writeJournal(cwd2, IN_PROGRESS);
-    const tp = run(PRE, cwd2, mk(), JSON.stringify({ transcript_path: '/tmp/t/abc.jsonl' }));
+    const tp = run(PRE, cwd2, home2, JSON.stringify({ transcript_path: '/tmp/t/abc.jsonl' }));
     assert.strictEqual(tp.status, 0);
     assert.match(parseInject(tp.stdout), /Warm-Resume Recovery/, 'transcript_path is the fallback key');
-    fs.rmSync(cwd2, { recursive: true, force: true });
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd2, { recursive: true, force: true });
+    fs.rmSync(home2, { recursive: true, force: true });
   }
 });
 
@@ -182,19 +192,44 @@ test('pre: NO per-session key -> skip silently (cannot dedupe once-per-session),
   }
 });
 
-test('pre: marker write fails (nonexistent TMPDIR) -> still emits, block carries the honest "may repeat" note', () => {
+test('pre: marker cannot persist (tmp is a FILE) -> still emits, block carries the honest "may repeat" note', () => {
   const cwd = mk();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
-    // Point TMPDIR at a dir that does not exist: os.tmpdir() returns it, the marker write
-    // throws ENOENT (markerWritten=false) and existsSync(marker) is false (not "alreadyRan").
-    const r = run(PRE, cwd, home, SID, { TMPDIR: path.join(home, 'no-such-tmp'), TEMP: path.join(home, 'no-such-tmp'), TMP: path.join(home, 'no-such-tmp') });
+    // Point TMPDIR at a FILE (not a dir): os.tmpdir() returns it, so mkdirSync(<file>/coalhearth)
+    // throws ENOTDIR. (A merely-nonexistent TMPDIR would no longer fail — the recursive mkdir
+    // would just create it.) The non-EEXIST failure -> markerWritten=false -> emit anyway.
+    const notADir = path.join(home, 'tmp-is-a-file');
+    fs.writeFileSync(notADir, 'x', 'utf8');
+    const r = run(PRE, cwd, home, SID, { TMPDIR: notADir, TEMP: notADir, TMP: notADir });
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.stderr, '');
     const ctx = parseInject(r.stdout);
     assert.match(ctx, /Warm-Resume Recovery/);
     assert.match(ctx.toLowerCase(), /may repeat/, 'honest note when the guard marker could not persist');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Security (CodeQL js/insecure-temporary-file): the marker is created with the wx flag
+// (O_CREAT|O_EXCL), so a PRE-EXISTING marker path (a prior turn, or an attacker's planted
+// file/symlink) makes the create fail EEXIST -> the hook treats it as "already ran" and
+// stays silent. Proves the atomic latch never writes through / past an existing path.
+test('pre: a pre-existing marker path -> EEXIST silent skip (no re-inject even with a resumable journal)', () => {
+  const cwd = mk();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS); // resumable: an un-guarded run WOULD emit
+    const markerDir = path.join(home, 'coalhearth');
+    fs.mkdirSync(markerDir, { recursive: true });
+    fs.writeFileSync(path.join(markerDir, `ag-resume-${hashKey('ag-session-1')}.marker`), 'planted', 'utf8'); // SID's session_id
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stdout, '', 'pre-existing marker -> EEXIST -> no emit');
+    assert.strictEqual(r.stderr, '');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -308,24 +343,26 @@ test('regression: dead session A state is NOT inherited by session B first tool 
 test('pre: garbage stdin and a corrupt journal -> exit 0 silent, corrupt journal quarantined', () => {
   const garbageCwd = mk();
   const home = mk();
+  const cwd = mk();
+  const home2 = mk();
   try {
     const g = run(PRE, garbageCwd, home, 'not json at all \0\x01');
     assert.strictEqual(g.status, 0);
     assert.strictEqual(g.stdout, '', 'garbage stdin -> no key -> silent');
     assert.strictEqual(g.stderr, '');
 
-    const cwd = mk();
     writeJournal(cwd, '{ this is : not valid json ]');
-    const r = run(PRE, cwd, mk(), SID);
+    const r = run(PRE, cwd, home2, SID);
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.stdout, '', 'corrupt journal -> nothing to inject');
     assert.strictEqual(r.stderr, '');
     assert.strictEqual(fs.existsSync(path.join(cwd, JOURNAL_REL)), false, 'corrupt journal removed');
     assert.strictEqual(fs.existsSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.corrupt.json')), true, 'quarantined aside');
-    fs.rmSync(cwd, { recursive: true, force: true });
   } finally {
     fs.rmSync(garbageCwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home2, { recursive: true, force: true });
   }
 });
 

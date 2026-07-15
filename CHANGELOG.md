@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [1.3.1] - 2026-07-15
+
+**PATCH** — closes a CodeQL HIGH (`js/insecure-temporary-file`) on the Antigravity resume shim's once-per-session marker; a hermetic-test sandbox leak fix rides along.
+
+### Security
+- **AG once-per-session marker hardened against a TOCTOU race** (`bin/ag-pre-invocation.js`): replaced the old check-then-write (`existsSync` then `writeFileSync`) with an atomic create-exclusive latch — `fs.writeFileSync(marker, '', { flag: 'wx' })` inside a private `0o700` `os.tmpdir()/coalhearth/` subdir. The `wx` flag makes the create itself fail `EEXIST` if the marker path already exists in ANY form (a prior turn's marker, or a planted file/symlink), closing CodeQL `js/insecure-temporary-file` (HIGH) and refusing a symlink target in the same syscall. Named divergence kept: a non-`EEXIST` create failure (e.g. a read-only temp dir) still emits the recovery block, now carrying an honest "may repeat" note — a recovery payload is worth repeating, unlike an advisory directive.
+
+### Fixed
+- **Hermetic-test sandbox leak**: two sandbox directories leaked per run in `bin/ag-hooks.test.js` — the inline `mk()` results are now bound to a variable and cleaned up in a `finally` block (`bin/ag-hooks.test.js`, 19/19).
+
 ## [1.3.0] - 2026-07-14
 
 **MINOR** — CoalHearth runs on Antigravity. AG 2.0 shipped a real hook engine (`hooks.json`; empirical pilot 2026-07-12, corroborated against the official docs 2026-07-13), retiring the "Claude Code only — no other agent platform runs hooks" premise. The port is built + hermetically tested against that verified spec; live AG validation is still pending (tier: **wired**, not validated — delivery of the injected context into the agent is emitted per spec, unproven end-to-end; one real AG session run flips it).
