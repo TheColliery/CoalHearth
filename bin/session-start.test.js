@@ -98,6 +98,15 @@ test('in_progress journal: exits 0, prints the recovery block, marks resumed', (
 // silently, so the SAME recovery block would re-inject every subsequent boot forever with
 // no explanation. The hook must now say so in the block itself, and stay fail-silent
 // (exit 0, no stderr) either way.
+//
+// CROSS-PLATFORM (CI-red-on-POSIX fix, v2.0.0→v2.0.1): markResumed now writes ATOMICALLY
+// (per-pid temp + rename). chmod-ing only the journal FILE 0o444 does NOT simulate a
+// read-only fs on POSIX — rename(2) replaces a destination needing only DIRECTORY write, so
+// the temp renames over the 0o444 file and the write SUCCEEDS (note never fires; the test was
+// green on Windows, where MoveFileEx over a read-only file fails, and red on macOS/Linux).
+// A TRUE read-only fs makes the whole DIR unwritable: 0o555 fails the temp CREATE on POSIX,
+// and the 0o444 file fails MoveFileEx on Windows — so the honesty path is exercised on every
+// platform, no skip. Perms restored in finally (a 0o555 dir blocks unlinking its children on POSIX).
 test('read-only journal (mark-resumed write fails): still exits 0, still prints recovery, says it may repeat', () => {
   const { home, cwd } = sandbox();
   muteUpdate(home);
@@ -112,19 +121,24 @@ test('read-only journal (mark-resumed write fails): still exits 0, still prints 
     }),
     'utf8'
   );
-  fs.chmodSync(journalPath, 0o444); // simulate a read-only fs: the mark-resumed write will throw
+  fs.chmodSync(journalPath, 0o444); // Windows: MoveFileEx over a read-only destination fails
+  fs.chmodSync(outDir, 0o555);      // POSIX: an unwritable dir fails the atomic temp-create
 
-  const r = runHook(cwd, home);
+  try {
+    const r = runHook(cwd, home);
 
-  assert.strictEqual(r.status, 0);
-  assert.strictEqual(r.stderr, '');
-  assert.ok(r.stdout.includes('CoalHearth Warm-Resume Recovery'), 'recovery block still injected');
-  assert.ok(r.stdout.toLowerCase().includes('may repeat'), 'honest note that the block may repeat');
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(r.stdout.includes('CoalHearth Warm-Resume Recovery'), 'recovery block still injected');
+    assert.ok(r.stdout.toLowerCase().includes('may repeat'), 'honest note that the block may repeat');
 
-  const after = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
-  assert.strictEqual(after.status, 'in_progress', 'write failed -> status could not be marked resumed');
-
-  cleanup(home, cwd); // rmSync(force:true) removes the read-only file fine on this platform
+    const after = JSON.parse(fs.readFileSync(journalPath, 'utf8')); // 0o444 file + r-x dir are still readable
+    assert.strictEqual(after.status, 'in_progress', 'write failed -> status could not be marked resumed');
+  } finally {
+    fs.chmodSync(outDir, 0o755); // re-writable so the sandbox can be removed on POSIX
+    try { fs.chmodSync(journalPath, 0o644); } catch {}
+    cleanup(home, cwd);
+  }
 });
 
 // Regression (audit 2026-07-02 L7): recovery.autoInjectPrompt:false must suppress the

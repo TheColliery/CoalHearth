@@ -2,6 +2,13 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.0.1] - 2026-07-17
+
+**PATCH** — CI-green fix-forward for v2.0.0. Test-only; no shipped-code change.
+
+### Fixed
+- **The read-only-journal regression test now simulates a true read-only fs on every platform.** v2.0.0 routed `markResumed` through the atomic writer (per-pid temp + rename); the test chmod-ed only the journal FILE `0o444`, which on POSIX `rename(2)` replaces needing only DIRECTORY write — so the temp renamed over the read-only file, the write succeeded, the "may repeat" honesty note never fired. The test was green on Windows (MoveFileEx refuses a read-only destination) but red on macOS/Linux. The test now also chmods the containing DIR `0o555` (fails the atomic temp-create on POSIX) and restores perms in `finally` — the honesty path is exercised on every platform, no skip. The v2.0.0 atomic `markResumed` is unchanged and correct: it legitimately succeeds when only the file, not the dir, is read-only.
+
 ## [2.0.0] - 2026-07-17
 
 > **BREAKING (MAJOR): the `budgets` config group is removed.** A `.coalhearth.json` still carrying a `budgets` block is now ignored at runtime and flagged as an unknown group (non-crashing). Two batches from a blind adversarial crash-test (nasa-L3 audit follow-up): the dead budget guardrail retired, and five journal data-loss holes root-fixed.
