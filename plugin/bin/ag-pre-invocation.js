@@ -134,6 +134,27 @@ function main() {
   const config = loadConfig();
   const recovery = config.recovery || {};
   const engine = new ResumeEngine(config.journal || {}, recovery);
+
+  // One sanctioned emit per platform (Phoenix #13), shared by the H5 note AND the recovery
+  // block so both ride the right channel: Gemini's SessionStart injects ONLY via the nested
+  // hookSpecificOutput field (geminicli.com/docs/hooks/reference, verified 2026-07-15 — the
+  // flat AG shape is dropped there); the CC-shaped file-copy platforms take the plain stdout
+  // block (bin/session-start.js's channel); AG takes additionalContext JSON (camelCase key,
+  // pilot-confirmed — snake_case was AG's own agent's WRONG guess).
+  const emit = (text) => {
+    if (GEMINI) console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: text } }));
+    else if (FILE_COPY) console.log(text);
+    else console.log(JSON.stringify({ additionalContext: text }));
+  };
+
+  // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or perms) —
+  // warm-resume then silently no-ops FOREVER. Signal it once (AG is once-per-session-guarded
+  // above; the named modes fire once natively) and stop — there is nothing to resume.
+  if (!engine.outputDir) {
+    emit('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.');
+    return;
+  }
+
   const aborted = engine.detectAbortedSession();
   if (!aborted) return; // nothing to resume -> silent (the once-per-session check still ran)
 
@@ -144,51 +165,30 @@ function main() {
     // fail-silent: a failed sweep never blocks the resume
   }
 
-  // Mark resumed FIRST (before emitting) — one-flock with bin/session-start.js, v1.2.1
-  // ordering (write before print; a failed write is REPORTED, never silently repeated).
-  // This is ALSO the cross-session contamination guard (rot-canary HIGH 2026-07-13):
-  // lib/journal-step.js recordStep treats a prior `in_progress` journal as THIS session's
-  // own accumulator — a dead session A left unmarked would leak its modifiedFiles/
-  // inFlightAgents into session B's first journal save, growing unbounded across crash
-  // chains. Marking `resumed` restores the status proxy's invariant. Tradeoff accepted
-  // (the same one CC accepts): if THIS session dies before its first tool call, the next
-  // session sees `resumed` and won't re-offer this recovery.
-  let markedResumed = true;
-  try {
-    const journalPath = path.join(engine.outputDir, 'session_handoff.json');
-    fs.writeFileSync(journalPath, JSON.stringify({ ...aborted, status: 'resumed' }, null, 2), 'utf8');
-  } catch {
-    markedResumed = false; // fail-silent (Phoenix #4): non-fatal, honest note below
+  // recovery.autoInjectPrompt gates the INJECTION only; marking resumed is NOT flag-gated —
+  // a dead session A left unmarked would (via the status proxy) leak its modifiedFiles/
+  // inFlightAgents into session B's first journal save (rot-canary HIGH 2026-07-13). The
+  // id-keyed sameSession (recordStep) is now the primary guard, but marking still stops a
+  // later boot from re-detecting. CC-adapter parity.
+  if (recovery.autoInjectPrompt === false) {
+    engine.markResumed(aborted);
+    return;
   }
 
-  // recovery.autoInjectPrompt (default true): false = detect + sweep + MARK RESUMED, but
-  // suppress the injection (CC-adapter parity — marking must NOT be flag-gated, or the
-  // contamination above returns for autoInjectPrompt:false users).
-  if (recovery.autoInjectPrompt === false) return;
+  // BUILD first (H4): generateHandoffPrompt is array-coercion-safe, but mark resumed only
+  // AFTER a successful build so a nothing-built path never leaves the journal 'resumed' with
+  // no block. Mark BEFORE emitting (v1.2.1 ordering) via the shared ATOMIC markResumed (per-pid
+  // temp+rename, H6/H7) so a read-only-fs failure is reported, never a silent re-inject loop.
   let prompt = engine.generateHandoffPrompt(aborted);
   if (!prompt) return;
+  const markedResumed = engine.markResumed(aborted);
   if (!markerWritten) {
     prompt += '\n> ⚠️ Could not persist the once-per-session marker (a temp write failed — possibly a read-only temp dir). This recovery block may repeat on the next model call.\n';
   }
   if (!markedResumed) {
     prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session, and the interrupted session\'s file list may bleed into this session\'s journal.\n';
   }
-  // One sanctioned emit per platform (Phoenix #13):
-  if (GEMINI) {
-    // Gemini's SessionStart injects ONLY via the nested hookSpecificOutput field
-    // (geminicli.com/docs/hooks/reference, verified 2026-07-15) — the flat AG shape
-    // is silently dropped there. Same shape CoalMine's geminiMain ships (one-flock).
-    console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: prompt } }));
-  } else if (FILE_COPY) {
-    // CC-parity plain stdout block — the CC-shaped platforms' session-start channel
-    // (bin/session-start.js's exact channel; Augment's stdout inject is doc-verified,
-    // the rest best-guess per each config's $comment).
-    console.log(prompt);
-  } else {
-    // The sanctioned AG context-injection channel: additionalContext JSON,
-    // camelCase key (pilot-confirmed; snake_case was AG's own agent's WRONG guess).
-    console.log(JSON.stringify({ additionalContext: prompt }));
-  }
+  emit(prompt);
 }
 
 try {

@@ -3,14 +3,6 @@
   "title": "CoalHearthConfig",
   "type": "object",
   "properties": {
-    "budgets": {
-      "type": "object",
-      "properties": {
-        "maxTokens": { "type": "integer", "minimum": 1, "default": 2000000 },
-        "warningTokenPercentage": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.15 }
-      },
-      "additionalProperties": false
-    },
     "journal": {
       "type": "object",
       "properties": {

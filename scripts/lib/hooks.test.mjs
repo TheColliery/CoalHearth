@@ -125,9 +125,9 @@ test('case 1: main death -> SessionStart injects the recovery block', () => {
 test('case 2: worker death in fan-out -> main journal intact + unrecoverable-work flag', () => {
   const { home, cwd } = sandbox();
   try {
-    // Main survived and journaled limit_reached; a killed worker left a scratch file
+    // Main survived and journaled in_progress; a killed worker left a scratch file
     // (it could not run its own finally-cleanup — Incident B).
-    writeJournal(cwd, { ...FIXTURE, status: 'limit_reached' });
+    writeJournal(cwd, { ...FIXTURE, status: 'in_progress' });
     const scratchDir = path.join(cwd, '.claude', 'coalhearth', 'scratch');
     fs.mkdirSync(scratchDir, { recursive: true });
     fs.writeFileSync(path.join(scratchDir, 'probe_worker.mjs'), '// dead worker scratch');

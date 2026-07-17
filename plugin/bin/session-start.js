@@ -2,7 +2,7 @@
 'use strict';
 // CoalHearth SessionStart hook (Phoenix-13 hook: fail-silent, zero-dep, no network,
 // no spawn, never process.exit — see hooks-safety.md). Detects a session the
-// HandoffJournal marked in_progress/limit_reached and injects the ResumeEngine's
+// HandoffJournal marked in_progress and injects the ResumeEngine's
 // recovery markdown on the sanctioned SessionStart channel (§13). NO-USER (a
 // headless/cron invocation) is safe by construction: the hook only PRINTS —
 // it never asks anything, so there's no consent step to skip.
@@ -41,6 +41,15 @@ function main() {
   const config = loadConfig();
   const recovery = config.recovery || {};
   const engine = new ResumeEngine(config.journal || {}, recovery);
+
+  // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or a perms
+  // block) — save()/detectAbortedSession then silently no-op FOREVER while the user believes
+  // they're protected. Say so ONCE on the sanctioned SessionStart channel (Phoenix #13 allows
+  // the resume channel), where the recovery block would otherwise render.
+  if (!engine.outputDir) {
+    console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.');
+  }
+
   const aborted = engine.detectAbortedSession();
   if (aborted) {
     // Scoped resume-time orphan sweep (MEMORY.md Incident B): a killed worker leaves
@@ -53,28 +62,24 @@ function main() {
       // fail-silent: a failed sweep never blocks the resume
     }
 
-    // Mark resumed FIRST (before printing) so we know whether it stuck — a stuck
-    // write (e.g. a read-only filesystem) must not re-inject the SAME prompt every
-    // boot forever with no explanation (CoalBoard nasa audit 2026-07-09 L6). Never
-    // retried elsewhere (Phoenix #10: no writes outside the sandbox root) — a
-    // genuinely read-only fs cannot be marked, so the honest fallback is to say so.
-    let markedResumed = true;
-    try {
-      const journalPath = path.join(engine.outputDir, 'session_handoff.json');
-      fs.writeFileSync(journalPath, JSON.stringify({ ...aborted, status: 'resumed' }, null, 2), 'utf8');
-    } catch {
-      markedResumed = false; // fail-silent (Phoenix #4): non-fatal, never blocks startup
-    }
-
-    // recovery.autoInjectPrompt (default true): print the recovery block on the
-    // sanctioned SessionStart channel. false = detect + sweep + mark resumed, but
-    // suppress the injection (audit 2026-07-02 L7 — the flag was previously inert).
-    if (recovery.autoInjectPrompt !== false) {
-      let prompt = engine.generateHandoffPrompt(aborted);
-      if (prompt && !markedResumed) {
-        prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
+    // recovery.autoInjectPrompt (default true) gates the INJECTION only; marking resumed is
+    // NOT flag-gated (a never-marked in_progress journal bleeds into the next session).
+    if (recovery.autoInjectPrompt === false) {
+      engine.markResumed(aborted);
+    } else {
+      // BUILD the recovery block FIRST (H4): generateHandoffPrompt is now array-coercion-safe,
+      // but ordering still matters — mark resumed only AFTER a successful build, so a build that
+      // somehow yields nothing does NOT leave the journal already 'resumed' with no block shown
+      // (the permanently-unrecoverable bug). Mark BEFORE printing (v1.2.1 ordering) via the
+      // shared ATOMIC markResumed (per-pid temp+rename, H6/H7) so a read-only-fs failure is
+      // detected and the honest "may repeat" note appended — never a silent re-inject loop.
+      const prompt = engine.generateHandoffPrompt(aborted);
+      const markedResumed = engine.markResumed(aborted);
+      let out = prompt;
+      if (out && !markedResumed) {
+        out += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
       }
-      if (prompt) console.log(prompt); // sanctioned SessionStart context-injection channel (Phoenix #13)
+      if (out) console.log(out); // sanctioned SessionStart context-injection channel (Phoenix #13)
     }
   }
 

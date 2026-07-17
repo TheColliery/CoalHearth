@@ -12,7 +12,6 @@
 
 const { buildStateSnapshot } = require('./state-snapshot.js');
 const { HandoffJournal } = require('./handoff-journal.js');
-const { BudgetTracker } = require('./budget-tracker.js');
 
 // Tools whose payload names a file they modify; anything else (Read, Bash, ...)
 // contributes no path. Best-effort by design — the recovery block always says
@@ -81,30 +80,40 @@ function parseToolPayload(payload) {
 }
 
 /**
- * Record one journal step: accumulate state onto the prior save and persist it
- * atomically, then return the advisory budget analysis. Never throws (fail-silent).
+ * Record one journal step: accumulate session state onto the prior save and persist it
+ * atomically under a lock. Never throws (fail-silent). Returns nothing — the recovery core
+ * is the whole job (the advisory budget guardrail was retired: see CHANGELOG — a fresh
+ * per-call BudgetTracker never accumulated, so shouldBlockSpawning needed a single >6.8 MB
+ * payload to fire at the 2M default and was structurally unreachable).
  * @param {string} cwd workspace root (the caller's process.cwd()).
- * @param {Object} config loaded .coalhearth.json ({journal, budgets}).
- * @param {{touchedFile?: string, spawn?: Object, budgetText?: string}} step
- * @returns {{limitReached:boolean, shouldBlockSpawning:boolean, reason:string}}
+ * @param {Object} config loaded .coalhearth.json ({journal}).
+ * @param {{sessionId?: string, touchedFile?: string, spawn?: Object}} step
  */
 function recordStep(cwd, config, step) {
   const journal = new HandoffJournal((config && config.journal) || {});
-  // Accumulate onto the prior save's list ONLY while it is this session's own
-  // in-progress journal; a resumed/completed prior journal starts the list fresh.
-  const prior = journal.load();
-  const sameSession = prior && prior.status === 'in_progress';
-  const state = buildStateSnapshot(cwd, {
-    priorModifiedFiles: sameSession ? prior.modifiedFiles : [],
-    touchedFile: step.touchedFile,
-    priorInFlightAgents: sameSession ? prior.inFlightAgents : [],
-    spawn: step.spawn,
+  const myId = typeof step.sessionId === 'string' && step.sessionId ? step.sessionId : undefined;
+  // The WHOLE load→merge→save runs under one lock (H1): N concurrent PostToolUse hooks
+  // can no longer read-then-clobber each other's accumulated lists. mergeFn decides what to
+  // accumulate onto; the lock guarantees the prior it sees is the one it overwrites.
+  journal.updateUnderLock((prior) => {
+    // "Same session" = accumulate onto this prior, else start the lists fresh. Prefer
+    // IDENTITY (H3): a prior written by THIS session id is mine regardless of status — so a
+    // second session booting in the same workspace (which flips the shared journal to
+    // 'resumed') no longer makes my next step discard my own accumulated files. When either
+    // id is unknown (a payload without one, an old journal), fall back to the status proxy —
+    // the pre-existing behavior + the mark-resumed contamination guard still hold.
+    const priorId = prior && typeof prior.sessionId === 'string' && prior.sessionId ? prior.sessionId : undefined;
+    const sameSession = (myId && priorId)
+      ? priorId === myId
+      : !!(prior && prior.status === 'in_progress');
+    return buildStateSnapshot(cwd, {
+      sessionId: myId,
+      priorModifiedFiles: sameSession ? prior.modifiedFiles : [],
+      touchedFile: step.touchedFile,
+      priorInFlightAgents: sameSession ? prior.inFlightAgents : [],
+      spawn: step.spawn,
+    });
   });
-  journal.save(state);
-
-  const tracker = new BudgetTracker((config && config.budgets) || {});
-  if (step.budgetText) tracker.estimateFromChars(step.budgetText, true);
-  return tracker.evaluateLimits();
 }
 
 module.exports = { FILE_TOOL_KEYS, SPAWN_TOOL_NAMES, firstString, extractSpawn, parseToolPayload, recordStep };

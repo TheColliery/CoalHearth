@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { CONFIG_SCHEMA, validateValue, validateConfig } from './config-schema.mjs';
 
 test('validateValue accepts a valid int within bounds', () => {
-  assert.equal(validateValue(CONFIG_SCHEMA.budgets.maxTokens, 2000000), null);
+  assert.equal(validateValue(CONFIG_SCHEMA.update.updateCheckDays, 14), null);
 });
 
 test('validateValue rejects a non-integer for an int spec', () => {
-  assert.match(validateValue(CONFIG_SCHEMA.budgets.maxTokens, 1.5), /integer/);
+  assert.match(validateValue(CONFIG_SCHEMA.update.updateCheckDays, 1.5), /integer/);
 });
 
 test('validateValue rejects below min', () => {
@@ -28,9 +28,9 @@ test('validateValue rejects a non-bool for a bool spec', () => {
 
 test('validateConfig passes on the full factory shape', () => {
   const errors = validateConfig({
-    budgets: { maxTokens: 2000000, warningTokenPercentage: 0.15 },
     journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
+    update: { updateMode: 'ask', updateCheckDays: 14 },
   });
   assert.deepEqual(errors, []);
 });
@@ -42,7 +42,7 @@ test('validateConfig flags an unknown group', () => {
 });
 
 test('validateConfig flags an unknown key within a known group', () => {
-  const errors = validateConfig({ budgets: { notAKey: 1 } });
+  const errors = validateConfig({ journal: { notAKey: 1 } });
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /'budgets.notAKey' not in schema/);
+  assert.match(errors[0], /'journal.notAKey' not in schema/);
 });

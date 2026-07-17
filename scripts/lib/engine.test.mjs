@@ -3,8 +3,8 @@
 //   HandoffJournal   — atomic save, unserializable fail-silent, ENOSPC prune, retry-exhaust
 //   ResumeEngine     — detect(null/resumable/corrupt-quarantine), generate stale-advice,
 //                      sweepOrphans resolve-and-contain (no blind delete, no path escape)
-//   BudgetTracker    — estimateFromChars (ASCII vs non-ASCII ratio), evaluateLimits advisory
 //   config-schema    — validateValue / validateConfig
+// (BudgetTracker removed — the advisory budget guardrail was retired; see CHANGELOG.)
 //
 // The lib is CJS (require()); this ESM test uses createRequire to load it, and a
 // per-test tmp dir under os.tmpdir() so nothing touches real state.
@@ -20,7 +20,6 @@ const require = createRequire(import.meta.url);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { HandoffJournal } = require(path.join(REPO, 'lib', 'handoff-journal.js'));
 const { ResumeEngine } = require(path.join(REPO, 'lib', 'resume-engine.js'));
-const { BudgetTracker } = require(path.join(REPO, 'lib', 'budget-tracker.js'));
 const { containedOutputDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
 import { validateValue, validateConfig, CONFIG_SCHEMA } from './config-schema.mjs';
 
@@ -132,15 +131,17 @@ test('ResumeEngine.detectAbortedSession returns null when no journal exists', ()
   }
 });
 
-test('ResumeEngine.detectAbortedSession returns data for in_progress/limit_reached, null for completed', () => {
+test('ResumeEngine.detectAbortedSession returns data for in_progress, null for completed/aborted/retired-limit_reached', () => {
   const dir = tmp();
   try {
     const engine = new ResumeEngine({ outputDirectory: dir }, {}, dir);
     const p = path.join(dir, 'session_handoff.json');
-    for (const s of ['in_progress', 'limit_reached']) {
-      fs.writeFileSync(p, JSON.stringify({ status: s, sessionId: s }));
-      assert.strictEqual(engine.detectAbortedSession()?.status, s, `${s} is resumable`);
-    }
+    fs.writeFileSync(p, JSON.stringify({ status: 'in_progress', sessionId: 's' }));
+    assert.strictEqual(engine.detectAbortedSession()?.status, 'in_progress', 'in_progress is resumable');
+    // limit_reached is no longer resumable — no code path ever writes it (retired with the
+    // budget guardrail); a stray one from an old journal is treated as non-resumable.
+    fs.writeFileSync(p, JSON.stringify({ status: 'limit_reached' }));
+    assert.strictEqual(engine.detectAbortedSession(), null, 'retired limit_reached is not resumable');
     fs.writeFileSync(p, JSON.stringify({ status: 'completed' }));
     assert.strictEqual(engine.detectAbortedSession(), null, 'completed is not resumable');
     fs.writeFileSync(p, JSON.stringify({ status: 'aborted' }));
@@ -168,7 +169,7 @@ test('ResumeEngine.generateHandoffPrompt renders goal/checklist and ALWAYS advis
   const md = new ResumeEngine({ outputDirectory: d }, {}, d).generateHandoffPrompt({
     sessionId: 's1',
     timestamp: '2026-07-01T00:00:00.000Z',
-    status: 'limit_reached',
+    status: 'in_progress',
     checklist: [{ task: 'A', status: 'done' }, { task: 'B', status: 'doing' }],
     modifiedFiles: ['x.js'],
     activePlan: { goal: 'Do X', nextSteps: ['step 1'], constraints: ['c1'] },
@@ -356,47 +357,6 @@ test('containedOutputDir creates + returns a legit in-workspace dir (happy path 
   }
 });
 
-// --- BudgetTracker (advisory only) -----------------------------------------
-
-test('BudgetTracker.estimateFromChars uses 4 chars/tok for ASCII, ~1.5 for non-ASCII', () => {
-  const t = new BudgetTracker({});
-  assert.strictEqual(t.estimateFromChars('abcd', true), 1, 'ASCII: 4 chars -> 1 tok');
-  assert.strictEqual(t.estimateFromChars('abcdefgh', true), 2, 'ASCII: 8 chars -> 2 tok');
-  // 3 non-ASCII chars -> ceil(3 / 1.5) = 2
-  assert.strictEqual(new BudgetTracker({}).estimateFromChars('ก็ไม่', false) >= 3, true, 'non-ASCII denser ratio');
-  assert.strictEqual(new BudgetTracker({}).estimateFromChars('', true), 0, 'empty -> 0');
-  assert.strictEqual(new BudgetTracker({}).estimateFromChars(null, true), 0, 'null -> 0 (no throw)');
-});
-
-// TOKEN-ONLY (audit 2026-07-02 MED): the turn branch was structurally dead — a fresh
-// tracker per PostToolUse (Phoenix #6, stateless) meant currentTurns never exceeded 1 —
-// and is removed along with maxTurns/warningTurnThreshold (tombstoned in the schema).
-test('BudgetTracker.evaluateLimits flags low token headroom as shouldBlockSpawning (advisory)', () => {
-  const t = new BudgetTracker({ maxTokens: 100, warningTokenPercentage: 0.15 });
-  t.estimateFromChars('a'.repeat(360), true); // 90 tok used -> 10% headroom <= 15%
-  const r = t.evaluateLimits();
-  assert.strictEqual(r.shouldBlockSpawning, true, '10% headroom <= 15% threshold');
-  assert.match(r.reason, /token headroom/i);
-  assert.strictEqual(r.limitReached, false);
-});
-
-test('BudgetTracker.evaluateLimits reports limitReached once the token estimate is exhausted', () => {
-  const t = new BudgetTracker({ maxTokens: 10 });
-  t.estimateFromChars('a'.repeat(80), true); // 20 tok used, 10 max -> exhausted
-  const r = t.evaluateLimits();
-  assert.strictEqual(r.limitReached, true, 'no token headroom -> limitReached');
-  assert.strictEqual(r.shouldBlockSpawning, true);
-});
-
-test('BudgetTracker.evaluateLimits stays OK with headroom (advisory, never a hard promise)', () => {
-  const t = new BudgetTracker({ maxTokens: 1000000 });
-  t.estimateFromChars('a'.repeat(4), true); // 1 token used, ~100% headroom
-  const r = t.evaluateLimits();
-  assert.strictEqual(r.shouldBlockSpawning, false);
-  assert.strictEqual(r.limitReached, false);
-  assert.strictEqual(r.reason, 'OK');
-});
-
 // --- config-schema ----------------------------------------------------------
 
 test('config-schema validateValue enforces type + bounds', () => {
@@ -411,29 +371,55 @@ test('config-schema validateValue enforces type + bounds', () => {
 
 test('config-schema validateConfig passes the factory shape and flags unknown group/key', () => {
   const factory = {
-    budgets: { maxTokens: 2000000, warningTokenPercentage: 0.15 },
     journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
     update: { updateMode: 'ask', updateCheckDays: 14 },
   };
   assert.deepStrictEqual(validateConfig(factory), [], 'factory config is valid');
-  assert.ok(Object.keys(CONFIG_SCHEMA).length === 4, 'four config groups (budgets/journal/recovery/update)');
+  assert.ok(Object.keys(CONFIG_SCHEMA).length === 3, 'three config groups (journal/recovery/update) — budgets retired');
   assert.deepStrictEqual(validateConfig({ nope: {} }), ["group 'nope' not in schema"]);
-  assert.deepStrictEqual(validateConfig({ budgets: { bogus: 1 } }), ["'budgets.bogus' not in schema"]);
-  assert.deepStrictEqual(validateConfig({ budgets: { maxTokens: 0 } }), ["'budgets.maxTokens' must be >= 1"]);
+  assert.deepStrictEqual(validateConfig({ journal: { bogus: 1 } }), ["'journal.bogus' not in schema"]);
+  assert.deepStrictEqual(validateConfig({ journal: { atomicityRetries: 0 } }), ["'journal.atomicityRetries' must be >= 1"]);
   assert.match(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'sometimes'), /must be one of/);
   assert.strictEqual(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'OFF'), null, 'enum compares case-insensitively');
 });
 
-// Tombstone (round-2 audit, 2026-07-02): the dead turn path's config keys are REMOVED
-// from the schema — a config still carrying them is flagged unknown, never silently
-// accepted (same tombstone-by-removal pattern as CoalTipple's rankingMode).
-test('tombstones: maxTurns + warningTurnThreshold are REMOVED from the schema (turn path dead)', () => {
-  assert.strictEqual(CONFIG_SCHEMA.budgets.maxTurns, undefined, 'maxTurns tombstoned');
-  assert.strictEqual(CONFIG_SCHEMA.budgets.warningTurnThreshold, undefined, 'warningTurnThreshold tombstoned');
+// Tombstone (H7): the ENTIRE `budgets` group is REMOVED with the retired budget guardrail
+// (it joins the earlier beta.6 maxTurns/warningTurnThreshold tombstone — the identical
+// dead-path pattern). A config still carrying it is flagged as an unknown GROUP, never
+// silently accepted (same tombstone-by-removal pattern as CoalTipple's rankingMode).
+test('tombstone: the budgets group is REMOVED from the schema (guardrail retired)', () => {
+  assert.strictEqual(CONFIG_SCHEMA.budgets, undefined, 'the budgets group is gone from the schema');
   assert.deepStrictEqual(
-    validateConfig({ budgets: { maxTurns: 30 } }),
-    ["'budgets.maxTurns' not in schema"],
-    'a stale config carrying the removed key is reported, not silently honored'
+    validateConfig({ budgets: { maxTokens: 100 } }),
+    ["group 'budgets' not in schema"],
+    'a stale config carrying the retired group is reported, not silently honored'
   );
+});
+
+// H7 RETIRE — the consolidated "removed path is gone" proof: the tracker file is deleted and
+// recordStep is now journal-only (returns nothing — no shouldBlockSpawning analysis), while
+// the recovery core still records the step. RED-PROOF: undelete lib/budget-tracker.js and
+// restore recordStep's tracker return, and the ret/undefined assertion goes red.
+test('RETIRED budget guardrail: tracker file gone + recordStep is journal-only (recovery core intact)', () => {
+  assert.strictEqual(fs.existsSync(path.join(REPO, 'lib', 'budget-tracker.js')), false, 'lib/budget-tracker.js is deleted');
+  const { recordStep } = require(path.join(REPO, 'lib', 'journal-step.js'));
+  // recordStep contains its journal dir under process.cwd() (the workspace, as the real hook
+  // runs), so chdir into a throwaway dir to keep the write out of the repo. realpath so the
+  // read path matches process.cwd() on macOS (/var -> /private/var).
+  const dir = fs.realpathSync(tmp());
+  const prevCwd = process.cwd();
+  try {
+    process.chdir(dir);
+    const ret = recordStep(process.cwd(), { journal: {} }, { sessionId: 'S', touchedFile: path.join(dir, 'x.js') });
+    assert.strictEqual(ret, undefined, 'recordStep returns nothing — the budget analysis is gone');
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(path.join(process.cwd(), '.claude', 'coalhearth', 'session_handoff.json'), 'utf8')).status,
+      'in_progress',
+      'the recovery core still journals the step'
+    );
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

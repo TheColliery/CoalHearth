@@ -10,17 +10,15 @@
 //   help   one-line description
 
 export const CONFIG_SCHEMA = {
-  // TOMBSTONED (round-2 CoalBoard audit, 2026-07-02 — dead-path removal): `maxTurns`
-  // (int) and `warningTurnThreshold` (int) removed. The turn nudge was structurally
-  // dead: the hook builds a FRESH BudgetTracker per PostToolUse (Phoenix #6,
-  // stateless — nothing persists a turn count), so currentTurns never exceeded 1 and
-  // the turn branch could not fire unless maxTurns <= threshold+1. The budget
-  // guardrail is token-only now. Do NOT re-add without a persistence design.
-  // (Same tombstone-by-removal pattern as CoalTipple's rankingMode/hardEnforce.)
-  budgets: {
-    maxTokens: { type: 'int', min: 1, help: 'Token ceiling for the char-heuristic budget estimate (advisory, not precise). Default 2000000' },
-    warningTokenPercentage: { type: 'number', min: 0, max: 1, help: 'Fraction of maxTokens remaining that triggers a warning nudge. Default 0.15' },
-  },
+  // TOMBSTONED — the entire `budgets` group (`maxTokens`, `warningTokenPercentage`) is
+  // removed together with the advisory budget guardrail, joining the earlier beta.6
+  // `maxTurns`/`warningTurnThreshold` tombstone (the IDENTICAL flaw): a FRESH BudgetTracker
+  // per PostToolUse (Phoenix #6, stateless) never accumulated, so shouldBlockSpawning needed
+  // a single >6.8 MB payload to fire at the 2M default — structurally unreachable. The
+  // recovery core is the value; the guardrail was a false promise, removed rather than faked
+  // (see CHANGELOG). Do NOT re-add a budget group without BOTH a session-persistence design
+  // AND an honest source of real token usage — the hook sees only payload char-slices (a
+  // gauge, not a safety device). (Same tombstone-by-removal pattern as CT's rankingMode/hardEnforce.)
   journal: {
     outputDirectory: { type: 'string', help: 'Where session_handoff.json is written (realpath-contained under the workspace root; an escaping path falls back to the default). Default .claude/coalhearth' },
     atomicityRetries: { type: 'int', min: 1, max: 5, help: 'Retries for the atomic tmp-then-rename journal write (clamped 1-5 — save() busy-waits synchronously on the hot-path). Default 3' },

@@ -9,7 +9,7 @@ CoalHearth is a zero-dependency Claude Code hook plugin. Its security posture:
 
 ## Hook safety (Phoenix-13)
 - The `SessionStart` and `PostToolUse` hooks — and their multi-platform adapters (`bin/ag-pre-invocation.js`, `bin/ag-post-tool-use.js`, thin shims over the same shared core, argv-switched per platform: Antigravity / Gemini CLI / Copilot CLI / Devin CLI / Kiro / Augment) — are **fail-silent**: all logic is wrapped in try/catch, they exit 0 on every path, and they never crash the host agent.
-- The only output is the sanctioned context injection (the recovery block — plain stdout on Claude Code and the CC-shaped file-copy platforms, one `{"additionalContext"}` JSON line on Antigravity, one nested `{"hookSpecificOutput":{"additionalContext"}}` line on Gemini CLI; the advisory nudge is suppressed on Gemini — no verified inject channel there); nothing else is written to stdout/stderr.
+- The only output is the sanctioned context injection (the recovery block — plain stdout on Claude Code and the CC-shaped file-copy platforms, one `{"additionalContext"}` JSON line on Antigravity, one nested `{"hookSpecificOutput":{"additionalContext"}}` line on Gemini CLI); nothing else is written to stdout/stderr.
 
 ## Filesystem safety
 - **Path-contained orphan sweep.** The resume-time cleanup removes only known scratch/worktree name-patterns, only inside **CoalHearth-owned** dirs (`.claude/coalhearth/scratch`, `.agents/coalhearth/scratch`, and CoalHearth-owned stale worktrees), resolve-and-contained under the workspace root. It NEVER touches the user's own tree (e.g. your `scripts/`) and never does a blind recursive delete.

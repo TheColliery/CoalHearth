@@ -1,42 +1,26 @@
 #!/usr/bin/env node
 // CoalHearth post-tool journal hook — the ONE entry for every non-Claude-Code hook
-// platform, discriminated by an argv mode (mirrors bin/ag-pre-invocation.js; named modes
-// exact-matched BEFORE the generic-truthy AG branch). Claude Code keeps bin/post-tool-use.js.
+// platform (Antigravity + the 5 config-only platforms). Claude Code keeps bin/post-tool-use.js.
+// The journal step is IDENTICAL on every platform, so the argv mode the templates pass
+// (AfterTool / FileCopy / PostToolUse) is accepted but no longer branches anything here —
+// the only per-mode difference used to be the advisory budget-nudge channel, and that
+// guardrail was retired (structurally unreachable; see CHANGELOG). bin/ag-pre-invocation.js
+// still uses the argv modes (its resume-emit channel genuinely differs per platform).
 //
-//   'AfterTool'    -> Gemini CLI (its post-tool event name). Journal identical; the
-//                     advisory budget nudge is SUPPRESSED there (named divergence: the
-//                     only Gemini inject channel verified 2026-07-15 is SessionStart's
-//                     nested hookSpecificOutput field — AfterTool documents none, and
-//                     the nudge is secondary-advisory, so Phoenix #13 zero-noise wins
-//                     over a best-guess emit Gemini's parser might surface as garbage).
-//   'FileCopy'     -> the CC-shaped file-copy platforms (Copilot CLI postToolUse /
-//                     Devin CLI PostToolUse / Kiro postToolUse / Augment PostToolUse):
-//                     journal identical; the nudge rides the plain CC stdout line
-//                     (bin/post-tool-use.js's exact channel, best-guess per config).
-//   anything else  -> Antigravity (the shipped template passes 'PostToolUse'): the
-//                     original adapter — AG shipped a real IDE hook engine (2026-07-12);
-//                     the nudge emits AG's flat {"additionalContext"} JSON.
-//
-// Phoenix-13 identical to the CC adapter on every branch: fail-silent, zero-dep, no
-// network, no child process, no process.exit().
+// Phoenix-13 identical to the CC adapter: fail-silent, zero-dep, no network, no child
+// process, no process.exit(). This hook now emits NOTHING (journal-only).
 //
 // The ONLY platform-specific work here is normalizing the payload shape into the
-// Claude-Code shape lib/journal-step.js parses (one-flock: the parse/save/budget
-// logic is the SHARED core, not re-implemented). Written DEFENSIVELY per the pilot's
-// honest scope: no platform's full post-tool payload shape was captured, so every field
-// is read tolerantly (snake_case core fields, camelCase `toolCall.*`/`toolInput`) and an
-// unknown tool name degrades to a no-op contribution (never crash) — the session state
-// still journals; only that one tool's touched-file/spawn is skipped.
+// Claude-Code shape lib/journal-step.js parses (one-flock: the parse/save logic is the
+// SHARED core, not re-implemented). Written DEFENSIVELY per the pilot's honest scope: no
+// platform's full post-tool payload shape was captured, so every field is read tolerantly
+// (snake_case core fields, camelCase `toolCall.*`/`toolInput`) and an unknown tool name
+// degrades to a no-op contribution (never crash) — the session state still journals; only
+// that one tool's touched-file/spawn is skipped.
 //
 // NOT validated live on any of these platforms (tier: wired) — hence the defensive
 // reader. No claim here is "validated on <platform>".
 'use strict';
-
-// Exact-match-first (CoalMine's ordering rule): 'AfterTool'/'FileCopy' are claimed here;
-// ANY other value — the shipped AG template's 'PostToolUse', or none — is the AG branch.
-const MODE = process.argv[2] || '';
-const GEMINI = MODE === 'AfterTool';
-const FILE_COPY = MODE === 'FileCopy';
 
 const {
   FILE_TOOL_KEYS,
@@ -140,27 +124,11 @@ try {
     // defensive -- a hostile shape never crashes the hook
   }
 
-  const analysis = recordStep(process.cwd(), cfg, {
+  recordStep(process.cwd(), cfg, {
+    sessionId: firstString(agPayload, ['session_id', 'sessionId']), // H3: stamp WHO owns this journal
     touchedFile: parsed.touchedFile,
     spawn: parsed.spawn,
-    budgetText: raw,
   });
-  // Advisory only, never a hard block (CH never blocks a tool). On Gemini the nudge is
-  // suppressed entirely (the named divergence in the header) — the journal above, the
-  // core value, recorded regardless.
-  if (analysis.shouldBlockSpawning && !GEMINI) {
-    const msg = `[CoalHearth] ${analysis.reason} (advisory, best-effort estimate) -- prefer inline over spawning subagents.`;
-    if (FILE_COPY) {
-      // CC-parity plain stdout line (bin/post-tool-use.js's exact channel) for the
-      // CC-shaped file-copy platforms; harmlessly ignored where a platform drops it.
-      process.stdout.write(msg);
-    } else {
-      // AG's ONLY sanctioned emit is additionalContext JSON — emit valid JSON, never a
-      // raw line that could confuse AG's hook-response parser. If AG doesn't deliver
-      // PostToolUse additionalContext, this is harmlessly ignored (pilot-unconfirmed).
-      console.log(JSON.stringify({ additionalContext: msg }));
-    }
-  }
 } catch {
   // Phoenix #4: fail-silent, never crash the host.
 }

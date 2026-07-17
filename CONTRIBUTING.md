@@ -1,6 +1,6 @@
 # Contributing to CoalHearth
 
-CoalHearth is the session warm-resume + budget-guardrail engine of the [TheColliery](https://github.com/TheColliery) series. We welcome issues, bug reports, and pull requests.
+CoalHearth is the session warm-resume engine of the [TheColliery](https://github.com/TheColliery) series. We welcome issues, bug reports, and pull requests.
 
 ---
 
@@ -41,8 +41,8 @@ CoalHearth is **hook-only by design** — the hooks ARE the product (a session-s
 
 | Path | Purpose |
 |---|---|
-| `bin/` | Hook entrypoints: `session-start.js` (resume + self-update schedule) · `post-tool-use.js` (journal + budget nudge). |
-| `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `budget-tracker`, `load-config`. |
+| `bin/` | Hook entrypoints: `session-start.js` (resume + self-update schedule) · `post-tool-use.js` (journal). |
+| `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `journal-step`, `load-config`. |
 | `config/schema.json` | Draft-07 JSON-Schema mirror of the config (derived from `scripts/lib/config-schema.mjs`). |
 | `hooks/hooks.json` | Hook wiring via `${CLAUDE_PLUGIN_ROOT}/bin/…`. |
 | `commands/update.md` | The `/coalhearth:update` self-update procedure (agent-side; the hook only schedules). |

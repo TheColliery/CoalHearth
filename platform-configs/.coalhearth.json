@@ -1,10 +1,4 @@
 {
-  // Advisory budget-guardrail thresholds (char-heuristic best-effort, NOT a
-  // precise or guaranteed token count — see lib/budget-tracker.js header).
-  "budgets": {
-    "maxTokens": 2000000,
-    "warningTokenPercentage": 0.15
-  },
   // Handoff journal (the recovery core — this is the part that matters).
   "journal": {
     "outputDirectory": ".claude/coalhearth",

@@ -2,6 +2,23 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.0.0] - 2026-07-17
+
+> **BREAKING (MAJOR): the `budgets` config group is removed.** A `.coalhearth.json` still carrying a `budgets` block is now ignored at runtime and flagged as an unknown group (non-crashing). Two batches from a blind adversarial crash-test (nasa-L3 audit follow-up): the dead budget guardrail retired, and five journal data-loss holes root-fixed.
+
+### Removed
+- **The advisory budget guardrail — removed rather than faked.** `BudgetTracker`, the `budgets.maxTokens` / `budgets.warningTokenPercentage` config group, the PostToolUse "prefer inline" nudge, and the documented-but-never-written `limit_reached` status are all gone. It never fired under any realistic config: the hook built a FRESH `BudgetTracker` per PostToolUse and fed it a SINGLE payload, so nothing accumulated across a session — `shouldBlockSpawning` needed one **> 6.8 MB** tool payload to trip at the 2 M default (structurally unreachable, reproduced), and `limit_reached` had no writer at all. Same structural flaw as the beta.6 `maxTurns`/`warningTurnThreshold` tombstone; the token half now matches. A gauge that only sees the hook's payload char-slice cannot be a budget safety device (per-turn token use is unknowable from it), and a config knob that does nothing is a false promise. **The recovery core (journal + warm-resume) is untouched.** A `.coalhearth.json` still carrying a `budgets` block is now ignored at runtime and flagged as an unknown group by `configure`/`verify`.
+
+### Fixed
+- **Concurrency — N concurrent PostToolUse hooks no longer lose each other's journal.** The load→merge→save is serialized under a per-workspace `O_EXCL` lock (`lib/handoff-journal.js` `updateUnderLock`: stale-break + bounded wait → best-effort lock-free fallback; a non-spinning `Atomics.wait` keeps the ≤100 ms Phoenix budget). Lossless to 30 simultaneous writers (a 30-way race dropped all 30 before).
+- **A transient-corrupt journal is quarantined, not overwritten.** `recordStep` moves an unparseable `session_handoff.json` to `session_handoff.corrupt.json` (bytes preserved) before starting fresh — it used to silently overwrite it, losing the bytes and the accumulated state.
+- **A second session in the same workspace no longer discards the first's journal.** The journal now carries the hook payload's `session_id`, and `recordStep` keys "same session" on it — so a second session booting (which flips the shared journal to `resumed`) no longer makes the first session's next step rebuild from empty. Also completes CoalWash's estate `sessionId` guard.
+- **A wrong-typed journal field no longer eats the recovery block.** `generateHandoffPrompt` array-coerces every field before mapping, and mark-resumed moved to AFTER a successful prompt build — a corrupt/foreign shape can no longer throw (fail-silent) and leave the journal `resumed` with no block shown (permanently unrecoverable).
+- **A file blocking `.claude/coalhearth` now signals** on SessionStart's sanctioned channel instead of leaving warm-resume silently off while the user believes they're protected.
+
+### Changed
+- **All journal writes are atomic (per-pid temp + rename)** — `save()`, mark-resumed, and the corrupt-quarantine share one atomic writer, so a crash mid-write can't leave a torn journal.
+
 ## [1.4.0] - 2026-07-16
 
 **MINOR** — CoalHearth ports to the config-only hook platforms: **Gemini CLI, GitHub Copilot CLI, Devin CLI, Kiro, and Augment Code** — five wiring templates over the SAME two adapter entry points (no new hook files). Every one ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround. Tier for all five: **wired** — built + hermetically tested against each platform's primary docs (2026-07-15 fetch), NOT validated: no live session on any of them has run the wiring yet; a real run per platform flips it.

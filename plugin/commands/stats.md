@@ -1,5 +1,5 @@
 ---
-description: CoalHearth stats — journal activity, resume events, and budget-nudge state this session
+description: CoalHearth stats — journal activity and resume events this session
 ---
 
 Produce the CoalHearth stats report for this session, in the user's language. Tables only, minimal prose.
@@ -7,7 +7,6 @@ Produce the CoalHearth stats report for this session, in the user's language. Ta
 Read the CURRENT session's journal (the `.claude/coalhearth/session_handoff.json` under this project, if present) plus the conversation context, and show:
 - **Journal state:** last-update timestamp, modified-files count, in-flight subagents recorded, checklist/goal captured or N/A.
 - **Resume events:** whether this session STARTED from a recovery block (warm resume) — and if so, what it carried (files, sub-flight records) and whether the snapshot matched reality.
-- **Budget guardrail (advisory):** the char-heuristic estimate if one was surfaced this session — label it approximate; it reduces limit-hit damage, it does not prevent one.
 
 Honest empty state: no journal file and no resume this session → say exactly that in one line.
 

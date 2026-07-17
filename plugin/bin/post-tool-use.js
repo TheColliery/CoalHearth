@@ -7,14 +7,15 @@
 //
 // Thin adapter: the CC hook stdin payload IS the {tool_name, tool_input, tool_response}
 // shape lib/journal-step.js parses, so this file just: load config -> read stdin ->
-// parseToolPayload -> recordStep (the recovery core) -> emit the advisory budget nudge.
+// parseToolPayload -> recordStep (the recovery core). No stdout at all — the advisory
+// budget nudge was retired (it was structurally unreachable; see CHANGELOG).
 // The Antigravity adapter (bin/ag-post-tool-use.js) shares the same core through the
 // same module, differing only in a payload-shape normalizer (one-flock, no fork).
 'use strict';
 
 try {
   const { loadConfig } = require('../lib/load-config.js');
-  const { parseToolPayload, recordStep } = require('../lib/journal-step.js');
+  const { parseToolPayload, recordStep, firstString } = require('../lib/journal-step.js');
 
   const cfg = loadConfig();
 
@@ -25,25 +26,21 @@ try {
     // no stdin payload -- the journal save below still works, just with no touched file
   }
 
-  // The PostToolUse payload ({tool_name, tool_input, tool_response, ...}); garbage
-  // stdin -> parsed stays empty (no touched file, no spawn), the journal still saves.
-  let parsed = {};
+  // The PostToolUse payload ({session_id, tool_name, tool_input, tool_response, ...}); garbage
+  // stdin -> payload stays {} (no touched file, no spawn, no id), the journal still saves.
+  let payload = {};
   try {
-    parsed = parseToolPayload(JSON.parse(raw));
+    payload = JSON.parse(raw);
   } catch {
     // not JSON -- nothing to record from the payload
   }
+  const parsed = parseToolPayload(payload); // null-safe: a non-object payload -> empty parse
 
-  const analysis = recordStep(process.cwd(), cfg, {
+  recordStep(process.cwd(), cfg, {
+    sessionId: firstString(payload, ['session_id', 'sessionId']), // H3: stamp WHO owns this journal
     touchedFile: parsed.touchedFile,
     spawn: parsed.spawn,
-    budgetText: raw,
   });
-  if (analysis.shouldBlockSpawning) {
-    // Advisory only (best-effort char-heuristic) -- never a hard block; the model
-    // decides whether to actually collapse to inline-self.
-    process.stdout.write(`[CoalHearth] ${analysis.reason} (advisory, best-effort estimate) -- prefer inline over spawning subagents.`);
-  }
 } catch {
   // Phoenix #4: fail-silent, never crash the host.
 }

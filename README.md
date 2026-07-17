@@ -4,7 +4,7 @@
 
 > *A hearth keeps the home warm and banks the embers so the next day's fire lights fast.* This one banks a Claude Code session's state so an interrupted session resumes from a handoff instead of a manual rebuild.
 
-**A session warm-resume + budget-guardrail engine.** A hook journals your session's state every step; if the next session finds the prior one was interrupted, it injects a markdown recovery block so you continue where you left off. A secondary, advisory budget nudge warns before a fan-out spawn when headroom looks low.
+**A session warm-resume engine.** A hook journals your session's state every step; if the next session finds the prior one was interrupted, it injects a markdown recovery block so you continue where you left off.
 
 ![version](https://img.shields.io/github/v/tag/TheColliery/CoalHearth?label=version&color=blue)
 ![license](https://img.shields.io/badge/license-Apache_2.0-blue)
@@ -27,24 +27,17 @@
 A session limit-hit or a crash loses in-flight work — the plan, the checklist, the list of files you were mid-edit on. CoalHearth **reduces that loss**:
 
 - **The recovery core.** A `PostToolUse` hook builds a best-effort snapshot of the session (goal + checklist from `task.md`, constraints from `AGENTS.md`, modified files accumulated from the file-editing tool calls the hook observes — no `git` spawn, no child processes) and journals it **atomically** every step to `session_handoff.json`.
-- **Warm-resume on boot.** On the next session's `SessionStart`, if the prior session's journal is still marked `in_progress` or `limit_reached`, CoalHearth injects a markdown **recovery block** — the goal, the checklist, the files it was touching, the planned next steps — so you resume from context instead of reconstructing it by hand.
+- **Warm-resume on boot.** On the next session's `SessionStart`, if the prior session's journal is still marked `in_progress`, CoalHearth injects a markdown **recovery block** — the goal, the checklist, the files it was touching, the planned next steps — so you resume from context instead of reconstructing it by hand.
 - **The recovery block never asks you to blind-trust it.** It always tells the agent to **verify against `git status` / `git diff`** first — the journal may be stale or half-applied.
 
-That recovery core is the value. Everything else is secondary.
-
-## 📉 Budget guardrail (secondary, advisory)
-
-Alongside the journal, the same hook keeps a char-heuristic token estimate. When the estimated token headroom drops below the configured percentage, it emits **one advisory line** suggesting the agent prefer inline work over spawning subagents — because a fanned-out worker that dies on the limit returns nothing.
-
-This is a **best-effort nudge, not a hard block.** The model decides whether to actually collapse to inline; nothing is enforced.
+That recovery core is the value.
 
 ## 🛡️ What it does (and does NOT) guarantee
 
-CoalHearth **reduces the damage** of a session limit-hit — it does **not** prevent one, and it guarantees nothing:
+CoalHearth **reduces the damage** of a session interruption — it does **not** prevent one, and it guarantees nothing:
 
-- The budget guardrail is a **char-heuristic estimate** (≈4 chars/token ASCII, ≈1.5 non-ASCII), **not** a precise or authoritative read of the platform's real limit. Treat it as advisory only; real budget enforcement is the platform's.
 - The recovery journal is a **best-effort snapshot**, not a guarantee it's still accurate — code may have moved since the last save, which is exactly why the recovery block tells the agent to verify against git.
-- Work done by **fanned-out workers** that die on a limit is **unrecoverable** — they journal nothing. The journal snapshots the *main* session; the guardrail's job is to nudge you away from the fan-out edge before that happens.
+- Work done by **fanned-out workers** that die on a limit is **unrecoverable** — they journal nothing. The journal snapshots the *main* session only.
 
 Honest sell: **less lost work on an interruption, plus an early low-headroom nudge** — not a limit-proof session.
 
@@ -97,7 +90,7 @@ Known limits on AG: delivery of the injected `additionalContext` is not yet live
 
 ### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — wired (config-only ports)
 
-Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences (e.g. the advisory nudge is suppressed on Gemini) live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **wired**, not validated — no live session on these platforms has run the wiring yet.
+Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **wired**, not validated — no live session on these platforms has run the wiring yet.
 
 ### Other agents — not supported
 
@@ -110,8 +103,8 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 | Key | Default | What it does |
 |---|---|---|
 | `recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
-| `budgets.maxTokens` | `2000000` | Token ceiling for the advisory char-heuristic estimate (see the honest frame above). |
-| `budgets.warningTokenPercentage` | `0.15` | Nudge when estimated token headroom drops to this fraction or less. |
+| `recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
+| `update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
 
 Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
 
@@ -120,7 +113,7 @@ Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs
 Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes**, and they emit only their one sanctioned channel.
 
 - **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
-- **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically, then runs the advisory budget check and prints the one nudge line only when headroom is low.
+- **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically under a per-workspace lock (so two concurrent sessions can't lose each other's journal). Journal-only — it emits nothing.
 
 On every other platform the same two jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js)); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. A trailing argument in each platform's config picks the emit shape (Antigravity flat JSON · Gemini nested `hookSpecificOutput` · plain Claude-Code stdout for the CC-shaped file-copy platforms); the parsing/journal logic never forks. Same Phoenix-13 discipline everywhere.
 

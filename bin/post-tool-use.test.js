@@ -89,21 +89,25 @@ test('no task.md / no tool payload -> still succeeds with empty defaults (no-ext
   }
 });
 
-test('near-limit config -> advisory nudge on stdout (best-effort, non-blocking)', () => {
+// RETIRED (H7): the advisory budget nudge is gone (it was structurally unreachable — a fresh
+// per-call tracker never accumulated). Even a tiny `budgets` config (which USED to force the
+// nudge here) must now produce NO stdout. The CC-side "removed path is gone" proof; the
+// recovery core still journals the step. RED-PROOF: restore the nudge in bin/post-tool-use.js
+// and this goes red.
+test('retired budget nudge: a leftover budgets config produces NO stdout, journal still records', () => {
   const cwd = mk();
   const home = mk();
   try {
-    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
-    // Token-only guardrail: a tiny maxTokens + a large stdin payload -> the
-    // estimated headroom drops under the warning fraction -> one nudge line.
     fs.writeFileSync(
       path.join(cwd, '.coalhearth.json'),
-      JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } })
+      JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }) // a retired key, loaded-but-ignored
     );
-    const r = run(cwd, home, 'x'.repeat(400)); // ~100 tok estimated -> 0% headroom
+    const r = run(cwd, home, 'x'.repeat(400)); // a payload that WOULD have tripped the old nudge
     assert.strictEqual(r.status, 0);
-    assert.match(r.stdout, /\[CoalHearth\]/);
-    assert.match(r.stdout, /advisory/);
+    assert.strictEqual(r.stdout, '', 'no budget nudge — the guardrail is retired');
+    assert.strictEqual(r.stderr, '');
+    const j = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json'), 'utf8'));
+    assert.strictEqual(j.status, 'in_progress', 'the recovery core still records the step');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -234,6 +238,90 @@ test('unwritable outputDir (blocked by a file) -> fail-silent, exit 0', () => {
     const r = run(cwd, home);
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.stderr, '');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ROOT 1 / H1 (concurrent lost-update — crash-test repro: "at 10-agent fan-out, dropped
+// 6/10 dead-worker records"; the shipped code lost 30/30 in the repro). N PostToolUse hooks
+// fire CONCURRENTLY, each recording a distinct file. The load->merge->save RMW is now
+// serialized under a per-dir O_EXCL lock (lib/handoff-journal.js updateUnderLock), so every
+// writer's file must survive. RED-PROOF: point recordStep back at plain journal.load()+save()
+// (drop updateUnderLock) and this goes red (last-save-wins drops most files).
+test('ROOT1/H1: concurrent PostToolUse writers do not lose each other\'s modifiedFiles', async () => {
+  const { spawn } = require('node:child_process');
+  const cwd = mk();
+  const home = mk();
+  const N = 10; // the crash-test's reachable "10-agent fan-out"; lossless with a huge margin (verified to 30)
+  try {
+    const env = { ...process.env, USERPROFILE: home, HOME: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' };
+    await Promise.all([...Array(N)].map((_, i) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [HOOK], { cwd, env });
+      p.on('close', () => resolve());
+      p.stdin.end(JSON.stringify({ session_id: 'S', tool_name: 'Write', tool_input: { file_path: path.join(cwd, `f${i}.js`) } }));
+    })));
+    const files = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json'), 'utf8')).modifiedFiles;
+    assert.strictEqual(files.length, N, `all ${N} concurrent writers' files survive (got ${files.length})`);
+    for (let i = 0; i < N; i++) assert.ok(files.includes(`f${i}.js`), `f${i}.js survived the concurrent RMW`);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ROOT 1 / H2 (transient corruption erased). A corrupt journal must be QUARANTINED to
+// session_handoff.corrupt.json (bytes preserved) before the RMW starts fresh — the old
+// load()->null path silently overwrote the corrupt file, losing the bytes AND any hope of
+// forensic recovery. RED-PROOF: drop the atomicWriteJournal(CORRUPT_NAME,...) call in
+// HandoffJournal._loadOrQuarantine and the .corrupt.json assertion goes red.
+test('ROOT1/H2: a corrupt journal is quarantined (exact bytes preserved), not silently overwritten', () => {
+  const cwd = mk();
+  const home = mk();
+  const dir = path.join(cwd, '.claude', 'coalhearth');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const jp = path.join(dir, 'session_handoff.json');
+    const corrupt = '{ half-written torn json ][';
+    fs.writeFileSync(jp, corrupt);
+    const r = run(cwd, home, JSON.stringify({ session_id: 'S', tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'x.js') } }));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const quarantine = path.join(dir, 'session_handoff.corrupt.json');
+    assert.ok(fs.existsSync(quarantine), 'the corrupt bytes are quarantined aside');
+    assert.strictEqual(fs.readFileSync(quarantine, 'utf8'), corrupt, 'the exact corrupt bytes are preserved');
+    const j = JSON.parse(fs.readFileSync(jp, 'utf8')); // a valid fresh journal was written
+    assert.strictEqual(j.status, 'in_progress');
+    assert.deepStrictEqual(j.modifiedFiles, ['x.js']);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ROOT 2 / H3 (no session identity — contamination half). recordStep now stamps the
+// payload's session_id into the journal (CoalWash's estate guard reads it; the resume block
+// prints it) AND keys "same session" on that id, so a DIFFERENT session writing into the same
+// in_progress journal does NOT inherit the prior session's files. RED-PROOF: drop the
+// sessionId thread in bin/post-tool-use.js (or revert recordStep's id-keyed sameSession to
+// status-only) and the second block's assertions go red.
+test('ROOT2/H3: the journal is stamped with session_id, and a different session does not inherit prior files', () => {
+  const cwd = mk();
+  const home = mk();
+  const jp = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
+  try {
+    run(cwd, home, JSON.stringify({ session_id: 'sess-A', tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'a0.js') } }));
+    run(cwd, home, JSON.stringify({ session_id: 'sess-A', tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'a1.js') } }));
+    let j = JSON.parse(fs.readFileSync(jp, 'utf8'));
+    assert.strictEqual(j.sessionId, 'sess-A', 'the journal is stamped with the owner session id (was always undefined before)');
+    assert.deepStrictEqual(j.modifiedFiles, ['a0.js', 'a1.js']);
+
+    // Session B (different id) writes into A's still-in_progress journal.
+    run(cwd, home, JSON.stringify({ session_id: 'sess-B', tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'b0.js') } }));
+    j = JSON.parse(fs.readFileSync(jp, 'utf8'));
+    assert.strictEqual(j.sessionId, 'sess-B', 'B now owns the journal');
+    assert.deepStrictEqual(j.modifiedFiles, ['b0.js'], 'B did NOT inherit A\'s files (cross-session contamination prevented)');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });

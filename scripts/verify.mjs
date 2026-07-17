@@ -21,7 +21,6 @@ for (const [label, p] of [
   ['bin/post-tool-use.js', path.join(repo, 'bin', 'post-tool-use.js')],
   ['lib/handoff-journal.js', path.join(repo, 'lib', 'handoff-journal.js')],
   ['lib/resume-engine.js', path.join(repo, 'lib', 'resume-engine.js')],
-  ['lib/budget-tracker.js', path.join(repo, 'lib', 'budget-tracker.js')],
   ['config/schema.json', path.join(repo, 'config', 'schema.json')],
   ['hooks/hooks.json', path.join(repo, 'hooks', 'hooks.json')],
   ['commands/update.md', path.join(repo, 'commands', 'update.md')],

@@ -118,18 +118,23 @@ function mergeInFlightAgents(priorAgents, spawn) {
 /**
  * Builds the HandoffJournal state snapshot from the local workspace.
  * @param {string} [cwd] workspace root to read from (default process.cwd()).
- * @param {{priorModifiedFiles?: string[], touchedFile?: string,
+ * @param {{sessionId?: string, priorModifiedFiles?: string[], touchedFile?: string,
  *          priorInFlightAgents?: Array, spawn?: Object}} [opts]
+ *   sessionId = the hook payload's session id — WHO owns this journal (H3 identity: the
+ *     resume block prints it, recordStep matches it so a second session in the same
+ *     workspace can't clobber this one, CoalWash's estate guard protects that session's
+ *     transcript). Absent -> the field is omitted (JSON drops undefined), old behavior;
  *   priorModifiedFiles = the previous journal's accumulated list (same session);
  *   touchedFile = the file path the CURRENT tool call modified, if any;
  *   priorInFlightAgents = the previous journal's accumulated spawn records;
  *   spawn = an in-flight-subagent record if THIS tool call was an Agent/Task spawn.
- * @returns {{status:string, checklist:Array, modifiedFiles:string[],
+ * @returns {{sessionId?:string, status:string, checklist:Array, modifiedFiles:string[],
  *            inFlightAgents:Array, activePlan:Object}}
  */
 function buildStateSnapshot(cwd = process.cwd(), opts = {}) {
   const { goal, checklist, nextSteps } = parseTaskMd(cwd);
   return {
+    sessionId: typeof opts.sessionId === 'string' && opts.sessionId ? opts.sessionId : undefined,
     status: 'in_progress',
     checklist,
     modifiedFiles: mergeModifiedFiles(cwd, opts.priorModifiedFiles, opts.touchedFile),

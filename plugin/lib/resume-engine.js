@@ -10,10 +10,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { containedOutputDir } = require('./contained-dir.js');
+// One source of truth for the journal file layout + the atomic writer (H6/H7 one-flock:
+// mark-resumed and quarantine go through the SAME per-pid temp+rename as HandoffJournal.save).
+const { atomicWriteJournal, JOURNAL_NAME: JOURNAL_FILE, CORRUPT_NAME: CORRUPT_FILE } = require('./handoff-journal.js');
 
-const JOURNAL_FILE = 'session_handoff.json';
-const CORRUPT_FILE = 'session_handoff.corrupt.json';
-const RESUMABLE_STATUSES = new Set(['in_progress', 'limit_reached']);
+// Only 'in_progress' is ever written now. 'limit_reached' was the status the retired budget
+// guardrail was meant to set on a limit-hit, but NO code path ever wrote it (buildStateSnapshot
+// always writes 'in_progress') — removed with the guardrail rather than left as a dead branch.
+const RESUMABLE_STATUSES = new Set(['in_progress']);
+const asArray = (v) => (Array.isArray(v) ? v : []); // H4: a wrong-typed field never .map()-throws
 
 // Scoped orphan sweep (MEMORY.md Incident B: a limit-killed worker cannot run its
 // own finally-cleanup, so it leaves scratch files [probe_*.mjs, __probe_*.mjs] a
@@ -81,12 +86,27 @@ class ResumeEngine {
    */
   _quarantine(journalPath, raw) {
     try {
-      fs.writeFileSync(path.join(this.outputDir, CORRUPT_FILE), raw, 'utf8');
+      atomicWriteJournal(this.outputDir, CORRUPT_FILE, raw); // per-pid temp+rename (H6/H7)
       fs.rmSync(journalPath, { force: true });
     } catch {
       // ponytail: best-effort cleanup; a stuck corrupt file is still non-fatal,
       // detectAbortedSession's JSON.parse guard keeps every future boot clean too.
     }
+  }
+
+  /**
+   * Marks a detected journal `resumed` so a later boot won't re-detect it (and the
+   * contamination guard's status proxy holds for id-less sessions). ATOMIC (per-pid
+   * temp+rename, H6/H7) — the old inline fs.writeFileSync in each hook wrote the live
+   * journal directly, so a crash mid-write left a torn journal that then read as corrupt.
+   * Fail-silent boolean: false on a read-only fs (the hook appends its honest "may repeat"
+   * note) or an uncontained dir. The two SessionStart adapters share this ONE writer.
+   * @param {Object} data the detected journal (its sessionId/lists are preserved).
+   * @returns {boolean} whether the mark stuck.
+   */
+  markResumed(data) {
+    if (!this.outputDir) return false;
+    return atomicWriteJournal(this.outputDir, JOURNAL_FILE, JSON.stringify({ ...data, status: 'resumed' }, null, 2));
   }
 
   /**
@@ -97,15 +117,21 @@ class ResumeEngine {
   generateHandoffPrompt(data) {
     if (!data) return '';
 
-    const plan = data.activePlan || {};
-    const checklist = (data.checklist || [])
+    // H4: every list is coerced with asArray() before .map — a corrupt/foreign journal whose
+    // checklist/modifiedFiles/inFlightAgents/nextSteps/constraints is a non-array (a string, a
+    // number) must NOT throw here. A throw would be swallowed fail-silent AND (before the
+    // reorder in the hooks) leave the journal already marked `resumed` = permanently
+    // unrecoverable. checklist items are filtered to objects for the same reason.
+    const plan = (data.activePlan && typeof data.activePlan === 'object') ? data.activePlan : {};
+    const checklist = asArray(data.checklist)
+      .filter((item) => item && typeof item === 'object')
       .map((item) => `- [${item.status === 'done' ? 'x' : item.status === 'doing' ? '/' : ' '}] ${item.task}`)
       .join('\n') || 'None';
-    const files = (data.modifiedFiles || []).map((f) => `- \`${f}\``).join('\n') || 'None';
+    const files = asArray(data.modifiedFiles).map((f) => `- \`${f}\``).join('\n') || 'None';
     // In-flight subagents at interruption (Incident E). HONEST SCOPE: this lists that
     // a sub was RUNNING + where its residue may live — it does NOT recover the sub's
     // work (a killed sub journals nothing); the resumed session verifies/re-spawns.
-    const agents = (data.inFlightAgents || [])
+    const agents = asArray(data.inFlightAgents)
       .filter((a) => a && typeof a === 'object')
       .map((a) => {
         const type = a.subagentType ? ` [${a.subagentType}]` : '';
@@ -114,11 +140,9 @@ class ResumeEngine {
         return `- ${a.description || '(no description)'}${type}${out}${at}`;
       })
       .join('\n') || 'None';
-    const nextSteps = (plan.nextSteps || []).map((s) => `- ${s}`).join('\n') || 'None';
-    const constraints = (plan.constraints || []).map((c) => `- ${c}`).join('\n') || 'None';
-    const staleNote = data.status === 'limit_reached'
-      ? 'The session hit its budget limit mid-work — some listed files may be partially edited.'
-      : 'The session was interrupted before it reported completion.';
+    const nextSteps = asArray(plan.nextSteps).map((s) => `- ${s}`).join('\n') || 'None';
+    const constraints = asArray(plan.constraints).map((c) => `- ${c}`).join('\n') || 'None';
+    const staleNote = 'The session was interrupted before it reported completion.';
 
     const orphanNote = data._orphanSweep && (data._orphanSweep.scratch || data._orphanSweep.worktrees)
       ? `\n> ⚠️ A prior worker was killed and left artifacts behind — CoalHearth swept ${data._orphanSweep.scratch || 0} scratch file(s) / ${data._orphanSweep.worktrees || 0} stale worktree(s). **Partial work from those killed workers is unrecoverable** (they journaled nothing); re-run any missing sub-task from scratch.`

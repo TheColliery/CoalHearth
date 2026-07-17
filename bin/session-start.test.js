@@ -11,6 +11,7 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const HOOK = path.join(__dirname, 'session-start.js');
+const PTU = path.join(__dirname, 'post-tool-use.js'); // the other half of the two-session flow (ROOT 2/H3)
 
 function sandbox() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ss-home-'));
@@ -27,6 +28,17 @@ function runHook(cwd, home) {
     encoding: 'utf8',
   });
 }
+
+function runPTU(cwd, home, stdin) {
+  return spawnSync(process.execPath, [PTU], {
+    cwd,
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
+    input: stdin || '',
+    encoding: 'utf8',
+  });
+}
+
+const journalOf = (cwd) => path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
 
 function cleanup(...dirs) {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
@@ -203,4 +215,85 @@ test('never walks above HOME for project config (sandbox isolation holds)', () =
     fs.rmSync(outsideMarker, { force: true });
     cleanup(home, cwd);
   }
+});
+
+// ROOT 2 / H3 (two-terminal total loss — crash-test: "deterministic total loss, no timing").
+// Session A accumulates files; a SECOND session B boots (SessionStart) in the same workspace
+// and flips the shared journal to 'resumed'. Before the fix, A's next tool call saw
+// status != 'in_progress', rebuilt from EMPTY, and DISCARDED all of A's accumulated files.
+// Now A's step keys "same session" on its OWN id (which the boot preserved), so A keeps its
+// journal. RED-PROOF: revert recordStep's sameSession to `prior.status === 'in_progress'`
+// only, and A's earlier files vanish after B boots (goes red).
+test('ROOT2/H3: a second session booting does not make the first lose its accumulated journal', () => {
+  const { home, cwd } = sandbox();
+  muteUpdate(home);
+  try {
+    for (let i = 0; i < 3; i++) {
+      runPTU(cwd, home, JSON.stringify({ session_id: 'sess-A', tool_name: 'Write', tool_input: { file_path: path.join(cwd, `a${i}.js`) } }));
+    }
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(journalOf(cwd), 'utf8')).modifiedFiles, ['a0.js', 'a1.js', 'a2.js']);
+
+    // Session B boots in the same workspace: its SessionStart marks the shared journal resumed.
+    const b = runHook(cwd, home);
+    assert.strictEqual(b.status, 0);
+    assert.strictEqual(JSON.parse(fs.readFileSync(journalOf(cwd), 'utf8')).status, 'resumed');
+
+    // Session A's NEXT tool call must still recognise its own journal and accumulate, not discard.
+    runPTU(cwd, home, JSON.stringify({ session_id: 'sess-A', tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'a3.js') } }));
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(journalOf(cwd), 'utf8')).modifiedFiles,
+      ['a0.js', 'a1.js', 'a2.js', 'a3.js'],
+      'A kept its accumulated files after B booted (no cross-session total loss)'
+    );
+  } finally {
+    cleanup(home, cwd);
+  }
+});
+
+// ROOT 3 / H4 (a wrong-typed field crashes the prompt build AFTER mark-resumed). A journal
+// whose array fields are the wrong type (checklist a STRING, modifiedFiles an OBJECT,
+// nextSteps a STRING) must NOT throw in generateHandoffPrompt — a throw is swallowed
+// fail-silent, and before the reorder the journal was ALREADY marked 'resumed' so the
+// recovery block was lost forever (permanently unrecoverable). Now the build is
+// array-coercion-safe AND runs before the mark. RED-PROOF: revert asArray() to `|| []` in
+// lib/resume-engine.js and the block disappears (goes red).
+test('ROOT3/H4: a wrong-typed journal field still renders the recovery block (no throw, still recoverable)', () => {
+  const { home, cwd } = sandbox();
+  muteUpdate(home);
+  const outDir = path.join(cwd, '.claude', 'coalhearth');
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(journalOf(cwd), JSON.stringify({
+    sessionId: 'x', status: 'in_progress',
+    checklist: 'not-an-array',        // wrong type: strings/objects have no .map/.filter
+    modifiedFiles: { nope: true },    // wrong type
+    activePlan: { goal: 'Ship it', nextSteps: 'also-not-an-array', constraints: [] },
+  }));
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.ok(r.stdout.includes('CoalHearth Warm-Resume Recovery'), 'the recovery block renders despite wrong-typed fields');
+  assert.ok(r.stdout.includes('Ship it'), 'the goal still shows');
+  assert.strictEqual(JSON.parse(fs.readFileSync(journalOf(cwd), 'utf8')).status, 'resumed', 'marked resumed (built first, so a throw could not orphan it)');
+  cleanup(home, cwd);
+});
+
+// ROOT 3 / H5 (silent no-op when the journal dir is blocked). A FILE occupying
+// .claude/coalhearth makes containedOutputDir return null => save()/detectAbortedSession
+// no-op FOREVER with ZERO signal, so the user believes they are protected. SessionStart must
+// now say so on the sanctioned channel. RED-PROOF: remove the `if (!engine.outputDir)` note
+// in bin/session-start.js and this goes red.
+test('ROOT3/H5: a file blocking the journal dir produces a non-silent signal (not a silent no-op)', () => {
+  const { home, cwd } = sandbox();
+  muteUpdate(home);
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker'); // a FILE where the journal dir must be
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.match(r.stdout, /\[CoalHearth\][^\n]*journal directory/i, 'a one-line signal that warm-resume protection is OFF');
+  cleanup(home, cwd);
 });

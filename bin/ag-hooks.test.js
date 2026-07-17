@@ -492,18 +492,19 @@ test('ptu: CC-vocab payload passes through unchanged on the AG adapter (defensiv
   }
 });
 
-test('ptu: near-limit -> the advisory nudge is emitted as valid additionalContext JSON (never a raw line)', () => {
+// RETIRED (H7): the AG-side advisory nudge is gone (the guardrail was structurally
+// unreachable). A leftover budgets config + a payload that WOULD have tripped it now produces
+// NO additionalContext — the post hook is journal-only. AG-side "removed path is gone" proof.
+test('ptu: retired budget nudge -> NO additionalContext even with a budgets config, journal still records', () => {
   const cwd = mk();
   const home = mk();
   try {
-    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
     const r = run(PTU, cwd, home, JSON.stringify({ tool_name: 'run_command', tool_input: { command: 'x'.repeat(400) } }));
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.stderr, '');
-    const ctx = parseInject(r.stdout); // parses -> proves it is JSON, not a raw [CoalHearth] line
-    assert.match(ctx, /advisory/);
-    assert.match(ctx, /prefer inline/);
+    assert.strictEqual(r.stdout, '', 'no nudge — the guardrail is retired (the AG post hook emits nothing)');
+    assert.strictEqual(readJournal(cwd).status, 'in_progress', 'the journal step still ran');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -601,18 +602,16 @@ test('pre filecopy: in_progress journal -> PLAIN stdout block (CC parity, not JS
   }
 });
 
-test('ptu gemini (AfterTool): write_file + replace journaled via the shared normalizer; near-limit nudge SUPPRESSED', () => {
+test('ptu gemini (AfterTool): write_file + replace journaled via the shared normalizer, journal-only (no emit)', () => {
   const cwd = mk();
   const home = mk();
   try {
-    // A tiny budget so the advisory WOULD fire — proving the Gemini suppression, not a quiet pass.
-    fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
     const r1 = run(PTU, cwd, home, JSON.stringify({
       tool_name: 'write_file', // Gemini's write tool
       tool_input: { file_path: path.join(cwd, 'src', 'g.js'), content: 'x'.repeat(400) },
     }), null, 'AfterTool');
     assert.strictEqual(r1.status, 0);
-    assert.strictEqual(r1.stdout, '', 'near-limit on Gemini -> nudge suppressed (no verified AfterTool inject channel)');
+    assert.strictEqual(r1.stdout, '', 'the post hook is journal-only (the advisory nudge was retired)');
     assert.strictEqual(r1.stderr, '');
     assert.deepStrictEqual(readJournal(cwd).modifiedFiles, [path.join('src', 'g.js')], 'write_file mapped to a journal step');
 
@@ -621,26 +620,8 @@ test('ptu gemini (AfterTool): write_file + replace journaled via the shared norm
       tool_input: { file_path: path.join(cwd, 'h.js'), old_string: 'a', new_string: 'b'.repeat(400) },
     }), null, 'AfterTool');
     assert.strictEqual(r2.status, 0);
-    assert.strictEqual(r2.stdout, '', 'suppressed on the edit-tool path too');
+    assert.strictEqual(r2.stdout, '', 'journal-only on the edit-tool path too');
     assert.deepStrictEqual(readJournal(cwd).modifiedFiles, [path.join('src', 'g.js'), 'h.js'], 'replace accumulates onto the same session');
-  } finally {
-    fs.rmSync(cwd, { recursive: true, force: true });
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('ptu filecopy: near-limit -> the plain [CoalHearth] stdout nudge (CC parity, not JSON), journal written', () => {
-  const cwd = mk();
-  const home = mk();
-  try {
-    fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
-    const r = run(PTU, cwd, home, JSON.stringify({ tool_name: 'run_command', tool_input: { command: 'x'.repeat(400) } }), null, 'FileCopy');
-    assert.strictEqual(r.status, 0);
-    assert.strictEqual(r.stderr, '');
-    assert.match(r.stdout, /^\[CoalHearth\] /, 'the CC-shaped platforms get bin/post-tool-use.js\'s exact channel');
-    assert.match(r.stdout, /prefer inline/);
-    assert.ok(!r.stdout.trimStart().startsWith('{'), 'plain line, never a JSON wrapper');
-    assert.strictEqual(readJournal(cwd).status, 'in_progress', 'the journal step ran regardless');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
