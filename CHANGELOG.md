@@ -2,6 +2,13 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.0.2] - 2026-07-17
+
+**PATCH** — CI-green fix-forward for v2.0.1 (macOS). Test-only; no shipped-code change.
+
+### Fixed
+- **The `sandbox()` test helper now realpath's its tmpdir dirs — fixes ROOT2/H3 on macOS.** On macOS `os.tmpdir()` is `/var` → `/private/var` (a symlink); a spawned hook's `process.cwd()` returns the resolved `/private/var` form, so the test's lexical `/var/...` file paths and the hook's physical cwd disagreed in `path.relative` (`mergeModifiedFiles`) → the journal stored absolute paths while ROOT2/H3 asserted relative. `sandbox()` now `fs.realpathSync`-resolves `home`/`cwd` at creation (no-op off macOS), matching the other six sandbox helpers in the repo (one-flock). The production hot-path stays lexical (realpath there breaks on not-yet-written files, per the series rule). Together with v2.0.1's read-only-fs fix, CI is green on all platforms.
+
 ## [2.0.1] - 2026-07-17
 
 **PATCH** — CI-green fix-forward for v2.0.0. Test-only; no shipped-code change.
