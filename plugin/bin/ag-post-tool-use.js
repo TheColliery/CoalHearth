@@ -108,11 +108,15 @@ try {
     // not JSON -- nothing to record from the payload
   }
 
-  // payload.cwd = the AUTHORITATIVE workspace; AG's hook spawn cwd is not guaranteed to
-  // be it, and the journal MUST land at the workspace. chdir once at entry, BEFORE
-  // loadConfig/recordStep — same mechanism + rationale as bin/ag-pre-invocation.js
-  // (one-flock with CoalWash's AG adapter). chdir-fail -> keep spawn cwd, best-effort.
-  const wsCwd = firstString(agPayload, ['cwd', 'Cwd']);
+  // The payload names the AUTHORITATIVE workspace; AG's hook spawn cwd is not it (hook
+  // cwd = the hooks.json dir), and the journal MUST land at the workspace. chdir once at
+  // entry, BEFORE loadConfig/recordStep — same mechanism + rationale as
+  // bin/ag-pre-invocation.js (one-flock with CoalFace's AG adapter): `workspacePaths[0]`
+  // = the current AG spec's field (re-derived 2026-07-23), `cwd` = the legacy-AG +
+  // named-mode fallback. chdir-fail -> keep spawn cwd, best-effort.
+  const wsPaths = agPayload && agPayload.workspacePaths;
+  const wsCwd = (Array.isArray(wsPaths) && typeof wsPaths[0] === 'string' && wsPaths[0])
+    ? wsPaths[0] : firstString(agPayload, ['cwd', 'Cwd']);
   if (wsCwd) { try { process.chdir(wsCwd); } catch { /* keep spawn cwd */ } }
 
   const cfg = loadConfig();
@@ -125,7 +129,13 @@ try {
   }
 
   recordStep(process.cwd(), cfg, {
-    sessionId: firstString(agPayload, ['session_id', 'sessionId']), // H3: stamp WHO owns this journal
+    // H3: stamp WHO owns this journal. conversationId = the current AG spec's session
+    // identity (re-derived 2026-07-23); session_id/sessionId stay as legacy fallbacks.
+    sessionId: firstString(agPayload, ['conversationId', 'session_id', 'sessionId']),
+    // One-flock with the CC adapter: record the transcript path if the platform gives one, so
+    // the resume block can flag a GC'd transcript. Absent on a platform that doesn't ship it
+    // -> omitted -> no GC check there (degrade-safe; non-CC transcripts aren't CC-GC'd anyway).
+    transcriptPath: firstString(agPayload, ['transcript_path', 'transcriptPath']),
     touchedFile: parsed.touchedFile,
     spawn: parsed.spawn,
   });

@@ -12,7 +12,11 @@
 
 ![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
 ![Antigravity: wired](https://img.shields.io/badge/Antigravity-wired-yellow)
-![Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment: wired](https://img.shields.io/badge/Gemini_CLI_·_Copilot_CLI_·_Devin_CLI_·_Kiro_·_Augment-wired-yellow)
+![Gemini CLI: wired](https://img.shields.io/badge/Gemini_CLI-wired-yellow)
+![Copilot CLI: wired](https://img.shields.io/badge/Copilot_CLI-wired-yellow)
+![Devin CLI: wired](https://img.shields.io/badge/Devin_CLI-wired-yellow)
+![Kiro: wired](https://img.shields.io/badge/Kiro-wired-yellow)
+![Augment: wired](https://img.shields.io/badge/Augment-wired-yellow)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
@@ -38,8 +42,9 @@ CoalHearth **reduces the damage** of a session interruption — it does **not** 
 
 - The recovery journal is a **best-effort snapshot**, not a guarantee it's still accurate — code may have moved since the last save, which is exactly why the recovery block tells the agent to verify against git.
 - Work done by **fanned-out workers** that die on a limit is **unrecoverable** — they journal nothing. The journal snapshots the *main* session only.
+- Claude Code keeps its own session transcript, but **retention is version-dependent, not the guaranteed 30 days its docs suggest** — a transcript can be garbage-collected early, before you `--resume` it. CoalHearth's journal is a separate, local net that doesn't depend on it, and the recovery block flags a transcript that's already gone.
 
-Honest sell: **less lost work on an interruption, plus an early low-headroom nudge** — not a limit-proof session.
+Honest sell: **less lost work on an interruption** — not a limit-proof session.
 
 ## 🚀 Install
 
@@ -86,7 +91,7 @@ Copy-Item -Recurse CoalHearth "$env:USERPROFILE\.gemini\config\skills\coalhearth
 
 Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<workspace>/.agents/hooks.json` (per project) **or** `~/.gemini/config/hooks.json` (global), and replace `__COALHEARTH_DIR__` with the copied directory. Event mapping (AG never fires `SessionStart`): warm-resume rides the **first `PreInvocation`** of a session — a per-session temp marker keeps it once-per-session, since PreInvocation fires per model call — and the journal rides `PostToolUse`.
 
-Known limits on AG: delivery of the injected `additionalContext` is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
+Known limits on AG: delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
 ### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — wired (config-only ports)
 

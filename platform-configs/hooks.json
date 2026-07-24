@@ -16,7 +16,8 @@
 //                     (a per-session tmp marker guards against re-injecting every turn).
 //   PostToolUse    -> ag-post-tool-use.js  : the handoff journal step, every tool call.
 // Both fail-silent, zero-dep, no network, no child process; the only output is the
-// sanctioned additionalContext JSON.
+// sanctioned {"injectSteps":[{"ephemeralMessage":...}]} JSON (the current AG contract;
+// input payload is camelCase protojson: conversationId, workspacePaths[], transcriptPath).
 {
   "coalhearth": {
     "PreInvocation": [

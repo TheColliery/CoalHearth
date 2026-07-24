@@ -2,6 +2,21 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.1.0] - 2026-07-24
+
+**MINOR** — two batches: transcript-GC recovery honesty (2026-07-22) and an Antigravity contract re-derivation (2026-07-23), plus close-out wording fixes left over from the v2.0.0 budget-guardrail removal.
+
+### Added
+- **Transcript-GC recovery honesty.** The journal now records the session's Claude Code transcript path (`bin/post-tool-use.js` / `bin/ag-post-tool-use.js` → `lib/journal-step.js` → `lib/state-snapshot.js`, set-or-omit exactly like `sessionId`), and `ResumeEngine.generateHandoffPrompt` (`lib/resume-engine.js`) `fs.statSync`s it on resume: a transcript CC has since garbage-collected (retention is version-dependent, not the guaranteed 30 days its docs imply — field-confirmed 2026-07-22, a ~4-day-old session was already gone) now flags "`claude --resume` is dead for this session" and, if CoalWash is installed, routes deeper recovery to its read-only `estate-search`/`estate-restore` (the CH×CW seam) — degrade-safe when CoalWash is absent, ENOENT-only so a stat glitch never false-cries GC'd. The preventive counterpart (archive the transcript into CoalWash's estate before CC's startup GC) was evaluated and **cut as over-engineering** (board 2026-07-22): CH recovers work-state from its own journal, and a lost transcript is re-derivable conversation history, not load-bearing work-state. +2 hermetic tests (`lib/state-snapshot.test.js`, `scripts/lib/engine.test.mjs`).
+
+### Fixed
+- **Antigravity adapters re-derived against the current PreInvocation/PostToolUse contract** (`bin/ag-pre-invocation.js`, `bin/ag-post-tool-use.js`; re-derived 2026-07-23 from the installed engine's own docs). Workspace resolution now reads `workspacePaths[0]` (the current spec's field) before the `cwd`/`Cwd` fallback; the once-per-session key and journal-owner stamp read `conversationId` before `session_id`/`sessionId`. Emit moves to the current output contract, `{"injectSteps":[{"ephemeralMessage":...}]}` — the pilot-era `{"additionalContext":...}` key is a **dead letter** in the shipped engine (0 hits) and is no longer emitted (no dual-emit: an unrecognized field can drop the whole protojson payload). `ephemeralMessage` (a transient system message) is the right step type for a recovery block. The shared assertion helper + session fixture in `bin/ag-hooks.test.js` now check the current shape; +2 new regression tests pin the full current-spec payload (`workspacePaths[]`/`conversationId`, no `cwd`/`session_id`) end to end → 133 total. Tier stays **wired** (hermetically tested against the spec; no live AG session has run either shape).
+- **`plugin.json` (×2) + `marketplace.json` description/keywords still said "budget-guardrail"** — the guardrail was removed at v2.0.0. Wording corrected to "handover journal"; the `budget-guardrail` keyword replaced with `handoff-journal`.
+
+### Changed
+- README: the retention line drops the stale "early low-headroom nudge" mention (that nudge died with the budget guardrail at v2.0.0) and states the version-dependent-retention baseline plainly; the combined platform badge splits into one badge per platform (Gemini CLI / Copilot CLI / Devin CLI / Kiro / Augment); the AG "known limits" line now names `injectSteps`/`ephemeralMessage` instead of `additionalContext`.
+- SECURITY.md's Antigravity emit-shape line, `platform-configs/hooks.json`, `platform-configs/hooks/README.md`, and `gemini-settings-hooks.json`'s comments all updated to reflect the `injectSteps` contract (Gemini's own nested `hookSpecificOutput.additionalContext` shape is untouched — that key belongs to Gemini's SessionStart, not AG's PreInvocation, and is still current).
+
 ## [2.0.2] - 2026-07-17
 
 **PATCH** — CI-green fix-forward for v2.0.1 (macOS). Test-only; no shipped-code change.

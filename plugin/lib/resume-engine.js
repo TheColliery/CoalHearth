@@ -155,10 +155,30 @@ class ResumeEngine {
       ? ''
       : '\n> Before continuing, consider `git stash` (or a WIP commit) to protect any uncommitted work the interrupted session left behind.';
 
+    // GC'd-transcript detection. data.transcriptPath = the aborted session's CC transcript,
+    // recorded at journal-write time. CC hard-`unlink()`s transcripts on a version-dependent
+    // retention sweep (field: a ~4-day-old one was already gone; the "30-day" default is not
+    // reliable — GH#59248 drift + a startup-only GC). If it's gone, `claude --resume` for this
+    // session is dead, so the block must NOT imply a live resume path — say it's GC'd and route
+    // deeper recovery to CoalWash's estate index (the CH×CW seam), degrade-safe if CW is absent.
+    // Read-only (fs.statSync — no read of content, no write, no delete through the path).
+    let transcriptGone = false;
+    if (typeof data.transcriptPath === 'string' && data.transcriptPath) {
+      try {
+        fs.statSync(data.transcriptPath); // present -> the resume path is still alive
+      } catch (err) {
+        if (err && err.code === 'ENOENT') transcriptGone = true; // truly absent -> GC'd
+        // any other stat error (EACCES, a glitch) -> leave false; never cry "GC'd" on a fluke
+      }
+    }
+    const transcriptNote = transcriptGone
+      ? `\n> ⚠️ The Claude Code transcript for this session (\`${data.transcriptPath}\`) has been **garbage-collected** — CC's transcript retention is version-dependent, not the guaranteed 30 days its docs imply, so \`claude --resume\` for this session will not work. **The journal below is your recovery source.** If a needed fact predates or slipped past the journal and **CoalWash** is installed, dig the archived transcripts (read-only): \`node <CoalWash>/scripts/lib/cli.mjs estate-search <topic>\` then \`estate-restore\` — skip if CoalWash is not installed.`
+      : '';
+
     return `> [!IMPORTANT]
 > **CoalHearth Warm-Resume Recovery**
 > Session \`${data.sessionId || 'unknown'}\` (last update: ${data.timestamp || 'unknown'}) looks interrupted.
-> ${staleNote} **Do not blind-trust this snapshot** — verify it against the actual repo state (\`git status\`, \`git diff\`) before continuing; the journal may be stale or half-applied.${orphanNote}${stashNote}
+> ${staleNote} **Do not blind-trust this snapshot** — verify it against the actual repo state (\`git status\`, \`git diff\`) before continuing; the journal may be stale or half-applied.${transcriptNote}${orphanNote}${stashNote}
 
 ### Goal
 ${plan.goal || 'N/A'}

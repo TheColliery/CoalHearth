@@ -72,12 +72,16 @@ function hashKey(s) {
   for (let i = 0; i < s.length; i++) h = (((h << 5) + h + s.charCodeAt(i)) >>> 0);
   return h.toString(36);
 }
-// The sanctioned AG channel: stdout must be EMPTY or exactly one additionalContext JSON.
+// The sanctioned AG channel: stdout must be EMPTY or exactly one injectSteps JSON — the
+// CURRENT PreInvocation output contract (re-derived 2026-07-23; the pilot-era
+// additionalContext key is a dead letter in the engine and must NOT appear).
 function parseInject(stdout) {
   if (stdout === '') return null;
   const obj = JSON.parse(stdout.trim()); // throws if stdout is not the sanctioned JSON -> test fails
-  assert.ok(Object.prototype.hasOwnProperty.call(obj, 'additionalContext'), 'the only sanctioned emit is additionalContext JSON');
-  return obj.additionalContext;
+  assert.deepStrictEqual(Object.keys(obj), ['injectSteps'], 'injectSteps is the ONLY key (current AG PreInvocation output contract)');
+  assert.strictEqual(obj.injectSteps.length, 1, 'exactly one injected step');
+  assert.deepStrictEqual(Object.keys(obj.injectSteps[0]), ['ephemeralMessage'], 'ephemeralMessage (transient system message) is the step type');
+  return obj.injectSteps[0].ephemeralMessage;
 }
 
 const IN_PROGRESS = {
@@ -88,9 +92,12 @@ const IN_PROGRESS = {
   modifiedFiles: ['lib/widget.js'],
   activePlan: { goal: 'Ship the widget', nextSteps: ['write tests'], constraints: ['no network'] },
 };
-// No `cwd` field: the hooks honor payload.cwd (chdir) when present, so the plain fixture
-// leaves the spawn cwd in charge; the cwd-mismatch regression tests set it explicitly.
-const SID = JSON.stringify({ session_id: 'ag-session-1' });
+// No workspace field: the hooks honor payload workspacePaths[0]/cwd (chdir) when present,
+// so the plain fixture leaves the spawn cwd in charge; the workspace-mismatch regression
+// tests set it explicitly. conversationId = the CURRENT spec's session key (re-derived
+// 2026-07-23); the legacy session_id/sessionId/transcript_path fallbacks keep their own
+// coverage in the tests below.
+const SID = JSON.stringify({ conversationId: 'ag-session-1' });
 
 // =====================================================================================
 // ag-pre-invocation.js — the SessionStart replacement (PreInvocation, once per session)
@@ -231,7 +238,7 @@ test('pre: a pre-existing marker path -> EEXIST silent skip (no re-inject even w
     writeJournal(cwd, IN_PROGRESS); // resumable: an un-guarded run WOULD emit
     const markerDir = path.join(home, 'coalhearth');
     fs.mkdirSync(markerDir, { recursive: true });
-    fs.writeFileSync(path.join(markerDir, `ag-resume-${hashKey('ag-session-1')}.marker`), 'planted', 'utf8'); // SID's session_id
+    fs.writeFileSync(path.join(markerDir, `ag-resume-${hashKey('ag-session-1')}.marker`), 'planted', 'utf8'); // SID's conversationId
     const r = run(PRE, cwd, home, SID);
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.stdout, '', 'pre-existing marker -> EEXIST -> no emit');
@@ -332,6 +339,58 @@ test('regression ptu: spawn cwd != payload.cwd -> journal lands at the PAYLOAD w
     assert.strictEqual(r.stderr, '');
     const j = readJournal(workspace); // throws if the journal is not at the workspace -> test fails
     assert.deepStrictEqual(j.modifiedFiles, [path.join('src', 'w.js')], 'path stored relative to the WORKSPACE');
+    assert.strictEqual(fs.existsSync(path.join(spawnDir, '.claude')), false, 'nothing created at the spawn dir');
+  } finally {
+    fs.rmSync(spawnDir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// CURRENT AG spec (re-derived 2026-07-23): the payload carries conversationId +
+// workspacePaths[] (no cwd, no session_id). Both adapters must run fully on that shape —
+// workspacePaths[0] is the workspace, conversationId keys the once-per-session guard and
+// stamps the journal owner.
+test('current-spec pre: conversationId + workspacePaths -> resume at workspacePaths[0], conversationId keys the guard', () => {
+  const spawnDir = mk(); // NOT the workspace — workspacePaths[0] must win
+  const workspace = mk();
+  const home = mk();
+  try {
+    writeJournal(workspace, IN_PROGRESS);
+    const payload = JSON.stringify({ conversationId: 'conv-spec-1', workspacePaths: [workspace] });
+    const r1 = run(PRE, spawnDir, home, payload);
+    assert.strictEqual(r1.status, 0);
+    assert.strictEqual(r1.stderr, '');
+    assert.match(parseInject(r1.stdout), /Warm-Resume Recovery/, 'workspacePaths[0] drives the journal read (no cwd in the current spec)');
+    assert.strictEqual(readJournal(workspace).status, 'resumed', 'mark-resumed landed at workspacePaths[0]');
+    assert.strictEqual(fs.existsSync(path.join(spawnDir, '.claude')), false, 'nothing created at the spawn dir');
+
+    const r2 = run(PRE, spawnDir, home, payload);
+    assert.strictEqual(r2.status, 0);
+    assert.strictEqual(r2.stdout, '', 'conversationId keys the once-per-session guard');
+  } finally {
+    fs.rmSync(spawnDir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('current-spec ptu: conversationId + workspacePaths -> journal at workspacePaths[0], owner stamped from conversationId', () => {
+  const spawnDir = mk();
+  const workspace = mk();
+  const home = mk();
+  try {
+    const r = run(PTU, spawnDir, home, JSON.stringify({
+      conversationId: 'conv-spec-2',
+      workspacePaths: [workspace],
+      tool_name: 'write_to_file',
+      tool_input: { file_path: path.join(workspace, 'src', 'ws.js') },
+    }));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const j = readJournal(workspace); // throws if the journal is not at the workspace -> test fails
+    assert.deepStrictEqual(j.modifiedFiles, [path.join('src', 'ws.js')], 'path stored relative to workspacePaths[0]');
+    assert.strictEqual(j.sessionId, 'conv-spec-2', 'conversationId stamps the journal owner (H3)');
     assert.strictEqual(fs.existsSync(path.join(spawnDir, '.claude')), false, 'nothing created at the spawn dir');
   } finally {
     fs.rmSync(spawnDir, { recursive: true, force: true });

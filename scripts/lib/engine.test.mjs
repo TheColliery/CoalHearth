@@ -227,6 +227,34 @@ test('ResumeEngine.generateHandoffPrompt lists in-flight subagents (Incident E),
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+// GC'd-transcript detection (recovery honesty): CC hard-unlinks transcripts on a
+// version-dependent retention sweep, so a journaled transcriptPath can be GONE by resume
+// time. When it is, the block must flag it (dead `--resume`) and route deeper recovery to
+// CoalWash's estate-search (the CH×CW seam) — never imply a live resume path. A present or
+// unrecorded transcriptPath -> no note (current behavior unchanged).
+test("ResumeEngine.generateHandoffPrompt flags a GC'd transcript + points at CoalWash estate-search", () => {
+  const d = tmp();
+  const engine = new ResumeEngine({ outputDirectory: d }, {}, d);
+  const base = {
+    sessionId: 's1', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+    checklist: [], modifiedFiles: [], activePlan: { goal: 'X', nextSteps: [], constraints: [] },
+  };
+  // (a) transcriptPath points at a file that no longer exists -> GC note + estate-search.
+  const gonePath = path.join(d, 'projects', 'proj', 'gone-session.jsonl'); // never created
+  const goneMd = engine.generateHandoffPrompt({ ...base, transcriptPath: gonePath });
+  assert.match(goneMd, /garbage-collected/i, 'GC note present when the transcript is gone');
+  assert.match(goneMd, /claude --resume/, 'names the dead resume path');
+  assert.match(goneMd, /estate-search <topic>/, 'points at CoalWash estate-search (the CH×CW seam)');
+  assert.match(goneMd, /skip if CoalWash is not installed/i, 'degrade-safe: names the CW-absent skip');
+  // (b) transcriptPath points at an EXISTING file -> NO GC note (resume path still alive).
+  const livePath = path.join(d, 'live-session.jsonl');
+  fs.writeFileSync(livePath, '{}');
+  assert.doesNotMatch(engine.generateHandoffPrompt({ ...base, transcriptPath: livePath }), /garbage-collected/i, 'present transcript -> no GC note');
+  // (c) NO transcriptPath (an old journal, pre-this-feature) -> NO GC note.
+  assert.doesNotMatch(engine.generateHandoffPrompt(base), /garbage-collected/i, 'no transcriptPath -> no GC note');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', () => {
   const root = tmp();
   try {

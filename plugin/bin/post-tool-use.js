@@ -38,6 +38,10 @@ try {
 
   recordStep(process.cwd(), cfg, {
     sessionId: firstString(payload, ['session_id', 'sessionId']), // H3: stamp WHO owns this journal
+    // The session's transcript path — recorded so the resume block can stat it and detect a
+    // transcript CC has since garbage-collected (retention is version-dependent; a GC'd one
+    // means `claude --resume` is dead — resume-engine.js routes deeper recovery from there).
+    transcriptPath: firstString(payload, ['transcript_path', 'transcriptPath']),
     touchedFile: parsed.touchedFile,
     spawn: parsed.spawn,
   });

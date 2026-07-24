@@ -34,7 +34,8 @@
 // written BEFORE the recovery block is emitted; if that write fails (e.g. a read-only
 // tmp), the block still emits but carries an honest "may repeat" note — never a silent
 // re-inject-every-turn loop. Phoenix-13 throughout: fail-silent, zero-dep, no network, no
-// child process, no process.exit(); the ONLY emit is the sanctioned additionalContext JSON.
+// child process, no process.exit(); the ONLY emit is each platform's one sanctioned
+// stdout channel (AG = the injectSteps JSON below).
 //
 // NOT validated live on ANY of these platforms (tier: wired): the emit shapes follow each
 // platform's primary docs, but no live session has proven delivery of the injected context
@@ -75,14 +76,18 @@ function main() {
   let payload = {};
   try { payload = JSON.parse(raw); } catch { /* garbage stdin -> {} -> skip below */ }
 
-  // The payload's `cwd` is the AUTHORITATIVE workspace — the locked spec provides it
-  // precisely because AG's hook spawn cwd is NOT guaranteed to be the workspace; a
-  // mismatch would silently aim the journal read/mark-resumed + sweep at the wrong dir.
-  // Mechanism = one-flock with CoalWash's AG adapter: chdir ONCE at entry — safe here
-  // because CommonJS requires are __dirname-anchored (cwd-independent) and every later
-  // path (config walk, ResumeEngine root, sweep) is MEANT to be workspace-relative.
+  // The payload names the AUTHORITATIVE workspace — AG's hook spawn cwd is NOT the
+  // workspace (documented: hook cwd = the directory containing hooks.json); a mismatch
+  // would silently aim the journal read/mark-resumed + sweep at the wrong dir.
+  // `workspacePaths[0]` = the CURRENT AG spec's field (re-derived 2026-07-23); `cwd` is
+  // kept as the legacy-AG + named-mode (Gemini/FileCopy) fallback. Mechanism = one-flock
+  // with CoalFace's AG adapter: chdir ONCE at entry — safe here because CommonJS requires
+  // are __dirname-anchored (cwd-independent) and every later path (config walk,
+  // ResumeEngine root, sweep) is MEANT to be workspace-relative.
   // chdir-fail (absent dir) -> keep the spawn cwd, best-effort (Phoenix #12).
-  const wsCwd = firstString(payload, ['cwd', 'Cwd']);
+  const wsPaths = payload.workspacePaths;
+  const wsCwd = (Array.isArray(wsPaths) && typeof wsPaths[0] === 'string' && wsPaths[0])
+    ? wsPaths[0] : firstString(payload, ['cwd', 'Cwd']);
   if (wsCwd) { try { process.chdir(wsCwd); } catch { /* keep spawn cwd */ } }
 
   let markerWritten = true;
@@ -90,10 +95,12 @@ function main() {
     // AG only. The named modes ride a genuine once-per-session event, so they need
     // neither the key nor the marker below — a missing key must not block THEIR resume.
 
-    // A per-session key is REQUIRED to guarantee once-per-session (core AG fields are
-    // snake_case; accept camelCase defensively). Absent -> we cannot dedupe across turns,
-    // so skip silently (Phoenix #12) rather than risk re-injecting on every PreInvocation.
-    const key = firstString(payload, ['session_id', 'sessionId', 'transcript_path', 'transcriptPath']);
+    // A per-session key is REQUIRED to guarantee once-per-session. `conversationId` =
+    // the CURRENT spec's documented common field (re-derived 2026-07-23); the rest stay
+    // defensive fallbacks (transcriptPath is also documented + per-conversation).
+    // Absent -> we cannot dedupe across turns, so skip silently (Phoenix #12) rather
+    // than risk re-injecting on every PreInvocation.
+    const key = firstString(payload, ['conversationId', 'session_id', 'sessionId', 'transcript_path', 'transcriptPath']);
     if (!key) return;
 
     // The once-per-session guard is an ATOMIC create-exclusive latch (CodeQL js/insecure-
@@ -139,12 +146,16 @@ function main() {
   // block so both ride the right channel: Gemini's SessionStart injects ONLY via the nested
   // hookSpecificOutput field (geminicli.com/docs/hooks/reference, verified 2026-07-15 — the
   // flat AG shape is dropped there); the CC-shaped file-copy platforms take the plain stdout
-  // block (bin/session-start.js's channel); AG takes additionalContext JSON (camelCase key,
-  // pilot-confirmed — snake_case was AG's own agent's WRONG guess).
+  // block (bin/session-start.js's channel); AG takes the CURRENT PreInvocation output
+  // contract {"injectSteps":[{"ephemeralMessage":...}]} (camelCase protojson, re-derived
+  // 2026-07-23 from the installed engine's own docs — the pilot-era `additionalContext`
+  // key is a DEAD LETTER there, 0 hits in the engine; no dual-emit, protojson may reject
+  // an unknown field and drop the whole payload). ephemeralMessage = a transient system
+  // message — the right class for a recovery block (userMessage would fabricate a user turn).
   const emit = (text) => {
     if (GEMINI) console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: text } }));
     else if (FILE_COPY) console.log(text);
-    else console.log(JSON.stringify({ additionalContext: text }));
+    else console.log(JSON.stringify({ injectSteps: [{ ephemeralMessage: text }] }));
   };
 
   // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or perms) —

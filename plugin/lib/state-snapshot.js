@@ -118,23 +118,29 @@ function mergeInFlightAgents(priorAgents, spawn) {
 /**
  * Builds the HandoffJournal state snapshot from the local workspace.
  * @param {string} [cwd] workspace root to read from (default process.cwd()).
- * @param {{sessionId?: string, priorModifiedFiles?: string[], touchedFile?: string,
- *          priorInFlightAgents?: Array, spawn?: Object}} [opts]
+ * @param {{sessionId?: string, transcriptPath?: string, priorModifiedFiles?: string[],
+ *          touchedFile?: string, priorInFlightAgents?: Array, spawn?: Object}} [opts]
  *   sessionId = the hook payload's session id — WHO owns this journal (H3 identity: the
  *     resume block prints it, recordStep matches it so a second session in the same
  *     workspace can't clobber this one, CoalWash's estate guard protects that session's
  *     transcript). Absent -> the field is omitted (JSON drops undefined), old behavior;
+ *   transcriptPath = the hook payload's transcript_path — the aborted session's CC transcript,
+ *     stat'd by the resume block to detect a GC'd transcript (a dead `--resume`). Omitted absent;
  *   priorModifiedFiles = the previous journal's accumulated list (same session);
  *   touchedFile = the file path the CURRENT tool call modified, if any;
  *   priorInFlightAgents = the previous journal's accumulated spawn records;
  *   spawn = an in-flight-subagent record if THIS tool call was an Agent/Task spawn.
- * @returns {{sessionId?:string, status:string, checklist:Array, modifiedFiles:string[],
- *            inFlightAgents:Array, activePlan:Object}}
+ * @returns {{sessionId?:string, transcriptPath?:string, status:string, checklist:Array,
+ *            modifiedFiles:string[], inFlightAgents:Array, activePlan:Object}}
  */
 function buildStateSnapshot(cwd = process.cwd(), opts = {}) {
   const { goal, checklist, nextSteps } = parseTaskMd(cwd);
   return {
     sessionId: typeof opts.sessionId === 'string' && opts.sessionId ? opts.sessionId : undefined,
+    // The aborted session's CC transcript path — stat'd by the resume block to catch a
+    // transcript CC has since garbage-collected. Omitted when absent (JSON drops undefined),
+    // exactly like sessionId; a rare payload without it just means no GC check that step.
+    transcriptPath: typeof opts.transcriptPath === 'string' && opts.transcriptPath ? opts.transcriptPath : undefined,
     status: 'in_progress',
     checklist,
     modifiedFiles: mergeModifiedFiles(cwd, opts.priorModifiedFiles, opts.touchedFile),
