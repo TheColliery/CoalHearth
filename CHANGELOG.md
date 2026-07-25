@@ -120,7 +120,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 - **Self-update wording aligned to the series gold phrasing** (one-flock conform): the SessionStart nudge and `commands/update.md` now say *web-check the latest tag vs the installed `plugin.json` version … if git/network is unavailable, say so and suggest updating manually later (never assume)* — the `git ls-remote` hard-coupling is gone (git remains a usable means, not an assumed one).
 - Relicensed from MIT to Apache-2.0. `LICENSE` is now the Apache License 2.0 (verbatim); a new `NOTICE` carries the attribution; the `plugin.json` `license` field is `Apache-2.0`. No code or behavior change.
 
-## [1.0.0] — 2026-07-02
+## [1.0.0] - 2026-07-02
 
 **First stable release.** CoalHearth graduates from beta. The recovery core (atomic per-step journal + warm-resume recovery block, two Phoenix-13 hooks) proved itself on a **live interrupted session** this cycle — not just the hermetic fake-cases — and the beta→1.0 graduation gate, **Incident E sub-flight tracking** (beta.10), closed the one honest gap the fan-out case exposed. Same code as `0.1.0-beta.10`; this promotes it to stable. Platform: Claude Code only (it *is* two hooks; no other agent platform runs them — stated in the install docs). The full hardening trail — macOS-CI symlink iteration, journal-dir containment, spawn-free snapshot (Phoenix #5), the `\Z`-anchor and realpath fixes — is in the beta entries below.
 

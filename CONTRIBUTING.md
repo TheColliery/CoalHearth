@@ -14,7 +14,7 @@ CoalHearth is the session warm-resume engine of the [TheColliery](https://github
 
 ## 💻 Developing & Testing
 
-CoalHearth is **zero-dependency** (Node.js built-ins only, Node 18+). No `npm install` and no `package.json` — the gates run directly:
+CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm install` and no `package.json` — the gates run directly:
 
 ```bash
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
@@ -46,6 +46,7 @@ CoalHearth is **hook-only by design** — the hooks ARE the product (a session-s
 | `config/schema.json` | Draft-07 JSON-Schema mirror of the config (derived from `scripts/lib/config-schema.mjs`). |
 | `hooks/hooks.json` | Hook wiring via `${CLAUDE_PLUGIN_ROOT}/bin/…`. |
 | `commands/update.md` | The `/coalhearth:update` self-update procedure (agent-side; the hook only schedules). |
+| `commands/stats.md` | The `/coalhearth:stats` measurement command (read-only journal/resume report). |
 | `scripts/` | Tool scripts: `build-plugin.mjs`, `verify.mjs`, `test.mjs`, `lib/` (ESM logic + hermetic tests). |
 | `plugin/` | Generated Claude Code plugin distribution — never hand-edit. |
 | `platform-configs/.coalhearth.json` | Commented factory default configuration. |
