@@ -124,6 +124,12 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 
 Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
 
+## 🔒 Permissions
+
+CoalHearth requests the lightest profile in the series: it reads your project's planning files (`task.md`, `AGENTS.md`) and its own journal, and writes only inside its own namespaced state (`.claude/coalhearth/`) — never your source files. No network, no exec, no subagent spawning, and no deletes outside its own scratch/lock files. Hooks are its only lifecycle capability, capability-keyed to whatever hook engine the platform ships.
+
+Full series matrix + the must-fail set: [Permission Matrix](https://github.com/TheColliery/.github/blob/main/PERMISSION-MATRIX.md)
+
 ## 📊 Benchmark
 
 Interruption damage, measured (2026-07-03, v1.0.0): on a 10-file mid-refactor, warm resume and cold restart both finished correctly with a **<1% token delta** — at small scale a strong model rebuilds state from the tree, so CoalHearth's token saving is a **large-session** effect. Its irreducible value is state **fidelity**: the in-flight sub-agent record a cold restart cannot reconstruct. Full table + honest scope: [`TheColliery/.github/benchmarks/CoalHearth`](https://github.com/TheColliery/.github/tree/main/benchmarks/CoalHearth).
