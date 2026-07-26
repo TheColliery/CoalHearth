@@ -60,8 +60,11 @@ function main() {
     // scratch/worktree artifacts it could not clean up itself. Only fires on a real
     // resume, only removes allow-listed patterns, contained under cwd. Counts feed the
     // recovery prompt (which flags the killed workers' partial work as unrecoverable).
+    // No argument: the sweep anchors to the resolved project root, the same tree the
+    // journal was read from (hooks-safety.md §8 — raw cwd would aim the delete path at
+    // a drifted subdir while the journal came from the root).
     try {
-      aborted._orphanSweep = engine.sweepOrphans(process.cwd());
+      aborted._orphanSweep = engine.sweepOrphans();
     } catch {
       // fail-silent: a failed sweep never blocks the resume
     }

@@ -320,6 +320,85 @@ test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a sy
   }
 });
 
+// SWEEP ANCHOR (station-3 HIGH #2 follow-through, 2026-07-26). The phantom-slug fix
+// anchored the journal WRITE to the resolved project root but left the delete-capable
+// sweep on raw process.cwd() (session-start.js / ag-pre-invocation.js both passed it).
+// After a cwd drift the two disagreed: the journal was found at the project root, then
+// the sweep was aimed at the subdir — so a killed worker's orphans under the project's
+// own .claude/coalhearth/ were never collected (Incident B silently unprotected).
+// hooks-safety.md §8 binds the delete path exactly as it binds the write path.
+// RED-PROOF: restore `sweepOrphans(workspaceRoot = process.cwd())` and this goes red
+// (0 swept — the sweep looks in the subdir, the orphan is at the root).
+test('ResumeEngine.sweepOrphans anchors to the project root, not a drifted cwd', () => {
+  const root = fs.realpathSync.native(tmp());
+  const sub = path.join(root, 'sub', 'dir');
+  const prevCwd = process.cwd();
+  try {
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true }); // the project marker
+    fs.mkdirSync(sub, { recursive: true });
+    const scratch = path.join(root, '.claude', 'coalhearth', 'scratch');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'probe_orphan.mjs'), 'left by a killed worker');
+
+    process.chdir(sub); // the drift the phantom-slug fix taught the WRITE path about
+    const counts = new ResumeEngine({}, {}).sweepOrphans();
+
+    assert.strictEqual(counts.scratch, 1, 'the orphan under the anchored project root is swept');
+    assert.strictEqual(fs.existsSync(path.join(scratch, 'probe_orphan.mjs')), false);
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Half-upgrade guard for the realpath variant (node/runtime.md §4). `contained()` compares
+// the root against each candidate's resolved path; BOTH must use the same canonicalizer, or
+// one directory gets spelled two ways and every legitimate sweep is silently refused.
+//
+// The axis must be 8.3, not case. Measured 2026-07-26: path.win32.relative compares
+// CASE-INSENSITIVELY (relative('C:\a\PROJ','C:\a\proj\x') === 'x'), so a mis-cased root
+// cannot expose a half-upgrade on Windows at all — a first draft of this test used casing,
+// passed under a deliberately mutated half-upgrade, and was vacuous. An 8.3 alias is a
+// genuinely different string to path.relative ('..\<longname>\x'), and plain
+// fs.realpathSync does not expand it while .native does.
+//
+// Green before and after the plain->.native swap by design — as SHIPPED both sides were
+// plain, i.e. symmetric and working, so this pins the invariant rather than fixing a live
+// break. Mutation-tested both directions 2026-07-26: reverting the ROOT side (line ~229)
+// to plain goes RED — a non-canonically-spelled root against canonical candidates refuses
+// every sweep, silently. Reverting the CANDIDATE side (line ~244) alone stays green and is
+// inert for SPELLING, because candidates are joined from an already-canonical root; it
+// still matters for a symlink target and for the \\?\ device path plain throws on.
+// 8.3 creation is a VOLUME setting, never a platform fact — probe it, skip visibly.
+const EIGHT_THREE_DIR = 'coalhearth-eight-three-guard-dir';
+test('ResumeEngine.sweepOrphans contains correctly when the root carries an 8.3 short name', (t) => {
+  const base = fs.realpathSync.native(tmp());
+  const root = path.join(base, EIGHT_THREE_DIR);
+  try {
+    fs.mkdirSync(root, { recursive: true });
+    // The alias of the only long-named entry in a fresh dir is deterministic: first 6
+    // chars, uppercased, + ~1. Confirm it actually resolves to root before relying on it
+    // (no child process — this stays zero-dep).
+    const shortRoot = path.join(base, `${EIGHT_THREE_DIR.slice(0, 6).toUpperCase()}~1`);
+    let aliased = false;
+    try { aliased = fs.realpathSync.native(shortRoot) === root; } catch { aliased = false; }
+    if (!aliased) {
+      t.skip('volume does not generate 8.3 short names — no second spelling to test');
+      return;
+    }
+    const scratch = path.join(root, '.claude', 'coalhearth', 'scratch');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, 'probe_x.mjs'), 'x');
+
+    const counts = new ResumeEngine({}, {}, root).sweepOrphans(shortRoot);
+
+    assert.strictEqual(counts.scratch, 1, 'an 8.3-spelled root must still contain-and-sweep');
+    assert.strictEqual(fs.existsSync(path.join(scratch, 'probe_x.mjs')), false);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 // Regression (audit 2026-07-02 MED, round 2): ResumeEngine's quarantine +
 // mark-resumed writes go through outputDir, so its constructor routes through the
 // same realpath containment as HandoffJournal — an untrusted outputDirectory

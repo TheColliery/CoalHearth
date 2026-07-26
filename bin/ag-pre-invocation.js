@@ -174,9 +174,11 @@ function main() {
   const aborted = engine.detectAbortedSession();
   if (!aborted) return; // nothing to resume -> silent (the once-per-session check still ran)
 
-  // Scoped resume-time orphan sweep (MEMORY.md Incident B) — same as the CC adapter.
+  // Scoped resume-time orphan sweep (MEMORY.md Incident B) — same as the CC adapter:
+  // no argument, so the delete path anchors to the resolved project root rather than a
+  // drifted cwd (hooks-safety.md §8). The entry chdir already put us in the workspace.
   try {
-    aborted._orphanSweep = engine.sweepOrphans(process.cwd());
+    aborted._orphanSweep = engine.sweepOrphans();
   } catch {
     // fail-silent: a failed sweep never blocks the resume
   }

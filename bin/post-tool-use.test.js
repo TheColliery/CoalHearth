@@ -382,3 +382,63 @@ test('PHANTOM-SLUG: a subdir of a real project anchors to the project root, not 
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Does THIS VOLUME let a child's raw process.cwd() differ from its physical spelling?
+// Case-insensitivity and 8.3 aliasing are properties of the VOLUME, never of
+// process.platform (node/runtime.md §4) — so probe, never branch on the OS name.
+// Returns null when the asymmetry is available, else the reason it is not.
+function cwdSpellingProbe(scriptDir, spelling) {
+  const probe = path.join(scriptDir, 'cwd-spelling-probe.js');
+  fs.writeFileSync(probe, 'console.log(process.cwd());console.log(require("node:fs").realpathSync.native(process.cwd()));');
+  const r = spawnSync(process.execPath, [probe], { cwd: spelling, encoding: 'utf8', timeout: 20000 });
+  if (r.error) return `probe spawn failed: ${r.error.code || r.error.message}`;
+  const [raw, physical] = String(r.stdout).trim().split(/\r?\n/);
+  return raw === physical ? `volume is case-sensitive (raw cwd "${raw}" already equals its physical spelling)` : null;
+}
+
+// SELF-CLEAN NO-DRIFT (station-3 HIGH #1, 2026-07-26). selfCleanLegacyPhantom's
+// "did drift happen" guard compared a FRESH RAW process.cwd() against a root that had
+// descended through fs.realpathSync.native. Where a volume spells one directory two
+// ways — a mis-cased cwd on any case-insensitive volume, an 8.3 alias on Windows
+// (C:\Users\RUNNER~1 on CI) — the two sides differ on the ordinary NO-DRIFT case, the
+// drift branch fires, and self-clean unlinks the session_handoff* files in the very
+// directory containedOutputDir just created: warm-resume silently dead, and an existing
+// journal/quarantine destroyed. Same bug class the pre-commit RED run caught once
+// already (comparing a value DERIVED from one side against the other) — this is that
+// bug on the axis its tests never touched.
+// RED-PROOF: restore `selfCleanLegacyPhantom(process.cwd(), rootAbs)` in
+// lib/contained-dir.js and this goes red (no journal written, quarantine unlinked).
+test('SELF-CLEAN NO-DRIFT: a non-canonically-spelled cwd is not drift — the journal it just created survives', (t) => {
+  const home = mk();
+  const projectRoot = path.join(home, 'project');
+  const misSpelled = path.join(home, 'PROJECT'); // same physical dir, second spelling
+  fs.mkdirSync(path.join(projectRoot, '.git'), { recursive: true });
+  try {
+    const why = cwdSpellingProbe(home, misSpelled);
+    if (why) {
+      t.skip(`raw-vs-physical cwd asymmetry unavailable here — ${why}`);
+      return;
+    }
+    // A forensic quarantine already sitting in the journal dir: self-clean's unlink
+    // loop matches the whole `session_handoff*` family, so a false drift destroys it.
+    const journalDir = path.join(projectRoot, '.claude', 'coalhearth');
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, 'session_handoff.corrupt.json'), '{"forensic":true}');
+
+    const r = run(misSpelled, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    // Liveness by STATE EFFECT, not by exit 0 — Phoenix #4 guarantees exit 0 on every
+    // bail path, so a dead hook and a working hook are indistinguishable by status.
+    assert.ok(
+      fs.existsSync(path.join(journalDir, 'session_handoff.json')),
+      'the journal must be written when cwd IS the project root, however it is spelled'
+    );
+    assert.ok(
+      fs.existsSync(path.join(journalDir, 'session_handoff.corrupt.json')),
+      'a pre-existing quarantine must NOT be self-cleaned — there was no drift'
+    );
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
