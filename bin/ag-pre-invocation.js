@@ -51,6 +51,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ResumeEngine } = require('../lib/resume-engine.js');
+const { findWorkspaceRoot } = require('../lib/contained-dir.js');
 const { loadConfig } = require('../lib/load-config.js');
 const { firstString } = require('../lib/journal-step.js');
 
@@ -160,11 +161,15 @@ function main() {
 
   // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or perms) —
   // warm-resume then silently no-ops FOREVER. Signal it once (AG is once-per-session-guarded
-  // above; the named modes fire once natively) and stop — there is nothing to resume.
-  if (!engine.outputDir) {
+  // above; the named modes fire once natively) and stop — there is nothing to resume. Gated on
+  // a REAL project existing here (hooks-safety.md §8): a stray/no-project cwd is silent and
+  // expected (containedOutputDir's own auto-anchor already refused it, same as the CC hook) —
+  // only warn when there IS a project and its journal dir is still blocked.
+  if (!engine.outputDir && findWorkspaceRoot(process.cwd())) {
     emit('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.');
     return;
   }
+  if (!engine.outputDir) return; // no real project here -> nothing to resume, stay silent
 
   const aborted = engine.detectAbortedSession();
   if (!aborted) return; // nothing to resume -> silent (the once-per-session check still ran)

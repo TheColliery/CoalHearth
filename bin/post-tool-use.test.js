@@ -22,6 +22,17 @@ function mk() {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ptu-')));
 }
 
+// A project cwd for containedOutputDir's auto-anchor walk (hooks-safety.md §8):
+// every test below spawns the hook with cwd = this, and needs it to resolve as a
+// real project root rather than fail closed. Plain mk() (used for `home` / any
+// non-cwd sandbox) deliberately stays marker-free — it must never itself resolve
+// as a project.
+function mkProject() {
+  const dir = mk();
+  fs.mkdirSync(path.join(dir, '.git'));
+  return dir;
+}
+
 function run(cwd, home, stdin) {
   const env = { ...process.env, USERPROFILE: home, HOME: home };
   return spawnSync(process.execPath, [HOOK], {
@@ -34,7 +45,7 @@ function run(cwd, home, stdin) {
 }
 
 test('happy path: writes session_handoff.json, exit 0, no stderr', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(cwd, home);
@@ -51,7 +62,7 @@ test('happy path: writes session_handoff.json, exit 0, no stderr', () => {
 });
 
 test('task.md checklist is parsed into the journal', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     fs.writeFileSync(
@@ -73,7 +84,7 @@ test('task.md checklist is parsed into the journal', () => {
 });
 
 test('no task.md / no tool payload -> still succeeds with empty defaults (no-external-assumption)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(cwd, home);
@@ -95,7 +106,7 @@ test('no task.md / no tool payload -> still succeeds with empty defaults (no-ext
 // recovery core still journals the step. RED-PROOF: restore the nudge in bin/post-tool-use.js
 // and this goes red.
 test('retired budget nudge: a leftover budgets config produces NO stdout, journal still records', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     fs.writeFileSync(
@@ -118,7 +129,7 @@ test('retired budget nudge: a leftover budgets config produces NO stdout, journa
 // payloads the hook OBSERVES — no git spawn. Accumulates across calls via the
 // journal, dedupes, and ignores non-file tools.
 test('modifiedFiles accumulates from Write/Edit payloads across hook runs, deduped, no git', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const journalPath = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
   const payload = (tool, file) =>
@@ -159,7 +170,7 @@ test('modifiedFiles accumulates from Write/Edit payloads across hook runs, dedup
 // tool_input and a best-effort residue path from tool_response; accumulates across
 // runs; a non-spawn tool adds nothing.
 test('inFlightAgents: an Agent spawn is journaled (description/type/residue), a non-spawn tool adds none', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const journalPath = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
   const read = () => JSON.parse(fs.readFileSync(journalPath, 'utf8'));
@@ -215,7 +226,7 @@ test('inFlightAgents: an Agent spawn is journaled (description/type/residue), a 
 });
 
 test('garbage stdin -> exit 0, no crash (Phoenix fail-silent)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(cwd, home, 'not json at all \0\x01');
@@ -228,7 +239,7 @@ test('garbage stdin -> exit 0, no crash (Phoenix fail-silent)', () => {
 });
 
 test('unwritable outputDir (blocked by a file) -> fail-silent, exit 0', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     // Put a FILE where the journal dir would be created -> mkdirSync must fail inside
@@ -252,7 +263,7 @@ test('unwritable outputDir (blocked by a file) -> fail-silent, exit 0', () => {
 // (drop updateUnderLock) and this goes red (last-save-wins drops most files).
 test('ROOT1/H1: concurrent PostToolUse writers do not lose each other\'s modifiedFiles', async () => {
   const { spawn } = require('node:child_process');
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const N = 10; // the crash-test's reachable "10-agent fan-out"; lossless with a huge margin (verified to 30)
   try {
@@ -277,7 +288,7 @@ test('ROOT1/H1: concurrent PostToolUse writers do not lose each other\'s modifie
 // forensic recovery. RED-PROOF: drop the atomicWriteJournal(CORRUPT_NAME,...) call in
 // HandoffJournal._loadOrQuarantine and the .corrupt.json assertion goes red.
 test('ROOT1/H2: a corrupt journal is quarantined (exact bytes preserved), not silently overwritten', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const dir = path.join(cwd, '.claude', 'coalhearth');
   try {
@@ -307,7 +318,7 @@ test('ROOT1/H2: a corrupt journal is quarantined (exact bytes preserved), not si
 // sessionId thread in bin/post-tool-use.js (or revert recordStep's id-keyed sameSession to
 // status-only) and the second block's assertions go red.
 test('ROOT2/H3: the journal is stamped with session_id, and a different session does not inherit prior files', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const jp = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
   try {
@@ -324,6 +335,50 @@ test('ROOT2/H3: the journal is stamped with session_id, and a different session 
     assert.deepStrictEqual(j.modifiedFiles, ['b0.js'], 'B did NOT inherit A\'s files (cross-session contamination prevented)');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// PHANTOM-SLUG (hooks-safety.md §8, USER 2026-07-25). Pre-fix, containedOutputDir
+// defaulted `root` to raw process.cwd() with no anchor walk — a hook spawned from a
+// project SUBDIRECTORY (any Bash `cd`, any subagent whose cwd drifted) planted its OWN
+// `.claude/coalhearth/` right there. Live evidence: 26 phantom dirs measured across the
+// TheColliery tree, 25 sharing one sessionId, none at a real project root. RED-PROOF:
+// revert contained-dir.js's containedOutputDir to `root = process.cwd()` and both of
+// these go red (a phantom appears at the subdir / with no project anywhere).
+test('PHANTOM-SLUG: no real project anywhere up to home -> no journal is manufactured', () => {
+  const home = mk();
+  const cwd = path.join(home, 'no', 'project', 'here');
+  fs.mkdirSync(cwd, { recursive: true });
+  try {
+    const r = run(cwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(!fs.existsSync(path.join(cwd, '.claude')), 'no directory is manufactured to prove a project that is not there');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('PHANTOM-SLUG: a subdir of a real project anchors to the project root, not the subdir; a pre-existing legacy phantom there is self-cleaned', () => {
+  const home = mk();
+  const projectRoot = path.join(home, 'fakeproject');
+  const subCwd = path.join(projectRoot, 'sub', 'dir');
+  fs.mkdirSync(path.join(projectRoot, '.git'), { recursive: true }); // the project marker
+  fs.mkdirSync(subCwd, { recursive: true });
+  // Pre-plant a legacy phantom exactly where the pre-fix code would have written it.
+  const legacyDir = path.join(subCwd, '.claude', 'coalhearth');
+  fs.mkdirSync(legacyDir, { recursive: true });
+  fs.writeFileSync(path.join(legacyDir, 'session_handoff.json'), JSON.stringify({ status: 'in_progress', sessionId: 'stale' }));
+  try {
+    const r = run(subCwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const anchored = path.join(projectRoot, '.claude', 'coalhearth', 'session_handoff.json');
+    assert.ok(fs.existsSync(anchored), 'the journal lands at the anchored project root, not the subdir');
+    assert.ok(!fs.existsSync(path.join(legacyDir, 'session_handoff.json')), 'the legacy phantom file is self-cleaned');
+    assert.ok(!fs.existsSync(legacyDir), 'the now-empty legacy dir is removed too');
+  } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });

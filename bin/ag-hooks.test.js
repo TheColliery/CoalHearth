@@ -28,6 +28,17 @@ function mk() {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-ag-')));
 }
 
+// A project cwd/workspace for containedOutputDir's auto-anchor walk (hooks-safety.md
+// §8): every dir a test expects the journal to actually LAND at needs to resolve as a
+// real project root now, or the hook fails closed (no journal at all) instead of
+// defaulting to raw cwd. Plain mk() (used for `home`, and for a decoy `spawnDir` a
+// test asserts stays UNTOUCHED) deliberately stays marker-free.
+function mkProject() {
+  const dir = mk();
+  fs.mkdirSync(path.join(dir, '.git'));
+  return dir;
+}
+
 // TMPDIR/TEMP/TMP -> the sandbox `home`, so the once-per-session marker os.tmpdir() writes
 // lands in an isolated throwaway dir (never the real tmp, never a cross-test collision).
 // `mode` (appended, optional) = the platform-dispatch argv; default 'PreInvocation' keeps
@@ -104,7 +115,7 @@ const SID = JSON.stringify({ conversationId: 'ag-session-1' });
 // =====================================================================================
 
 test('pre: no journal + a session id -> exit 0, silent, but the once-per-session marker is written', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PRE, cwd, home, SID);
@@ -119,7 +130,7 @@ test('pre: no journal + a session id -> exit 0, silent, but the once-per-session
 });
 
 test('pre: in_progress journal -> emits the recovery block as additionalContext JSON, journal marked resumed', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -140,7 +151,7 @@ test('pre: in_progress journal -> emits the recovery block as additionalContext 
 });
 
 test('pre: once-per-session guard -> 1st PreInvocation emits, 2nd (same session) silent, 3rd (new session) re-emits', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk(); // shared TMPDIR across the three runs -> the marker persists between them
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -166,9 +177,9 @@ test('pre: once-per-session guard -> 1st PreInvocation emits, 2nd (same session)
 });
 
 test('pre: accepts camelCase sessionId and the transcript_path fallback', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
-  const cwd2 = mk();
+  const cwd2 = mkProject();
   const home2 = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -190,7 +201,7 @@ test('pre: accepts camelCase sessionId and the transcript_path fallback', () => 
 });
 
 test('pre: NO per-session key -> skip silently (cannot dedupe once-per-session), exit 0, no marker', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS); // resumable, but no key to guard on
@@ -206,7 +217,7 @@ test('pre: NO per-session key -> skip silently (cannot dedupe once-per-session),
 });
 
 test('pre: marker cannot persist (tmp is a FILE) -> still emits, block carries the honest "may repeat" note', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -232,7 +243,7 @@ test('pre: marker cannot persist (tmp is a FILE) -> still emits, block carries t
 // file/symlink) makes the create fail EEXIST -> the hook treats it as "already ran" and
 // stays silent. Proves the atomic latch never writes through / past an existing path.
 test('pre: a pre-existing marker path -> EEXIST silent skip (no re-inject even with a resumable journal)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS); // resumable: an un-guarded run WOULD emit
@@ -255,7 +266,7 @@ test('pre: a pre-existing marker path -> EEXIST silent skip (no re-inject even w
 // STILL emit the recovery block (worth repeating) with the honest may-repeat note; the marker is
 // NOT written into the attacker dir.
 test('pre: a pre-planted SYMLINK at the marker subdir -> no marker in the target, block still emits with the may-repeat note (dir-symlink close)', (t) => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   const target = mk(); // attacker-controlled dir the planted symlink points at
   try {
@@ -282,7 +293,7 @@ test('pre: a pre-planted SYMLINK at the marker subdir -> no marker in the target
 });
 
 test('pre: recovery.autoInjectPrompt:false -> detect+sweep silent, no additionalContext, still marks resumed', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
@@ -308,7 +319,7 @@ test('pre: recovery.autoInjectPrompt:false -> detect+sweep silent, no additional
 // wrong dir and the whole product no-ops on AG.
 test('regression pre: spawn cwd != payload.cwd -> resume reads + marks the PAYLOAD workspace, spawn dir untouched', () => {
   const spawnDir = mk(); // where AG happens to spawn the hook (NOT the workspace)
-  const workspace = mk(); // the real workspace the payload names
+  const workspace = mkProject(); // the real workspace the payload names
   const home = mk();
   try {
     writeJournal(workspace, IN_PROGRESS);
@@ -327,7 +338,7 @@ test('regression pre: spawn cwd != payload.cwd -> resume reads + marks the PAYLO
 
 test('regression ptu: spawn cwd != payload.cwd -> journal lands at the PAYLOAD workspace, spawn dir untouched', () => {
   const spawnDir = mk();
-  const workspace = mk();
+  const workspace = mkProject();
   const home = mk();
   try {
     const r = run(PTU, spawnDir, home, JSON.stringify({
@@ -353,7 +364,7 @@ test('regression ptu: spawn cwd != payload.cwd -> journal lands at the PAYLOAD w
 // stamps the journal owner.
 test('current-spec pre: conversationId + workspacePaths -> resume at workspacePaths[0], conversationId keys the guard', () => {
   const spawnDir = mk(); // NOT the workspace — workspacePaths[0] must win
-  const workspace = mk();
+  const workspace = mkProject();
   const home = mk();
   try {
     writeJournal(workspace, IN_PROGRESS);
@@ -377,7 +388,7 @@ test('current-spec pre: conversationId + workspacePaths -> resume at workspacePa
 
 test('current-spec ptu: conversationId + workspacePaths -> journal at workspacePaths[0], owner stamped from conversationId', () => {
   const spawnDir = mk();
-  const workspace = mk();
+  const workspace = mkProject();
   const home = mk();
   try {
     const r = run(PTU, spawnDir, home, JSON.stringify({
@@ -406,7 +417,7 @@ test('current-spec ptu: conversationId + workspacePaths -> journal at workspaceP
 // across crash chains. The fix: ag-pre-invocation marks `resumed` (CC parity). This test
 // drives the REAL two-hook sequence a new AG session runs: PreInvocation then PostToolUse.
 test('regression: dead session A state is NOT inherited by session B first tool call (crash-chain contamination)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     // Session A died mid-work: in_progress journal carrying A's accumulated state.
@@ -440,7 +451,7 @@ test('regression: dead session A state is NOT inherited by session B first tool 
 test('pre: garbage stdin and a corrupt journal -> exit 0 silent, corrupt journal quarantined', () => {
   const garbageCwd = mk();
   const home = mk();
-  const cwd = mk();
+  const cwd = mkProject();
   const home2 = mk();
   try {
     const g = run(PRE, garbageCwd, home, 'not json at all \0\x01');
@@ -468,7 +479,7 @@ test('pre: garbage stdin and a corrupt journal -> exit 0 silent, corrupt journal
 // =====================================================================================
 
 test('ptu: AG write_to_file (snake_case) -> file recorded in modifiedFiles, journal written, exit 0 silent', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({
@@ -486,7 +497,7 @@ test('ptu: AG write_to_file (snake_case) -> file recorded in modifiedFiles, jour
 });
 
 test('ptu: camelCase toolCall variant + alternate path arg (TargetFile) is normalized', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({
@@ -502,7 +513,7 @@ test('ptu: camelCase toolCall variant + alternate path arg (TargetFile) is norma
 });
 
 test('ptu: unknown/non-file AG tool (run_command) -> journal still saved, modifiedFiles empty (no-op contribution)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({ tool_name: 'run_command', tool_input: { command: 'ls -la' } }));
@@ -518,7 +529,7 @@ test('ptu: unknown/non-file AG tool (run_command) -> journal still saved, modifi
 });
 
 test('ptu: AG spawn candidate -> recorded in inFlightAgents (Incident E)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({
@@ -539,7 +550,7 @@ test('ptu: AG spawn candidate -> recorded in inFlightAgents (Incident E)', () =>
 });
 
 test('ptu: CC-vocab payload passes through unchanged on the AG adapter (defensive)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(cwd, 'cc.js') } }));
@@ -555,7 +566,7 @@ test('ptu: CC-vocab payload passes through unchanged on the AG adapter (defensiv
 // unreachable). A leftover budgets config + a payload that WOULD have tripped it now produces
 // NO additionalContext — the post hook is journal-only. AG-side "removed path is gone" proof.
 test('ptu: retired budget nudge -> NO additionalContext even with a budgets config, journal still records', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     fs.writeFileSync(path.join(cwd, '.coalhearth.json'), JSON.stringify({ budgets: { maxTokens: 100, warningTokenPercentage: 0.15 } }));
@@ -571,7 +582,7 @@ test('ptu: retired budget nudge -> NO additionalContext even with a budgets conf
 });
 
 test('ptu: garbage stdin -> exit 0 silent, journal still written with empty defaults', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, 'not json \0\x01');
@@ -593,7 +604,7 @@ test('ptu: garbage stdin -> exit 0 silent, journal still written with empty defa
 // =====================================================================================
 
 test('pre gemini: in_progress journal -> NESTED hookSpecificOutput emit, marked resumed, NO tmp marker', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -612,7 +623,7 @@ test('pre gemini: in_progress journal -> NESTED hookSpecificOutput emit, marked 
 });
 
 test('pre gemini: NO session key -> still resumes (native one-shot event needs no dedupe key, unlike AG)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -629,7 +640,7 @@ test('pre gemini: NO session key -> still resumes (native one-shot event needs n
 });
 
 test('pre gemini: nothing to resume -> exit 0 silent, no marker', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PRE, cwd, home, SID, null, 'SessionStart');
@@ -644,7 +655,7 @@ test('pre gemini: nothing to resume -> exit 0 silent, no marker', () => {
 });
 
 test('pre filecopy: in_progress journal -> PLAIN stdout block (CC parity, not JSON), marked resumed, no marker', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     writeJournal(cwd, IN_PROGRESS);
@@ -662,7 +673,7 @@ test('pre filecopy: in_progress journal -> PLAIN stdout block (CC parity, not JS
 });
 
 test('ptu gemini (AfterTool): write_file + replace journaled via the shared normalizer, journal-only (no emit)', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r1 = run(PTU, cwd, home, JSON.stringify({
@@ -688,7 +699,7 @@ test('ptu gemini (AfterTool): write_file + replace journaled via the shared norm
 });
 
 test('ptu filecopy: camelCase toolName + toolInput (Copilot-CLI shape) -> recorded', () => {
-  const cwd = mk();
+  const cwd = mkProject();
   const home = mk();
   try {
     const r = run(PTU, cwd, home, JSON.stringify({

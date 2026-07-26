@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ResumeEngine } = require('../lib/resume-engine.js');
+const { findWorkspaceRoot } = require('../lib/contained-dir.js');
 // Shared with post-tool-use.js — both hooks MUST resolve the journal dir IDENTICALLY
 // (this honors CLAUDE_CONFIG_DIR). The earlier inline copy hardcoded '.claude', so a
 // custom config dir silently diverged the WRITE path (post-tool) from the READ path
@@ -45,8 +46,11 @@ function main() {
   // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or a perms
   // block) — save()/detectAbortedSession then silently no-op FOREVER while the user believes
   // they're protected. Say so ONCE on the sanctioned SessionStart channel (Phoenix #13 allows
-  // the resume channel), where the recovery block would otherwise render.
-  if (!engine.outputDir) {
+  // the resume channel), where the recovery block would otherwise render. Gated on a REAL
+  // project existing here (hooks-safety.md §8): a stray cwd with no project at all is silent
+  // and expected (containedOutputDir's own auto-anchor already refused it) — only warn when
+  // there IS a project and its journal dir is still blocked, the actionable case.
+  if (!engine.outputDir && findWorkspaceRoot(process.cwd())) {
     console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.');
   }
 

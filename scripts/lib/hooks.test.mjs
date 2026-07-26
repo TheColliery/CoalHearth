@@ -41,6 +41,11 @@ function sandbox() {
   // hook (modifiedFiles) yields the clean relative path the assertions expect.
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-home-')));
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cwd-')));
+  // A real project marker (hooks-safety.md §8 phantom-slug law): containedOutputDir's
+  // auto-anchor walk now requires one between cwd and home, or it fails closed (no
+  // journal at all) instead of defaulting to raw cwd. `home` deliberately stays
+  // marker-free — it must never itself resolve as a project.
+  fs.mkdirSync(path.join(cwd, '.git'));
   return { home, cwd };
 }
 function clean(...dirs) {

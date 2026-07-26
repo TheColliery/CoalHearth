@@ -436,6 +436,10 @@ test('RETIRED budget guardrail: tracker file gone + recordStep is journal-only (
   // runs), so chdir into a throwaway dir to keep the write out of the repo. realpath so the
   // read path matches process.cwd() on macOS (/var -> /private/var).
   const dir = fs.realpathSync(tmp());
+  // recordStep's HandoffJournal construction omits root -> containedOutputDir now
+  // auto-anchors to the resolved project root (hooks-safety.md §8) instead of raw cwd;
+  // a bare tmpdir needs a marker or it fails closed (no journal at all).
+  fs.mkdirSync(path.join(dir, '.git'));
   const prevCwd = process.cwd();
   try {
     process.chdir(dir);

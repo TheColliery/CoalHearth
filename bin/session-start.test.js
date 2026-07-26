@@ -22,6 +22,11 @@ function sandbox() {
   // (ROOT2/H3). No-op off macOS; matches every other sandbox helper in the repo.
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ss-home-')));
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-ss-cwd-')));
+  // A real project marker (hooks-safety.md §8 phantom-slug law): containedOutputDir's
+  // auto-anchor walk now requires one between cwd and home, or it fails closed (no
+  // journal at all) instead of defaulting to raw cwd. `home` deliberately stays
+  // marker-free — it must never itself resolve as a project.
+  fs.mkdirSync(path.join(cwd, '.git'));
   return { home, cwd };
 }
 
