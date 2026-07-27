@@ -57,6 +57,19 @@ function readJsonc(file) {
   }
 }
 
+// Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27) — mirrors
+// lib/load-config.js 1:1. See that file's comment for the full rationale: the
+// project config is untrusted, and update.updateMode is CH's one hook-read key
+// gating an outward action, so the project layer may only QUIETEN it, never
+// escalate a user's own off/quiet global setting.
+const UPDATE_MODE_LOUDNESS = { off: 0, remind: 1, ask: 2, auto: 3 };
+function quieterUpdateMode(globalMode, projectMode) {
+  if (typeof projectMode !== 'string') return globalMode;
+  if (typeof globalMode !== 'string') return projectMode;
+  const rank = (m) => (Object.prototype.hasOwnProperty.call(UPDATE_MODE_LOUDNESS, m.toLowerCase()) ? UPDATE_MODE_LOUDNESS[m.toLowerCase()] : UPDATE_MODE_LOUDNESS.auto);
+  return rank(projectMode) < rank(globalMode) ? projectMode : globalMode;
+}
+
 // Shallow-per-group merge: project group overwrites global group key-by-key.
 export function loadMergedConfig({ cwd = process.cwd(), home = os.homedir() } = {}) {
   const global = readJsonc(globalConfigPath(home));
@@ -64,6 +77,13 @@ export function loadMergedConfig({ cwd = process.cwd(), home = os.homedir() } = 
   const merged = {};
   for (const group of new Set([...Object.keys(global), ...Object.keys(project)])) {
     merged[group] = { ...(global[group] || {}), ...(project[group] || {}) };
+  }
+  // Post-clamp ONLY updateMode — every other key in every group keeps the plain
+  // project-wins merge just performed.
+  if (merged.update) {
+    const g = global.update && global.update.updateMode;
+    const p = project.update && project.update.updateMode;
+    if (typeof g === 'string' || typeof p === 'string') merged.update.updateMode = quieterUpdateMode(g, p);
   }
   return merged;
 }

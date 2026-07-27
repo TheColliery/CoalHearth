@@ -20,6 +20,7 @@ const TESTS = [
   'lib/handoff-journal.test.js',
   'lib/state-snapshot.test.js',
   'lib/load-config.test.js',
+  'lib/contained-dir.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
   'bin/ag-hooks.test.js',

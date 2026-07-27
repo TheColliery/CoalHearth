@@ -104,6 +104,32 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
   }
 }
 
+// Self-ignore (CoalWash's ensureSelfIgnore precedent, scripts/lib/apply.mjs — ported,
+// USER 2026-07-27): the journal holds real user data — modified-file PATHS, goal/
+// checklist/constraints text parsed from the user's own task.md/AGENTS.md, subagent
+// descriptions, a transcript path (see PRIVACY.md) — so a project whose OWN
+// .gitignore doesn't cover .claude/ would commit it. A LOCAL .gitignore INSIDE the
+// owned output dir excludes it regardless of what the project's top-level
+// .gitignore says or omits — code-enforced, not a doc promise. Exclusive create
+// (wx): a race between writers is harmless (the content is identical, EEXIST is
+// expected and ignored); any other error (read-only fs) is swallowed — this must
+// never block the journal write it protects. Fail-silent (Phoenix-13).
+//
+// NOT ported: CoalWash's global-scope call writes this file directly into
+// claudeBaseDir(home) (~/.claude itself) — a dir CoalWash does not exclusively own
+// (every Coal* tool's global config lives there too). CH has no such call; the
+// caller-side guard (containedOutputDir, below) refuses to invoke this on `rootAbs`
+// itself or the shared `.claude` parent, so even a pathological `outputDirectory`
+// (untrusted, see this file's header) can never aim it at a dir CH does not
+// exclusively own.
+function ensureSelfIgnore(dir) {
+  try {
+    fs.writeFileSync(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' });
+  } catch (e) {
+    if (e && e.code !== 'EEXIST') { /* read-only fs etc — best-effort, never block */ }
+  }
+}
+
 /**
  * Resolve a (possibly untrusted) configured output directory, contained under root.
  * @param {string} [configured] the config-supplied journal.outputDirectory
@@ -157,6 +183,14 @@ function containedOutputDir(configured, root) {
       fs.mkdirSync(candidate, { recursive: true });
     } catch (_) {
       continue; // blocked by a file / perms -> fall through to default / null
+    }
+    // Refuse to self-ignore a directory CH does not exclusively own — the exact
+    // CoalWash mistake this port deliberately excludes (see ensureSelfIgnore above):
+    // `configured` is untrusted and a pathological "." or ".claude" value would
+    // otherwise blanket-.gitignore the whole project or the dir other Coal* tools
+    // share configs in.
+    if (candidate !== rootAbs && candidate !== path.resolve(rootAbs, '.claude')) {
+      ensureSelfIgnore(candidate);
     }
     if (autoAnchored) selfCleanLegacyPhantom(cwdAbs, rootAbs);
     return candidate;

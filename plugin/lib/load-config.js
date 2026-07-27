@@ -49,6 +49,24 @@ function findProjectRoot(startDir, home) {
   }
 }
 
+// Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27): the project config
+// ARRIVES WITH A CLONED REPO — untrusted. update.updateMode is CH's one hook-read key
+// that gates an outward action (the periodic self-update nudge); a plain project-wins
+// overlay would let it ESCALATE a user's own off/quiet global setting back on. The
+// project layer may only QUIETEN it, never escalate — every other config key (caps,
+// paths, atomicityRetries, stashUnsavedChanges) stays plain project-wins.
+// Loudness order (least autonomous action taken on the user's behalf -> most): off (no
+// nudge at all) < remind (pure info, the agent takes no action) < ask (an interactive
+// decision) < auto (standing consent to check+offer). An unrecognized string is ranked
+// as loudest so it can never win over a real, quieter, trusted value.
+const UPDATE_MODE_LOUDNESS = { off: 0, remind: 1, ask: 2, auto: 3 };
+function quieterUpdateMode(globalMode, projectMode) {
+  if (typeof projectMode !== 'string') return globalMode;
+  if (typeof globalMode !== 'string') return projectMode;
+  const rank = (m) => (Object.prototype.hasOwnProperty.call(UPDATE_MODE_LOUDNESS, m.toLowerCase()) ? UPDATE_MODE_LOUDNESS[m.toLowerCase()] : UPDATE_MODE_LOUDNESS.auto);
+  return rank(projectMode) < rank(globalMode) ? projectMode : globalMode;
+}
+
 function readJsonc(file) {
   try {
     let content = fs.readFileSync(file, 'utf8');
@@ -76,6 +94,13 @@ function loadConfig(opts) {
   const merged = {};
   for (const group of new Set([...Object.keys(global), ...Object.keys(project)])) {
     merged[group] = { ...(global[group] || {}), ...(project[group] || {}) };
+  }
+  // Post-clamp ONLY updateMode (see quieterUpdateMode above) — every other key in
+  // every group keeps the plain project-wins merge just performed.
+  if (merged.update) {
+    const g = global.update && global.update.updateMode;
+    const p = project.update && project.update.updateMode;
+    if (typeof g === 'string' || typeof p === 'string') merged.update.updateMode = quieterUpdateMode(g, p);
   }
   return merged;
 }

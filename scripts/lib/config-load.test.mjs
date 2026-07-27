@@ -52,6 +52,32 @@ test('loadMergedConfig returns {} when neither file exists (never throws)', () =
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+// hooks-safety.md §9 (config-cascade clamp): mirrors lib/load-config.js's clamp test
+// 1:1. RED-PROOF: revert loadMergedConfig's updateMode post-clamp and this goes red.
+test('consent-cascade clamp: a project cannot re-escalate a user-silenced updateMode (hooks-safety.md §9)', () => {
+  const home = mkSandboxHome();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' } }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'auto' } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.update.updateMode, 'off', 'a project must not turn a user-silenced update nudge back on');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('consent-cascade clamp: a project MAY still quieten updateMode below global', () => {
+  const home = mkSandboxHome();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'auto' } }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.update.updateMode, 'off', 'quietening still works');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('projectConfigPath composes root + filename', () => {
   const home = mkSandboxHome();
   const p = projectConfigPath(home, home);
