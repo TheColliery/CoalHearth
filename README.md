@@ -112,6 +112,15 @@ Each of these ships a native session-start-class event, so none needs Antigravit
 
 CoalHearth is hook-only, and it needs the session-start + per-tool event **pair**: a platform with no hook layer has nothing to run; a platform missing half the pair can't carry the product (Junie — session-start only; Devin Desktop's Cascade vocabulary — no session-start; see the matrix). Platforms whose hook surface is plugin CODE rather than a config file (OpenCode, Cline CLI) are a separate future lane. There is no read/analyze mode to load by hand (the way CoalMine or CoalLedger ship one).
 
+## Commands
+
+CoalHearth's core value is its two automatic hooks (above); the two commands below are the only invokable surface — self-update and a read-only stats report.
+
+| Command | What it does |
+|---|---|
+| `/coalhearth:stats` | Journal activity and resume events for this session — read-only. |
+| `/coalhearth:update` | Check for a newer CoalHearth version and offer to apply it, or set how updates are handled. |
+
 ## ⚙️ Configure
 
 Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional. The high-impact keys:
@@ -126,7 +135,7 @@ Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-gr
 
 Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
 
-## 🔒 Permissions
+## Permissions
 
 CoalHearth requests the lightest profile in the series: it reads your project's planning files (`task.md`, `AGENTS.md`) and its own journal, and every write stays contained inside your workspace — never outside it. The exact destination is `journal.outputDirectory` (`.coalhearth.json`), defaulting to its own namespaced `.claude/coalhearth/`; that key is project-configurable, and project config is untrusted (it ships with whatever repo you clone) — a project can redirect it into a real directory like `src/`, contained but no longer confined to CoalHearth's own state. No network, no exec, no subagent spawning, and no deletes outside its own scratch/lock files. Hooks are its only lifecycle capability, capability-keyed to whatever hook engine the platform ships.
 

@@ -2,6 +2,12 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+### Changed
+- README gains a `## Commands` section (flock-wide DOC-PATTERN requirement) — a two-column table naming both shipped commands, `/coalhearth:stats` and `/coalhearth:update`, with their invocation form verbatim.
+- README's Permissions heading drops its 🔒 icon — `## Commands` and `## Permissions` are cross-repo grep anchors and carry no emoji in any sibling, per DOC-PATTERN's amendment.
+
 ## [2.1.1] - 2026-07-27
 
 **PATCH** — the journal directory is no longer planted wherever a tool call's cwd happens to sit. Two commits on one branch: the root-anchor fix, then a station-3 review pass that found the anchor itself had a containment bug and one path it didn't yet cover.
