@@ -128,7 +128,7 @@ Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs
 
 ## 🔒 Permissions
 
-CoalHearth requests the lightest profile in the series: it reads your project's planning files (`task.md`, `AGENTS.md`) and its own journal, and writes only inside its own namespaced state (`.claude/coalhearth/`) — never your source files. No network, no exec, no subagent spawning, and no deletes outside its own scratch/lock files. Hooks are its only lifecycle capability, capability-keyed to whatever hook engine the platform ships.
+CoalHearth requests the lightest profile in the series: it reads your project's planning files (`task.md`, `AGENTS.md`) and its own journal, and every write stays contained inside your workspace — never outside it. The exact destination is `journal.outputDirectory` (`.coalhearth.json`), defaulting to its own namespaced `.claude/coalhearth/`; that key is project-configurable, and project config is untrusted (it ships with whatever repo you clone) — a project can redirect it into a real directory like `src/`, contained but no longer confined to CoalHearth's own state. No network, no exec, no subagent spawning, and no deletes outside its own scratch/lock files. Hooks are its only lifecycle capability, capability-keyed to whatever hook engine the platform ships.
 
 Full series matrix + the must-fail set: [Permission Matrix](https://github.com/TheColliery/.github/blob/main/PERMISSION-MATRIX.md)
 
