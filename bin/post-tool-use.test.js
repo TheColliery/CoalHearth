@@ -261,6 +261,23 @@ test('unwritable outputDir (blocked by a file) -> fail-silent, exit 0', () => {
 // serialized under a per-dir O_EXCL lock (lib/handoff-journal.js updateUnderLock), so every
 // writer's file must survive. RED-PROOF: point recordStep back at plain journal.load()+save()
 // (drop updateUnderLock) and this goes red (last-save-wins drops most files).
+//
+// BARRIER-BUNCHING (station-3, 2026-07-27, observed not reproduced): this test flaked
+// twice under heavy load (the full suite running 4 concurrent Node test files at once)
+// during an unrelated diff, never in isolation, never after (7 clean runs including
+// concurrent-suite load, not reproduced). Hypothesis, not proven: `[...Array(N)].map()`
+// issues all N `spawn()` calls in one synchronous tick — the OS schedules N real
+// processes essentially simultaneously, so under EXTERNAL system contention (other
+// suites' processes competing for the scheduler) more of the N can miss the lock's
+// LOCK_WAIT_MS bounded wait and fall onto the documented best-effort lock-free
+// fallback (handoff-journal.js) than under light load. The mechanical argument for
+// "not a regression from a specific diff": nothing in this file touches lock timing,
+// and any diff that adds work OUTSIDE the lock (a constructor-time syscall, e.g.) only
+// shifts when a process ARRIVES at the lock, never how the lock itself behaves once
+// held. If this flakes again on a future contained-dir.js/handoff-journal.js touch,
+// re-run the A/B this room's coder memory records (revert the touch, run the full
+// suite N times, restore, run N more) before assuming either "it's fine" or "I broke
+// it" — a raw round count alone is weak evidence either way under variable load.
 test('ROOT1/H1: concurrent PostToolUse writers do not lose each other\'s modifiedFiles', async () => {
   const { spawn } = require('node:child_process');
   const cwd = mkProject();
@@ -378,6 +395,32 @@ test('PHANTOM-SLUG: a subdir of a real project anchors to the project root, not 
     assert.ok(fs.existsSync(anchored), 'the journal lands at the anchored project root, not the subdir');
     assert.ok(!fs.existsSync(path.join(legacyDir, 'session_handoff.json')), 'the legacy phantom file is self-cleaned');
     assert.ok(!fs.existsSync(legacyDir), 'the now-empty legacy dir is removed too');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// LOW (station-3, 2026-07-27): self-ignore plants its own `.gitignore` alongside
+// session_handoff*, so a legacy phantom created back when both the phantom-slug bug
+// AND self-ignore were live together holds BOTH files — the mop-up's unlink loop only
+// knew the session_handoff family, so `.gitignore` survived and rmdir failed ENOTEMPTY
+// forever after. RED-PROOF: drop the `.gitignore` name from selfCleanLegacyPhantom's
+// own-file check in lib/contained-dir.js and this goes red (the dir survives).
+test('PHANTOM-SLUG self-clean also removes its own leftover .gitignore, not just session_handoff*', () => {
+  const home = mk();
+  const projectRoot = path.join(home, 'fakeproject2');
+  const subCwd = path.join(projectRoot, 'sub', 'dir');
+  fs.mkdirSync(path.join(projectRoot, '.git'), { recursive: true });
+  fs.mkdirSync(subCwd, { recursive: true });
+  const legacyDir = path.join(subCwd, '.claude', 'coalhearth');
+  fs.mkdirSync(legacyDir, { recursive: true });
+  fs.writeFileSync(path.join(legacyDir, 'session_handoff.json'), JSON.stringify({ status: 'in_progress', sessionId: 'stale' }));
+  fs.writeFileSync(path.join(legacyDir, '.gitignore'), '*\n'); // planted by a past run's self-ignore
+  try {
+    const r = run(subCwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(!fs.existsSync(legacyDir), 'the legacy dir (including its own .gitignore) is fully removed, not left ENOTEMPTY');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

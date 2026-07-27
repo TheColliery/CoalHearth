@@ -114,13 +114,15 @@ CoalHearth is hook-only, and it needs the session-start + per-tool event **pair*
 
 ## ⚙️ Configure
 
-Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir** — project wins), so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional. The high-impact keys:
+Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional. The high-impact keys:
 
 | Key | Default | What it does |
 |---|---|---|
 | `recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
 | `recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
 | `update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+
+**Two exceptions to project-wins:** `update.updateMode` and `recovery.autoInjectPrompt` gate an outward action (a nudge; the whole recovery-block injection), so a project `.coalhearth.json` — untrusted, it arrives with whatever repo you clone — can only QUIETEN either one relative to your global config, never re-enable something you turned off globally. Every other key (caps, paths, `stashUnsavedChanges`) stays plain project-wins.
 
 Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
 

@@ -78,6 +78,42 @@ test('consent-cascade clamp: a project MAY still quieten updateMode below global
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+// R2/R3 (hooks-safety.md §9 amendment, 2026-07-27) — mirrors lib/load-config.test.js
+// 1:1. See that file for the full RED-PROOF rationale.
+test('R2 factory-default: NO global config at all still clamps project updateMode to the schema default (ask)', () => {
+  const home = mkSandboxHome();
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'auto' } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home }); // no ~/.claude/.coalhearth.json at all
+  assert.equal(merged.update.updateMode, 'ask', 'an absent global is the schema default (ask), not a clamp skip');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('R3 consent-cascade clamp: a project cannot re-escalate a user-silenced autoInjectPrompt', () => {
+  const home = mkSandboxHome();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ recovery: { autoInjectPrompt: false } }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ recovery: { autoInjectPrompt: true } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.recovery.autoInjectPrompt, false, 'a project must not turn a user-silenced recovery injection back on');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('R3: stashUnsavedChanges stays plain project-wins, unclamped (correctly out of scope)', () => {
+  const home = mkSandboxHome();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ recovery: { stashUnsavedChanges: false } }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ recovery: { stashUnsavedChanges: true } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.recovery.stashUnsavedChanges, true, 'an advisory-only key is plain project-wins, no clamp');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('projectConfigPath composes root + filename', () => {
   const home = mkSandboxHome();
   const p = projectConfigPath(home, home);

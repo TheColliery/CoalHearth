@@ -57,17 +57,24 @@ function readJsonc(file) {
   }
 }
 
-// Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27) — mirrors
-// lib/load-config.js 1:1. See that file's comment for the full rationale: the
-// project config is untrusted, and update.updateMode is CH's one hook-read key
-// gating an outward action, so the project layer may only QUIETEN it, never
-// escalate a user's own off/quiet global setting.
+// Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27, amended R2) — mirrors
+// lib/load-config.js 1:1. See that file's comments for the full rationale (R2
+// factory-default ranking, R3's separate autoInjectPrompt reasoning, why
+// stashUnsavedChanges stays out of scope).
 const UPDATE_MODE_LOUDNESS = { off: 0, remind: 1, ask: 2, auto: 3 };
+const SCHEMA_DEFAULT_UPDATE_MODE = 'ask';
 function quieterUpdateMode(globalMode, projectMode) {
   if (typeof projectMode !== 'string') return globalMode;
-  if (typeof globalMode !== 'string') return projectMode;
+  const g = typeof globalMode === 'string' ? globalMode : SCHEMA_DEFAULT_UPDATE_MODE; // R2
   const rank = (m) => (Object.prototype.hasOwnProperty.call(UPDATE_MODE_LOUDNESS, m.toLowerCase()) ? UPDATE_MODE_LOUDNESS[m.toLowerCase()] : UPDATE_MODE_LOUDNESS.auto);
-  return rank(projectMode) < rank(globalMode) ? projectMode : globalMode;
+  return rank(projectMode) < rank(g) ? projectMode : g;
+}
+
+const SCHEMA_DEFAULT_AUTO_INJECT = true;
+function quieterAutoInjectPrompt(globalValue, projectValue) {
+  if (typeof projectValue !== 'boolean') return globalValue;
+  const g = typeof globalValue === 'boolean' ? globalValue : SCHEMA_DEFAULT_AUTO_INJECT; // R2
+  return g && projectValue;
 }
 
 // Shallow-per-group merge: project group overwrites global group key-by-key.
@@ -78,12 +85,17 @@ export function loadMergedConfig({ cwd = process.cwd(), home = os.homedir() } = 
   for (const group of new Set([...Object.keys(global), ...Object.keys(project)])) {
     merged[group] = { ...(global[group] || {}), ...(project[group] || {}) };
   }
-  // Post-clamp ONLY updateMode — every other key in every group keeps the plain
-  // project-wins merge just performed.
+  // Post-clamp ONLY updateMode + autoInjectPrompt — every other key in every group
+  // keeps the plain project-wins merge just performed.
   if (merged.update) {
     const g = global.update && global.update.updateMode;
     const p = project.update && project.update.updateMode;
     if (typeof g === 'string' || typeof p === 'string') merged.update.updateMode = quieterUpdateMode(g, p);
+  }
+  if (merged.recovery) {
+    const g = global.recovery && global.recovery.autoInjectPrompt;
+    const p = project.recovery && project.recovery.autoInjectPrompt;
+    if (typeof g === 'boolean' || typeof p === 'boolean') merged.recovery.autoInjectPrompt = quieterAutoInjectPrompt(g, p);
   }
   return merged;
 }

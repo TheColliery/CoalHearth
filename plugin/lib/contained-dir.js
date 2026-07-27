@@ -81,9 +81,13 @@ function findWorkspaceRoot(startDir, home = os.homedir()) {
 // in. Scoped to DEFAULT_OUTPUT_DIR only (every observed phantom is there; a custom
 // `outputDirectory` legacy phantom is not chased — the prevention half above already
 // covers that case going forward, this is only the mop-up for the default shape).
-// Removes ONLY this tool's own known filenames (the `session_handoff` family); rmdir
-// is a no-op-fails (ENOTEMPTY) if anything foreign remains, so a directory holding a
-// foreign file is never forced empty. Best-effort, fail-silent (Phoenix-13).
+// Removes ONLY this tool's own known filenames (the `session_handoff` family, plus
+// the exact `.gitignore` ensureSelfIgnore plants alongside them — LOW, station-3
+// 2026-07-27: without this, self-ignore's own `.gitignore` was the one file this
+// mop-up never knew about, so rmdir failed ENOTEMPTY on every legacy phantom;
+// a NAMED exception, not a broadened pattern — nothing else in the dir is touched);
+// rmdir is a no-op-fails (ENOTEMPTY) if anything foreign remains, so a directory
+// holding a foreign file is never forced empty. Best-effort, fail-silent (Phoenix-13).
 // BOTH arguments must be PHYSICAL (realpathSync.native) spellings. A raw process.cwd()
 // here is a live bug, not a nit: a volume that spells one directory two ways — a
 // mis-cased cwd on any case-insensitive volume, an 8.3 alias on Windows (`RUNNER~1` on
@@ -95,7 +99,7 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
   const legacyDir = path.resolve(cwdAbs, DEFAULT_OUTPUT_DIR);
   try {
     for (const name of fs.readdirSync(legacyDir)) {
-      if (!name.startsWith('session_handoff')) continue; // never a foreign file
+      if (name !== '.gitignore' && !name.startsWith('session_handoff')) continue; // never a foreign file
       try { fs.unlinkSync(path.join(legacyDir, name)); } catch (_) {}
     }
     fs.rmdirSync(legacyDir); // fails harmlessly (ENOTEMPTY) if a foreign file remains
@@ -117,16 +121,32 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
 //
 // NOT ported: CoalWash's global-scope call writes this file directly into
 // claudeBaseDir(home) (~/.claude itself) — a dir CoalWash does not exclusively own
-// (every Coal* tool's global config lives there too). CH has no such call; the
-// caller-side guard (containedOutputDir, below) refuses to invoke this on `rootAbs`
-// itself or the shared `.claude` parent, so even a pathological `outputDirectory`
-// (untrusted, see this file's header) can never aim it at a dir CH does not
-// exclusively own.
+// (every Coal* tool's global config lives there too). CH has no such call.
+//
+// The caller (containedOutputDir, below) gates this to ONLY the default owned dir —
+// an ALLOWLIST of the one physically-resolved location, not a denylist of paths to
+// avoid. HIGH, station-3 2026-07-27 (measured, not read): the first cut here WAS a
+// lexical 2-value denylist (`candidate !== rootAbs && candidate !== join(rootAbs,
+// '.claude')`) against `journal.outputDirectory`, untrusted per this file's own
+// header. A junction/symlink named anything, aliasing back to the project root, is
+// LEXICALLY distinct from both denylisted strings (passes) but PHYSICALLY resolves
+// to the root — fs.writeFileSync follows a symlink at the destination
+// (node/runtime.md §5), so `*` landed at the actual project root: new files vanish
+// from `git status`, `git clean -fdX` deletes them, and it falsified README's "never
+// your source files" claim. Same root cause as the two earlier HIGHs on this branch:
+// a LEXICAL compare sitting a few lines below a REALPATH containment compare that had
+// already resolved the trustworthy value — reuse that value, don't re-derive a
+// second, weaker one. Fixed direction validated by the reviewer: allowlist
+// `realCandidate === path.join(realRoot, DEFAULT_OUTPUT_DIR)`, both already computed
+// by the containment check right above this call. A user-chosen custom
+// outputDirectory therefore never gets self-ignored, even a benign one — main's
+// ruling: it is not a directory CH exclusively owns, so it does not get a blanket `*`.
 function ensureSelfIgnore(dir) {
   try {
     fs.writeFileSync(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' });
-  } catch (e) {
-    if (e && e.code !== 'EEXIST') { /* read-only fs etc — best-effort, never block */ }
+  } catch (_) {
+    // EEXIST (a race, harmless — content is identical) or read-only fs etc: this
+    // must never block the journal write it protects. Best-effort, fail-silent.
   }
 }
 
@@ -184,12 +204,12 @@ function containedOutputDir(configured, root) {
     } catch (_) {
       continue; // blocked by a file / perms -> fall through to default / null
     }
-    // Refuse to self-ignore a directory CH does not exclusively own — the exact
-    // CoalWash mistake this port deliberately excludes (see ensureSelfIgnore above):
-    // `configured` is untrusted and a pathological "." or ".claude" value would
-    // otherwise blanket-.gitignore the whole project or the dir other Coal* tools
-    // share configs in.
-    if (candidate !== rootAbs && candidate !== path.resolve(rootAbs, '.claude')) {
+    // Self-ignore ONLY when the PHYSICALLY-RESOLVED candidate is exactly the default
+    // owned dir (main's ruling, 2026-07-27) — realCandidate/realRoot are the SAME
+    // values the containment check just trusted a few lines up; reusing them means
+    // self-ignore can never be fooled by anything that already fooled containment
+    // wouldn't also be. See ensureSelfIgnore's header for the HIGH this replaced.
+    if (realCandidate === path.join(realRoot, DEFAULT_OUTPUT_DIR)) {
       ensureSelfIgnore(candidate);
     }
     if (autoAnchored) selfCleanLegacyPhantom(cwdAbs, rootAbs);

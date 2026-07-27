@@ -452,6 +452,62 @@ test('containedOutputDir creates NO outside dir when a path symlink-escapes root
   }
 });
 
+// HIGH (station-3, 2026-07-27, measured not read): the self-ignore guard was a lexical
+// 2-value denylist (`candidate !== rootAbs && candidate !== join(rootAbs,'.claude')`)
+// against journal.outputDirectory — untrusted per this file's own header. A junction
+// named anything, aliasing back to the project root, is lexically distinct from both
+// denylisted values (passes the guard) but PHYSICALLY resolves to the root — so
+// fs.writeFileSync follows the junction (node/runtime.md §5) and plants a blanket `*`
+// .gitignore at the actual project root: new files vanish from `git status`, `git
+// clean -fdX` deletes them, and it falsifies README's "never your source files" claim.
+// RED-PROOF: revert the fix (the lexical denylist) and this goes red — a .gitignore
+// appears at `root`.
+test('containedOutputDir self-ignore: a junction aliasing outputDirectory to the project root must NOT plant a blanket .gitignore there (HIGH)', (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-jn-')));
+  try {
+    // Junction root/jn -> root itself (unprivileged for dirs on Windows; type ignored on POSIX).
+    try {
+      fs.symlinkSync(root, path.join(root, 'jn'), 'junction');
+    } catch {
+      t.skip('symlink/junction not permitted on this filesystem');
+      return;
+    }
+    containedOutputDir('jn', root);
+    assert.strictEqual(
+      fs.existsSync(path.join(root, '.gitignore')),
+      false,
+      'a junctioned outputDirectory must never blanket-.gitignore the real project root'
+    );
+  } finally {
+    fs.rmSync(path.join(root, 'jn'), { force: true }); // unlink the junction itself first
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Main's ruling (2026-07-27): self-ignore ONLY the default owned dir. A user-chosen
+// custom outputDirectory is not a directory CoalHearth exclusively owns, so it must
+// never get a blanket `*` either — even a perfectly benign, non-adversarial one.
+test('containedOutputDir self-ignore: a normal (non-adversarial) custom outputDirectory is NOT self-ignored', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-custom-')));
+  try {
+    const out = containedOutputDir('notes/ch-journal', root);
+    assert.strictEqual(fs.existsSync(path.join(out, '.gitignore')), false, 'only the default dir is CH-exclusively-owned enough to self-ignore');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The default dir is still self-ignored (the one case main's ruling keeps).
+test('containedOutputDir self-ignore: the DEFAULT dir still gets the local .gitignore', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-default-')));
+  try {
+    const out = containedOutputDir(undefined, root);
+    assert.strictEqual(fs.readFileSync(path.join(out, '.gitignore'), 'utf8'), '*\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The happy path still works: a legit in-workspace dir (no symlink) is created and returned.
 test('containedOutputDir creates + returns a legit in-workspace dir (happy path intact)', () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cdir-ok-')));
