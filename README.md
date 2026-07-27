@@ -156,7 +156,7 @@ CoalHearth is the **session-continuity** member of the mining series, alongside:
 - [CoalWash](https://github.com/TheColliery/CoalWash) — memory defrag
 - [CoalLedger](https://github.com/TheColliery/CoalLedger) — docs health
 
-Install one and it stands alone; install all and they compose without conflict.
+Install one, it stands alone; install all, they compose without conflict.
 
 Shared doctrine: Phoenix-13 hooks (zero-dependency, no network, fail-silent, no child processes, deterministic), single-source-of-truth config schemas, and a strict no-overkill discipline. Series doctrine: [`TheColliery/.github`](https://github.com/TheColliery).
 
