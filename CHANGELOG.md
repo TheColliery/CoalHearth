@@ -7,6 +7,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 ### Changed
 - README gains a `## Commands` section (flock-wide DOC-PATTERN requirement) — a two-column table naming both shipped commands, `/coalhearth:stats` and `/coalhearth:update`, with their invocation form verbatim.
 - README's Permissions heading drops its 🔒 icon — `## Commands` and `## Permissions` are cross-repo grep anchors and carry no emoji in any sibling, per DOC-PATTERN's amendment.
+- README's `## 🧭 Part of TheColliery` block is line-disciplined into DOC-PATTERN's locked four-part shape — the six siblings become a one-per-line list instead of one 865-character paragraph. No wording and no link changed; every sibling URL and role re-verified against the live repos.
 
 ## [2.1.1] - 2026-07-27
 
