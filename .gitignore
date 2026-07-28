@@ -6,26 +6,7 @@ AGENTS.md
 .agents/
 COALHEARTH_DESIGN.md
 COALHEARTH_BLUEPRINT.md
-USAGE-DATA.md
-
-# Dependencies / build cruft
-node_modules/
-
-# Runtime journal + staging (created inside a target project at run-time, never committed)
-.claude/coalhearth/
 
 # Generated SkillSpector scan reports (provenance recorded in SECURITY.md; the raw report is not shipped)
 skillspector-*
 
-# OS / editor cruft
-.DS_Store
-Thumbs.db
-*.log
-*.swp
-
-# editor / env / tmp (preventive)
-.vscode/
-.idea/
-.env
-.env.*
-*.tmp
