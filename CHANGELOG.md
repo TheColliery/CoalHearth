@@ -2,14 +2,6 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
-## [Unreleased]
-
-### Changed
-- README gains a `## Commands` section (flock-wide DOC-PATTERN requirement) — a two-column table naming both shipped commands, `/coalhearth:stats` and `/coalhearth:update`, with their invocation form verbatim.
-- README's Permissions heading drops its 🔒 icon — `## Commands` and `## Permissions` are cross-repo grep anchors and carry no emoji in any sibling, per DOC-PATTERN's amendment.
-- README's `## 🧭 Part of TheColliery` block is line-disciplined into DOC-PATTERN's locked four-part shape — the six siblings become a one-per-line list instead of one 865-character paragraph. No wording and no link changed; every sibling URL and role re-verified against the live repos.
-- README's compose promise adopts the comma form (`Install one, it stands alone; install all, they compose without conflict.`) to match the other six repos. Both forms say the same thing: this room shipped the wording six of seven repos then used, DOC-PATTERN's lock quoted the seventh, and the flock conformed to the lock before the mismatch was ruled on — so this is CoalHearth following main's ruling to end the split, not a correction of anything that was wrong.
-
 ## [2.1.1] - 2026-07-27
 
 **PATCH** — the journal directory is no longer planted wherever a tool call's cwd happens to sit. Two commits on one branch: the root-anchor fix, then a station-3 review pass that found the anchor itself had a containment bug and one path it didn't yet cover.
