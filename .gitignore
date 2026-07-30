@@ -4,7 +4,6 @@ MEMORY*.md
 AGENTS.md
 .claude/
 .agents/
-COALHEARTH_DESIGN.md
 COALHEARTH_BLUEPRINT.md
 
 # Generated SkillSpector scan reports (provenance recorded in SECURITY.md; the raw report is not shipped)
