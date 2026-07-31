@@ -62,7 +62,58 @@ function parseConstraints(dir) {
   // so when Constraints is the LAST section the lazy body finds no stop point and
   // the whole match silently fails -> constraints dropped, resumed agent loses its
   // guardrails (audit 2026-07-02 HIGH).
-  const section = text.match(/^##\s*(Constraints|Working Rules)\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im);
+  //
+  // The heading line matches `(?=\s*(?:[^\w\s]|$)).*$` after the keyword, not `\s*$`
+  // right after it (2026-07-31 audit, HIGH): a bare `\s*$` required the keyword to be
+  // the ENTIRE heading, so any suffix -- "## Working Rules (every session)",
+  // "## Constraints -- v2" -- broke the `$` anchor and silently dropped the whole
+  // section.
+  //
+  // A plain `\b` (station-3 findings-back, M2, 2026-07-31) is not enough: `text.match`
+  // is non-global, so the FIRST satisfying heading wins, and `\b` alone accepts a
+  // decoy heading that just happens to start with the keyword and continue as an
+  // ordinary phrase -- "## Constraints notes about foo" -- silently shadowing a real
+  // "## Constraints" section further down (wrong content, no error; worse than the
+  // suffix bug, which at least produced an empty, visibly-suspicious `[]`). The
+  // lookahead requires whatever follows the keyword (after optional whitespace) to be
+  // either end-of-line or a NON-word, NON-whitespace character -- punctuation like
+  // `(`, `-`, `:`, an em dash -- so "(every session)" and "-- v2" still open a section
+  // (their first non-space character is punctuation) while "notes about foo" does not
+  // (its first non-space character is a letter, i.e. a genuine second word). This also
+  // subsumes what a trailing `\b` would have guarded (M1): "## Constraintsy stuff"
+  // fails the same lookahead, because the character right after "Constraints" is the
+  // word character "y", neither end-of-line nor non-word/non-whitespace.
+  //
+  // Deliberately still NOT matched, so a suffix is "tolerated", not "any suffix
+  // accepted" -- record kept honest rather than restated as fully solved. Two
+  // families still silently drop: a suffix that continues directly as a WORD
+  // CHARACTER with no separator ("## Constraints_v2", "## Working Rules2026") or a
+  // double space the literal alternation doesn't special-case ("## Working  Rules");
+  // and the whole "keyword + space + plain word" family the lookahead exists to
+  // reject -- "## Constraints v2", "## Constraints 2026", "## Constraints and
+  // Guardrails", "## Working Rules for contributors" all drop too, because a version
+  // tag or topic phrase written as a separate word is, to this regex, indistinguishable
+  // from the decoy shape it was built to refuse (station-3 M2). Pre-existing in the
+  // first family, a deliberate trade in the second -- not a regression either way: the
+  // accept-set here is a strict SUPERSET of what the pre-2026-07-31 `\s*$` anchor ever
+  // matched (verified across 28 heading shapes), so every one of these was ALREADY
+  // dropping before this fix; nothing that used to work now doesn't. And the failure
+  // is paid in the SAFE direction -- `[]` (visibly empty, not silently wrong) -- which
+  // is the whole point of narrowing the OPENER instead of ranking matches: an opener
+  // that only widens the accept-set can misfire toward wrong content (M2's decoy);
+  // narrowing it can only misfire toward empty.
+  //
+  // ASCII-only residual (non-blocking, watch on THIS project specifically -- its own
+  // governance is bilingual TH/EN): `\w` has no `u` flag, so a non-ASCII second word
+  // PASSES where an ASCII one drops -- "## Working Rules ทุกเซสชัน" matches, "##
+  // Working Rules for agents" does not. Errs toward matching, so a non-ASCII decoy
+  // heading could in principle still shadow a real section the way M2's ASCII decoy
+  // did before this fix. Narrow enough not to fix here.
+  //
+  // ponytail: parseTaskMd (this file, :21-49) line-scans with no ^/$ semantics and
+  // nothing to anchor wrong -- porting parseConstraints to that shape removes the
+  // anchor-bug surface by construction. Next unit, not this one.
+  const section = text.match(/^##\s*(Constraints|Working Rules)(?=\s*(?:[^\w\s]|$)).*$([\s\S]*?)(?=^##\s|(?![\s\S]))/im);
   if (!section) return [];
   return section[2]
     .split(/\r?\n/)
