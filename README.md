@@ -11,12 +11,12 @@
 ![status](https://img.shields.io/badge/status-stable-brightgreen)
 
 ![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
-![Antigravity: wired](https://img.shields.io/badge/Antigravity-wired-yellow)
-![Gemini CLI: wired](https://img.shields.io/badge/Gemini_CLI-wired-yellow)
-![Copilot CLI: wired](https://img.shields.io/badge/Copilot_CLI-wired-yellow)
-![Devin CLI: wired](https://img.shields.io/badge/Devin_CLI-wired-yellow)
-![Kiro: wired](https://img.shields.io/badge/Kiro-wired-yellow)
-![Augment: wired](https://img.shields.io/badge/Augment-wired-yellow)
+![Antigravity: works with](https://img.shields.io/badge/Antigravity-works_with-blue)
+![Gemini CLI: works with](https://img.shields.io/badge/Gemini_CLI-works_with-blue)
+![Copilot CLI: works with](https://img.shields.io/badge/Copilot_CLI-works_with-blue)
+![Devin CLI: works with](https://img.shields.io/badge/Devin_CLI-works_with-blue)
+![Kiro: works with](https://img.shields.io/badge/Kiro-works_with-blue)
+![Augment: works with](https://img.shields.io/badge/Augment-works_with-blue)
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
@@ -61,17 +61,17 @@ On every other platform the same two jobs run through thin adapters — [`bin/ag
 
 CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever a platform runs hooks **and** has both a session-start-class event and a per-tool event — the pair the product needs (journal without resume is write-only; resume without journal has nothing to read). All platforms run the same shared core through thin adapter entry points.
 
-**Compat matrix** (tier honesty: **validated** = proven in live sessions · **wired** = built + hermetically tested against the platform's primary docs, 2026-07-15 fetch — NOT yet run live on that platform; a claim "works on X" waits for a real run):
+**Compat matrix** (tier honesty: **validated** = a real end-to-end run has been done on that platform · **works with** = built + hermetically tested against the platform's primary docs, 2026-07-15 fetch — not yet proven there; a claim only becomes **validated** after a real run):
 
 | Platform | Tier | Events (resume + journal) | Wiring |
 |---|---|---|---|
 | Claude Code | **validated** | `SessionStart` + `PostToolUse` | plugin (automatic) |
-| Antigravity 2.0 | **wired** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
-| Gemini CLI ¹ | **wired** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
-| GitHub Copilot CLI | **wired** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
-| Devin CLI | **wired** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/devin-cli-hooks.json`](platform-configs/hooks/devin-cli-hooks.json) |
-| Kiro | **wired** | `agentSpawn` + `postToolUse` | [`platform-configs/hooks/kiro-agent-hooks.json`](platform-configs/hooks/kiro-agent-hooks.json) |
-| Augment Code | **wired** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/augment-settings-hooks.json`](platform-configs/hooks/augment-settings-hooks.json) |
+| Antigravity 2.0 | **works with** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
+| Gemini CLI ¹ | **works with** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
+| GitHub Copilot CLI | **works with** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
+| Devin CLI | **works with** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/devin-cli-hooks.json`](platform-configs/hooks/devin-cli-hooks.json) |
+| Kiro | **works with** | `agentSpawn` + `postToolUse` | [`platform-configs/hooks/kiro-agent-hooks.json`](platform-configs/hooks/kiro-agent-hooks.json) |
+| Augment Code | **works with** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/augment-settings-hooks.json`](platform-configs/hooks/augment-settings-hooks.json) |
 | Junie | not supported | `SessionStart` is its ONLY event — no per-tool event means no journal, so resume would have nothing to read | — |
 | Devin Desktop (Cascade Hooks) | not supported | its snake_case vocabulary (`pre/post_write_code`, `post_cascade_response`, …) has no session-start-class event — no resume anchor; a separate surface from Devin CLI | — |
 
@@ -88,9 +88,9 @@ claude plugin install coalhearth@coalhearth
 
 That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
 
-### Antigravity — wired (live AG validation pending)
+### Antigravity — works with (live AG validation pending)
 
-Antigravity 2.0 added a real hook engine (`hooks.json`; empirically confirmed 2026-07-12, corroborated against the official docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is now **built and hermetically tested** against that verified spec. **wired** = the adapter exists, is tested, and installs as documented; what is *not* yet proven is a live AG session delivering the injected recovery block into the agent — one real AG run flips this to validated. No "works on Antigravity" claim until then.
+Antigravity 2.0 added a real hook engine (`hooks.json`; empirically confirmed 2026-07-12, corroborated against the official docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is now **built and hermetically tested** against that verified spec. **works with** = the adapter exists, is tested, and installs as documented; what is *not* yet proven is a live AG session delivering the injected recovery block into the agent — one real AG run flips this to validated. No **validated** claim for Antigravity until then.
 
 AG has no plugin manager, so the install is a file copy:
 
@@ -104,9 +104,9 @@ Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<wo
 
 Known limits on AG: delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
-### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — wired (config-only ports)
+### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — works with (config-only ports)
 
-Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **wired**, not validated — no live session on these platforms has run the wiring yet.
+Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **works with**, not validated — no live session on these platforms has run the wiring yet.
 
 ### Other agents — not supported
 

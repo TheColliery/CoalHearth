@@ -1,6 +1,6 @@
 # Security Policy
 
-CoalHearth is a zero-dependency, hook-pair-keyed plugin — validated on Claude Code, wired on 6 other platforms (Antigravity, Gemini CLI, Copilot CLI, Devin CLI, Kiro, Augment). Its security posture:
+CoalHearth is a zero-dependency, hook-pair-keyed plugin — validated on Claude Code, works with 6 other platforms (Antigravity, Gemini CLI, Copilot CLI, Devin CLI, Kiro, Augment). Its security posture:
 
 ## Reporting
 Report a suspected vulnerability by opening an issue on this repository. For a sensitive proof-of-concept, request a private channel in that issue rather than posting exploit details publicly.
