@@ -88,9 +88,13 @@ claude plugin install coalhearth@coalhearth
 
 That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
 
-### Antigravity — works with (live AG validation pending)
+### Antigravity — works with (live AG validation pending — see the 2026-08-04 test below)
 
-Antigravity 2.0 added a real hook engine (`hooks.json`; empirically confirmed 2026-07-12, corroborated against the official docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is now **built and hermetically tested** against that verified spec. **works with** = the adapter exists, is tested, and installs as documented; what is *not* yet proven is a live AG session delivering the injected recovery block into the agent — one real AG run flips this to validated. No **validated** claim for Antigravity until then.
+**Documented:** Antigravity 2.0 ships a real hook engine (`hooks.json`; antigravity.google/docs/hooks, corroborated against the docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is **built and hermetically tested** against that documented spec.
+
+**What "empirically confirmed 2026-07-12" actually established:** that date's pilot fired a live `Stop` hook on AG — proving the engine itself can fire — but in a sibling plugin (CoalMine), on a different event. CoalHearth's own `PreInvocation`/`PostToolUse` pair was never part of that fire; it was built and tested against the spec the pilot confirmed, never observed firing itself. This section previously implied otherwise by putting the date next to CoalHearth's own claim — corrected here.
+
+**Tested 2026-08-04, observed:** both hook locations this doc names below (global `~/.gemini/config/hooks.json` and per-project `<workspace>/.agents/hooks.json`) were installed; a fresh AG session ran a real tool call (`list_dir`, confirmed in AG's own transcript log); a plain control command written the identical way FIRED (ruling out a broken command shape). Neither CoalHearth's `PreInvocation` hook nor its `PostToolUse` hook (tested with both a wildcard `*` matcher and the exact tool-name matcher) produced a single log line. **This is a negative result on CoalHearth's two specific hooks, on one build, on one machine — not a claim that AG's hook engine is broken in general** (it has fired for at least the one other event above). **works with** here means "built + tested against the documented spec"; it has never meant "confirmed to fire," and that weaker, always-true claim now sits next to a live negative result rather than only an absent positive one. No **validated** claim for Antigravity until a real fire is observed.
 
 AG has no plugin manager, so the install is a file copy:
 
@@ -102,7 +106,7 @@ Copy-Item -Recurse CoalHearth "$env:USERPROFILE\.gemini\config\skills\coalhearth
 
 Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<workspace>/.agents/hooks.json` (per project) **or** `~/.gemini/config/hooks.json` (global), and replace `__COALHEARTH_DIR__` with the copied directory. Event mapping (AG never fires `SessionStart`): warm-resume rides the **first `PreInvocation`** of a session — a per-session temp marker keeps it once-per-session, since PreInvocation fires per model call — and the journal rides `PostToolUse`.
 
-Known limits on AG: delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
+Known limits on AG: **a 2026-08-04 test installed both hook locations named above and neither fired across a real AG session** — see above for what was tested and what was ruled out; re-test before relying on this platform · delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
 ### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — works with (config-only ports)
 

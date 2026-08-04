@@ -1,7 +1,13 @@
 // CoalHearth — Antigravity (AG 2.0) hooks template.
 //
-// AG shipped a real IDE hook engine (hooks.json, confirmed 2026-07-12). This wires
-// CoalHearth's two Phoenix-13 hooks onto AG's events. Copy this file to ONE of:
+// AG documents a real IDE hook engine (hooks.json; antigravity.google/docs/hooks). The
+// engine format was pilot-confirmed 2026-07-12 by a live Stop-hook fire IN A SIBLING
+// PLUGIN (CoalMine, a different event) -- these two CoalHearth hooks were built and
+// hermetically tested against that confirmed spec but were NEVER themselves observed
+// firing. A 2026-08-04 test installed both locations below and ran a real AG session --
+// neither hook fired (README's Antigravity section has the full account). Wire this
+// file anyway if you want CoalHearth ready the moment AG delivery is confirmed; do not
+// read its presence as proof it currently fires. Copy this file to ONE of:
 //   - project:  <workspace>/.agents/hooks.json
 //   - global:   ~/.gemini/config/hooks.json      (canonical; NOT the older
 //                                                  ~/.gemini/antigravity-cli/ path)
