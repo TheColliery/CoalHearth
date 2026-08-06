@@ -17,7 +17,7 @@ git tag -v "$(git describe --tags --abbrev=0)"
 
 ## Dist Integrity
 - **`plugin/` is generated, never hand-edited** — it's the Claude Code distribution the marketplace serves.
-- **`scripts/verify.mjs` byte-compares dist against source in both directions** — a stale dist and a dist-only orphan both fail the gate.
+- **`scripts/verify.mjs` compares dist against source in both directions** — byte-exact, with a CRLF/LF-normalized fallback on text files only (so a checkout's line-ending doesn't false-flag byte-identical content) — a stale dist and a dist-only orphan both fail the gate.
 - **`scripts/build-plugin.mjs` reproduces `plugin/` from source; `scripts/test.mjs` runs the zero-dependency suite** — a cloner reproduces the exact shipped bytes with `node scripts/build-plugin.mjs && node scripts/verify.mjs`.
 
 <!-- version-transition: SkillSpector scan — re-scan is event-driven (a new SkillSpector version or a genuinely new attack surface, maintainer-commanded), NOT per release; bump the version/score/date/commit below only after a real re-scan. -->
