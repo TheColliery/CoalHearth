@@ -33,7 +33,23 @@ function physical(p) {
   try { return fs.realpathSync(p); } catch { return path.resolve(p); }
 }
 
-// Walk up from cwd for `.coalhearth.json` / `.git`; NEVER walk above home (a config
+// Root markers a project can be anchored by. `.git` + the legacy `.coalhearth.json`
+// are the original two; the three `.<agent-dir>/coal/coalhearth.json` paths were added
+// by the namespace campaign (#69+#39, owner-designated 2026-08-08) alongside them — a
+// project configured ONLY through the new shape (no `.git`, and — since it migrated —
+// no root `.coalhearth.json` either) would otherwise match NOTHING and fall through to
+// the raw `startDir` fallback, the same per-subdir-scatter class CoalWash's own history
+// already names for its legacy marker. ADDITIVE ONLY: each new entry can only make the
+// walk stop LOWER (nearer to startDir), never widen it — verified with a real fixture
+// (lib/load-config.test.js) that a subdir walk still stops at the nearer/narrower root.
+const ROOT_MARKERS = [
+  '.git', '.coalhearth.json',
+  path.join('.claude', 'coal', 'coalhearth.json'),
+  path.join('.agents', 'coal', 'coalhearth.json'),
+  path.join('.gemini', 'coal', 'coalhearth.json'),
+];
+
+// Walk up from cwd for a root marker (see ROOT_MARKERS); NEVER walk above home (a config
 // above the sandboxed home would leak into a hermetic test — hooks-safety §3, the
 // 2026-07-01 lesson also applied in CoalBoard's findProjectCfg). Compare PHYSICAL
 // paths on both sides; the walk stays lexical after that (dirname of a physical path).
@@ -41,12 +57,64 @@ function findProjectRoot(startDir, home) {
   let dir = physical(startDir);
   const homeAbs = physical(home);
   while (true) {
-    if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.coalhearth.json'))) return dir;
+    if (ROOT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)))) return dir;
     if (dir === homeAbs) return startDir;
     const parent = path.dirname(dir);
     if (parent === dir) return startDir;
     dir = parent;
   }
+}
+
+// Namespace campaign (#69+#39, owner-designated 2026-08-08). Per-project config lives
+// under an agent dir, never bare at the project root any more. THE READ ORDER IS A
+// RAIL — identical wording in every room's readCfg comment and README Configure
+// section, one flock:
+//   1. <project>/.<the running agent's OWN dir>/coal/coalhearth.json — the dir of the
+//      agent actually executing.
+//   2. Other known agent dirs, fixed order: `.claude` -> `.agents` -> `.gemini` (first
+//      FOUND wins).
+//   3. LEGACY: <project>/.coalhearth.json at the project root (today's shape) — read
+//      normally, no breakage for an existing user.
+// WRITE target = where the config was found; absent everywhere, the running agent's
+// own dir. Hooks never perform this move on a READ (Phoenix #5, no side effects) — and
+// CoalHearth has NO project-config WRITER anywhere in this codebase to begin with (no
+// configure.mjs, no consent-persistence call): `.coalhearth.json`, global and project,
+// is hand-edited by the user or another tool, never written by CoalHearth itself. So
+// "move on write" has no code path to hook here — this is the READ side only.
+//
+// NAMED DIVERGENCE from CoalWash's own version of this comment (which collapses "own
+// dir" onto `.claude`, because CoalWash activates ONLY through Claude Code's hook
+// system): CoalHearth does NOT collapse it. Unlike CoalWash, loadConfig() is called
+// from MULTIPLE platform-specific entry points sharing this one codebase —
+// bin/session-start.js (Claude Code) plus bin/ag-pre-invocation.js / bin/ag-post-tool-
+// use.js, which the SAME argv-mode dispatch routes to Antigravity, Gemini CLI, or 4
+// more file-copy platforms (see those files' own headers). Hardcoding `.claude` as
+// "own dir" here would be wrong whenever the running agent is Gemini CLI (own dir
+// `.gemini`) or Antigravity (own dir `.agents`, this flock's cross-agent-neutral
+// convention — matches AG's own `<workspace>/.agents/hooks.json` wiring target) —
+// exactly the multi-agent scenario the design doc names (a project holding BOTH
+// `.claude/` and `.agents/`, e.g. this series' own umbrella repo). So `ownDir` is a
+// PARAMETER, not a hardcoded constant: the CALLER states which agent is actually
+// running. bin/session-start.js and the FileCopy-mode branch of the AG-dispatch entry
+// points (4 platforms with no clean match in the .claude/.agents/.gemini set) omit it
+// and get the `.claude`-first default — a no-op change from today's behavior, and a
+// named, accepted gap: those platforms fall through to step 2's fixed order like
+// everyone else. Gemini-mode and AG-mode pass their own dir explicitly — see
+// bin/ag-pre-invocation.js / bin/ag-post-tool-use.js.
+const AGENT_DIR_ORDER = ['.claude', '.agents', '.gemini'];
+function projectConfigCandidates(cwd, home, ownDir) {
+  const root = findProjectRoot(cwd, home);
+  const order = ownDir && AGENT_DIR_ORDER.includes(ownDir)
+    ? [ownDir, ...AGENT_DIR_ORDER.filter((d) => d !== ownDir)]
+    : AGENT_DIR_ORDER;
+  const candidates = order.map((d) => path.join(root, d, 'coal', 'coalhearth.json'));
+  candidates.push(path.join(root, '.coalhearth.json')); // LEGACY, always last
+  return candidates;
+}
+function projectConfigPath(cwd, home, ownDir) {
+  const candidates = projectConfigCandidates(cwd, home, ownDir);
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return candidates[0]; // nothing found anywhere -- own-dir (or .claude) is the write target
 }
 
 // Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27, amended R2 2026-07-27):
@@ -113,15 +181,19 @@ function readJsonc(file) {
 
 /**
  * Loads + shallow-per-group-merges the global (~/.claude/.coalhearth.json) and
- * project (nearest .coalhearth.json, walk stops at home) config. Fail-silent:
- * any read/parse error degrades to {} for that file, never throws.
- * @param {{cwd?: string, home?: string}} [opts]
+ * project config (namespace-campaign read order — see projectConfigPath's own
+ * header comment; walk stops at home). Fail-silent: any read/parse error degrades
+ * to {} for that file, never throws.
+ * @param {{cwd?: string, home?: string, ownDir?: string}} [opts] ownDir = the
+ *   running agent's own dir (e.g. '.gemini', '.agents'); omitted -> '.claude'-first
+ *   default (correct for Claude Code and the FileCopy-mode platforms).
  */
 function loadConfig(opts) {
   const cwd = (opts && opts.cwd) || process.cwd();
   const home = (opts && opts.home) || os.homedir();
+  const ownDir = opts && opts.ownDir;
   const global = readJsonc(globalConfigPath(home));
-  const project = readJsonc(path.join(findProjectRoot(cwd, home), '.coalhearth.json'));
+  const project = readJsonc(projectConfigPath(cwd, home, ownDir));
   const merged = {};
   for (const group of new Set([...Object.keys(global), ...Object.keys(project)])) {
     merged[group] = { ...(global[group] || {}), ...(project[group] || {}) };

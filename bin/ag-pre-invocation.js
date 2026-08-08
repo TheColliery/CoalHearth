@@ -139,7 +139,13 @@ function main() {
     }
   }
 
-  const config = loadConfig();
+  // ownDir (namespace campaign #69+#39): this file's own mode booleans ARE the running
+  // agent's identity, so they feed the SAME identity into the project-config read order
+  // (lib/load-config.js's own header explains why `.claude` cannot be hardcoded here).
+  // FileCopy covers 4 platforms with no clean match in the .claude/.agents/.gemini set
+  // -> omit ownDir, same `.claude`-first default as today.
+  const ownDir = GEMINI ? '.gemini' : (FILE_COPY ? undefined : '.agents');
+  const config = loadConfig({ ownDir });
   const recovery = config.recovery || {};
   const engine = new ResumeEngine(config.journal || {}, recovery);
 

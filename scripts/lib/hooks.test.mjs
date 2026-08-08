@@ -391,13 +391,17 @@ test('case 11: orphan worktree -> scoped sweep of CoalHearth-owned stale worktre
 // ---------------------------------------------------------------------------
 
 // (12) stamp-throttle: the 1st boot (first ever) nudges + stamps; the 2nd is silent.
+// Namespace campaign (#69+#39): the stamp moved to ~/.claude/coal/coalhearth/update-check
+// (was ~/.claude/.coalhearth-update-check) -- assertion updated to the new location, per
+// the room's own "fix the test to reflect the ruling" discipline (the code is correct;
+// the old assertion encoded the pre-campaign path).
 test('case 12: self-update stamp-throttle -> 1st SessionStart nudges + stamps, 2nd silent', () => {
   const { home, cwd } = sandbox();
   try {
     const r1 = run(SESSION_START, cwd, home);
     assertGraceful(r1);
     assert.match(r1.stdout, /self-update due/, 'run #1 (first ever) is due -> nudges');
-    assert.ok(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), 'crash-safe stamp written under home/.claude');
+    assert.ok(fs.existsSync(path.join(home, '.claude', 'coal', 'coalhearth', 'update-check')), 'crash-safe stamp written under the new coal/coalhearth/ namespace');
     const r2 = run(SESSION_START, cwd, home);
     assertGraceful(r2);
     assert.strictEqual(r2.stdout, '', 'run #2 inside the window -> throttled silent');
@@ -406,7 +410,8 @@ test('case 12: self-update stamp-throttle -> 1st SessionStart nudges + stamps, 2
   }
 });
 
-// (13) update.updateMode:off -> fully silent, and nothing is even scheduled.
+// (13) update.updateMode:off -> fully silent, and nothing is even scheduled, at EITHER
+// stamp location (old or new).
 test('case 13: update.updateMode:off -> silent, no stamp scheduled', () => {
   const { home, cwd } = sandbox();
   try {
@@ -414,7 +419,33 @@ test('case 13: update.updateMode:off -> silent, no stamp scheduled', () => {
     const r = run(SESSION_START, cwd, home);
     assertGraceful(r);
     assert.strictEqual(r.stdout, '', 'updateMode:off -> no update directive');
-    assert.strictEqual(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), false, 'off never writes a stamp');
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', 'coal', 'coalhearth', 'update-check')), false, 'off never writes the new stamp');
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), false, 'off never writes the old stamp either');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+// Namespace campaign (#69+#39) stamp relocation: read-new-fallback-old, write-new-drop-old.
+test('namespace campaign: self-update stamp reads the OLD location when only it exists, then migrates on write', () => {
+  const { home, cwd } = sandbox();
+  try {
+    // Plant an OLD-shape stamp recent enough to be inside the default 14-day window.
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth-update-check'), String(Date.now()));
+    const r1 = run(SESSION_START, cwd, home);
+    assertGraceful(r1);
+    assert.strictEqual(r1.stdout, '', 'a recent OLD stamp is still honored -- throttled, not due');
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', 'coal', 'coalhearth', 'update-check')), false, 'a read of a fresh old stamp does not migrate it (no write happened -- nothing was due)');
+
+    // Now force a due check (old stamp far in the past) and confirm the write MIGRATES:
+    // new stamp written, old stamp dropped (no-old-version-leftover).
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth-update-check'), String(Date.now() - 30 * 86400000));
+    const r2 = run(SESSION_START, cwd, home);
+    assertGraceful(r2);
+    assert.match(r2.stdout, /self-update due/, 'a stale old stamp is still correctly read as overdue');
+    assert.ok(fs.existsSync(path.join(home, '.claude', 'coal', 'coalhearth', 'update-check')), 'the due check writes the NEW stamp location');
+    assert.strictEqual(fs.existsSync(path.join(home, '.claude', '.coalhearth-update-check')), false, 'the OLD stamp is dropped on write (no-old-version-leftover)');
   } finally {
     clean(home, cwd);
   }

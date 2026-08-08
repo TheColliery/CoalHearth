@@ -28,12 +28,26 @@ function updateDue(config) {
     // Clamp on read: an out-of-range updateCheckDays silently degrades to the default
     // (14), never misbehaves — updateCheckDays:0 must NOT mean "nag every session".
     const days = (Number.isInteger(u.updateCheckDays) && u.updateCheckDays >= 1 && u.updateCheckDays <= 365) ? u.updateCheckDays : 14;
-    const stamp = path.join(os.homedir(), '.claude', '.coalhearth-update-check');
+    // Namespace campaign (#69+#39, owner-designated 2026-08-08): the machine-global
+    // scratch half moves to ~/.claude/coal/coalhearth/ (CoalWash's shipped
+    // updateStampPath/oldUpdateStampPath/readUpdateStamp/writeUpdateStamp shape is the
+    // copy source — kept INLINE here, not extracted to lib/, per hooks-safety.md's
+    // hook-logic-stays-inline discipline). Read-new-fallback-old; write-new-drop-old
+    // (no-old-version-leftover).
+    const stamp = path.join(os.homedir(), '.claude', 'coal', 'coalhearth', 'update-check');
+    const oldStamp = path.join(os.homedir(), '.claude', '.coalhearth-update-check');
     let last = 0;
-    try { last = Number(String(fs.readFileSync(stamp, 'utf8')).trim()) || 0; } catch {}
+    for (const p of [stamp, oldStamp]) {
+      try { last = Number(String(fs.readFileSync(p, 'utf8')).trim()) || 0; } catch { continue; }
+      if (last) break;
+    }
     const now = Date.now();
     if (last && now - last < days * 86400000) return false; // inside the window: not due
-    try { fs.mkdirSync(path.dirname(stamp), { recursive: true }); fs.writeFileSync(stamp, String(now)); } catch {} // schedule: stamp the check now
+    try {
+      fs.mkdirSync(path.dirname(stamp), { recursive: true });
+      fs.writeFileSync(stamp, String(now));
+      try { fs.rmSync(oldStamp, { force: true }); } catch {} // best-effort, no-old-version-leftover
+    } catch {} // schedule: stamp the check now
     return true; // due — first run (last === 0) or the window has elapsed
   } catch { return false; }
 }

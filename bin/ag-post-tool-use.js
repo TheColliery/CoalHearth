@@ -94,6 +94,14 @@ function normalizeAgToolPayload(ag) {
 try {
   const { loadConfig } = require('../lib/load-config.js');
 
+  // ownDir (namespace campaign #69+#39): the argv mode (PostToolUse/AfterTool/FileCopy)
+  // still branches NOTHING about the journal step itself (this file's own header still
+  // holds) — it is read ONLY to feed the running agent's identity into the project-config
+  // read order, so this hook agrees with ag-pre-invocation.js's read for the SAME session
+  // rather than silently defaulting to `.claude` regardless of which agent is running.
+  const AGPTU_MODE = process.argv[2] || '';
+  const ownDir = AGPTU_MODE === 'AfterTool' ? '.gemini' : (AGPTU_MODE === 'FileCopy' ? undefined : '.agents');
+
   let raw = '';
   try {
     raw = require('node:fs').readFileSync(0, 'utf8');
@@ -119,7 +127,7 @@ try {
     ? wsPaths[0] : firstString(agPayload, ['cwd', 'Cwd']);
   if (wsCwd) { try { process.chdir(wsCwd); } catch { /* keep spawn cwd */ } }
 
-  const cfg = loadConfig();
+  const cfg = loadConfig({ ownDir });
 
   let parsed = {};
   try {

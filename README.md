@@ -127,7 +127,17 @@ CoalHearth's core value is its two automatic hooks (above); the two commands bel
 
 ## ⚙️ Configure
 
-Everything is tunable in `.coalhearth.json` (global `~/.claude/` overlaid per-group by a project `.coalhearth.json`; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional. The high-impact keys:
+Everything is tunable in `coalhearth.json` (global `~/.claude/.coalhearth.json` overlaid per-group by a project config; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional.
+
+**Per-project config location — THE READ ORDER IS A RAIL, identical in every room of this series:**
+
+1. `<project>/.<the running agent's OWN dir>/coal/coalhearth.json` — the dir of the agent actually executing (Claude Code = `.claude`, Antigravity = `.agents`, Gemini CLI = `.gemini`).
+2. Other known agent dirs, fixed order: `.claude` → `.agents` → `.gemini` (first **found** wins).
+3. LEGACY: `<project>/.coalhearth.json` at the project root (the pre-2026-08-08 shape) — still read normally, no breakage for an existing config.
+
+Write target = wherever the config was found; nothing found anywhere = the running agent's own dir. CoalHearth has **no project-config writer** — `coalhearth.json`, global or project, is always hand-edited (by you or another tool), never written by CoalHearth itself, so there is no automatic move-on-write to expect.
+
+The high-impact keys:
 
 | Key | Default | What it does |
 |---|---|---|
