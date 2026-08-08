@@ -9,3 +9,6 @@ COALHEARTH_BLUEPRINT.md
 # Generated SkillSpector scan reports (provenance recorded in SECURITY.md; the raw report is not shipped)
 skillspector-*
 
+
+# CC platform-generated skill lockfile (machine-local, never ship)
+skills-lock.json
