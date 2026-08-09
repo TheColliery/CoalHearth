@@ -97,6 +97,33 @@ for (const [label, p, isSkill] of descTargets) {
   } catch (e) { fail(`${label} description check: ${e.message}`); }
 }
 
+console.log('plugin.json own description:');
+// board #64: the description-cap gate above (skills/*/SKILL.md + commands/*.md
+// frontmatter) never read .claude-plugin/plugin.json's OWN description field — the
+// string a marketplace/plugin listing actually renders. CoalLedger shipped one at
+// 1067 chars, over the 1024 cap, and only a human eye caught it. plugin.json is plain
+// JSON, not YAML frontmatter, so this reads the field directly rather than through
+// frontmatterField; DESC_CAP is the SAME constant declared above, never redefined.
+// BOM-strip matches this file's OWN existing idiom (charCodeAt(0)===0xFEFF, used twice
+// already at the config-schema and version-pin checks below) rather than introducing a
+// second BOM-strip shape into one file -- a deliberate, named divergence from the
+// exemplar's separate BOM_RE regex constant.
+{
+  const pluginJsonPath = path.join(repo, '.claude-plugin', 'plugin.json');
+  try {
+    let raw = fs.readFileSync(pluginJsonPath, 'utf8');
+    if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+    const d = JSON.parse(raw).description;
+    // A truthy NON-STRING description (123, {}, ['a']) must fail loud, not silently
+    // read as 0 chars and pass -- the exact hole a CoalBoard sibling found in the
+    // shipped exemplar's `typeof===string?len:0` shape (0 > DESC_CAP is always false).
+    if (d === undefined || d === null || d === '') fail('.claude-plugin/plugin.json: description missing');
+    else if (typeof d !== 'string') fail(`.claude-plugin/plugin.json: description is not a string (got ${typeof d})`);
+    else if (d.length > DESC_CAP) fail(`.claude-plugin/plugin.json: description ${d.length} chars exceeds the ${DESC_CAP}-char cap`);
+    else ok(`.claude-plugin/plugin.json: ${d.length} chars (cap ${DESC_CAP})`);
+  } catch (e) { fail(`.claude-plugin/plugin.json description check: ${e.message}`); }
+}
+
 console.log('config (factory vs schema):');
 try {
   let c = fs.readFileSync(path.join(repo, 'platform-configs', '.coalhearth.json'), 'utf8');

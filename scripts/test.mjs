@@ -17,6 +17,7 @@ const TESTS = [
   'scripts/lib/hooks.test.mjs',
   'scripts/lib/engine.test.mjs',
   'scripts/build-plugin.test.mjs',
+  'scripts/verify.test.mjs',
   'lib/handoff-journal.test.js',
   'lib/state-snapshot.test.js',
   'lib/load-config.test.js',
