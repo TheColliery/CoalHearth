@@ -130,18 +130,31 @@ class ResumeEngine {
       .map((item) => `- [${item.status === 'done' ? 'x' : item.status === 'doing' ? '/' : ' '}] ${item.task}`)
       .join('\n') || 'None';
     const files = asArray(data.modifiedFiles).map((f) => `- \`${f}\``).join('\n') || 'None';
-    // In-flight subagents at interruption (Incident E). HONEST SCOPE: this lists that
-    // a sub was RUNNING + where its residue may live — it does NOT recover the sub's
-    // work (a killed sub journals nothing); the resumed session verifies/re-spawns.
-    const agents = asArray(data.inFlightAgents)
-      .filter((a) => a && typeof a === 'object')
+    // In-flight subagents at interruption (Incident E; status/outcome added board #94,
+    // issue #13 — the highest-value gap the operator named: "no per-subagent progress
+    // record ... a single line would have changed the decision immediately"). HONEST
+    // SCOPE: this lists that a sub was RUNNING + whatever its own tool_response reported
+    // + where its residue may live — it does NOT recover the sub's work (a killed sub
+    // journals nothing of its own); the resumed session verifies/re-spawns.
+    const rawAgents = asArray(data.inFlightAgents).filter((a) => a && typeof a === 'object');
+    const agents = rawAgents
       .map((a) => {
         const type = a.subagentType ? ` [${a.subagentType}]` : '';
+        const status = a.status ? ` — status: ${a.status}` : '';
+        const outcome = a.outcome ? ` — "${a.outcome}"` : '';
         const out = a.outputPath ? ` — residue: \`${a.outputPath}\`` : '';
-        const at = a.spawnedAt ? ` (spawned ${a.spawnedAt})` : '';
-        return `- ${a.description || '(no description)'}${type}${out}${at}`;
+        const at = a.spawnedAt ? ` (recorded ${a.spawnedAt})` : '';
+        return `- ${a.description || '(no description)'}${type}${status}${outcome}${out}${at}`;
       })
       .join('\n') || 'None';
+    // issue #13 symptoms #3+#4: a reported `status` is self-reported by the subagent's
+    // own tool_response and has been OBSERVED WRONG (one subagent reported `failed` and
+    // had actually completed) -- never let either status word drive an auto-decision.
+    // And: resuming/recalling a subagent is cheap (2 tool calls in the reported
+    // incident) -- try it before waiting on a stated reset time.
+    const agentsNote = rawAgents.length
+      ? '\n> ⚠️ A `status`/outcome above is self-reported by the subagent and is **not reliable on its own** — a subagent has reported `failed` while having actually completed. Verify liveness (resume/recall the subagent) before deciding to re-dispatch or discard; resuming is cheap (often 1-2 tool calls) — try it before waiting on any stated reset time.'
+      : '';
     const nextSteps = asArray(plan.nextSteps).map((s) => `- ${s}`).join('\n') || 'None';
     const constraints = asArray(plan.constraints).map((c) => `- ${c}`).join('\n') || 'None';
     const staleNote = 'The session was interrupted before it reported completion.';
@@ -193,6 +206,7 @@ ${files}
 
 ### In-flight subagents at interruption (verify/re-spawn as needed)
 ${agents}
+${agentsNote}
 
 ### Planned next steps
 ${nextSteps}

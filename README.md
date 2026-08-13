@@ -32,6 +32,7 @@ A session limit-hit or a crash loses in-flight work — the plan, the checklist,
 
 - **The recovery core.** A `PostToolUse` hook builds a best-effort snapshot of the session (goal + checklist from `task.md`, constraints from `AGENTS.md`, modified files accumulated from the file-editing tool calls the hook observes — no `git` spawn, no child processes) and journals it **atomically** every step to `session_handoff.json`.
 - **Warm-resume on boot.** On the next session's `SessionStart`, if the prior session's journal is still marked `in_progress`, CoalHearth injects a markdown **recovery block** — the goal, the checklist, the files it was touching, the planned next steps — so you resume from context instead of reconstructing it by hand.
+- **Subagent-death visibility.** A spawned subagent's tool call resolving (success or failure) is now captured with a status + a short outcome snippet from its own report — the "7 of 11 checks done" a revive-or-defer decision actually needs, not just a name. On Claude Code, an unsurfaced resolution also nudges on your very next prompt — seconds to minutes away, not a session restart.
 
 > [!IMPORTANT]
 > The recovery block never asks you to blind-trust it — it always tells the agent to **verify against `git status` / `git diff`** first, because the journal may be stale or half-applied.
@@ -43,19 +44,20 @@ That recovery core is the value.
 CoalHearth **reduces the damage** of a session interruption — it does **not** prevent one, and it guarantees nothing:
 
 - The recovery journal is a **best-effort snapshot**, not a guarantee it's still accurate — code may have moved since the last save, which is exactly why the recovery block tells the agent to verify against git.
-- Work done by **fanned-out workers** that die on a limit is **unrecoverable** — they journal nothing. The journal snapshots the *main* session only.
+- Work done by **fanned-out workers** that die on a limit is still **unrecoverable in content** — a dead subagent journals nothing of its own. What changed (issue #13): if the subagent's tool call itself RESOLVED (even with a failure status), the parent's journal now records that outcome + a short self-reported snippet — enough to price a revive-or-defer decision. A subagent whose tool call never resolves at all (a true mid-dispatch death) is still invisible until the next `SessionStart`.
 - Claude Code keeps its own session transcript, but **retention is version-dependent, not the guaranteed 30 days its docs suggest** — a transcript can be garbage-collected early, before you `--resume` it. CoalHearth's journal is a separate, local net that doesn't depend on it, and the recovery block flags a transcript that's already gone.
 
 Honest sell: **less lost work on an interruption** — not a limit-proof session.
 
-## 🪝 The two hooks
+## 🪝 The hooks
 
-Both are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes**, and they emit only their one sanctioned channel.
+All are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes**, and they emit only their one sanctioned channel.
 
 - **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
 - **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically under a per-workspace lock (so two concurrent sessions can't lose each other's journal). Journal-only — it emits nothing.
+- **`UserPromptSubmit` → subagent-death nudge** ([`bin/user-prompt-submit.js`](bin/user-prompt-submit.js), **Claude Code only** — issue #13): the common case is one cheap journal read and nothing else. When a spawned subagent's tool call has RESOLVED since the last time this fired, and its status/outcome hasn't been shown yet, it prints one nudge on the sanctioned UserPromptSubmit context-injection channel — description, status, and the self-reported outcome snippet — then marks it shown so the same resolution never repeats. This surfaces on your very next prompt in the SAME session, instead of waiting for a `SessionStart` that may be hours away. Every status is stated with a caveat: it's self-reported by the subagent and has been observed wrong.
 
-On every other platform the same two jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js)); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. A trailing argument in each platform's config picks the emit shape (Antigravity flat JSON · Gemini nested `hookSpecificOutput` · plain Claude-Code stdout for the CC-shaped file-copy platforms); the parsing/journal logic never forks. Same Phoenix-13 discipline everywhere.
+On every other platform the resume + journal jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js) for the journal, [`lib/resume-engine.js`](lib/resume-engine.js) for the recovery block); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. A trailing argument in each platform's config picks the emit shape (Antigravity flat JSON · Gemini nested `hookSpecificOutput` · plain Claude-Code stdout for the CC-shaped file-copy platforms); the parsing/journal logic never forks. **The subagent status/outcome capture and the enriched resume-block rendering reach every platform** via those shared cores — only the mid-session `UserPromptSubmit` nudge itself is Claude-Code-specific this release (no other platform's config wires an equivalent per-prompt event to it; a decoupled `PreInvocation` variant for Antigravity is a named, unbuilt follow-up).
 
 ## 🚀 Install
 
@@ -65,7 +67,7 @@ CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever
 
 | Platform | Tier | Events (resume + journal) | Wiring |
 |---|---|---|---|
-| Claude Code | **validated** | `SessionStart` + `PostToolUse` | plugin (automatic) |
+| Claude Code | **validated** | `SessionStart` + `PostToolUse` + `UserPromptSubmit` ² | plugin (automatic) |
 | Antigravity 2.0 | **works with** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
 | Gemini CLI ¹ | **works with** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
 | GitHub Copilot CLI | **works with** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
@@ -76,10 +78,11 @@ CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever
 | Devin Desktop (Cascade Hooks) | not supported | its snake_case vocabulary (`pre/post_write_code`, `post_cascade_response`, …) has no session-start-class event — no resume anchor; a separate surface from Devin CLI | — |
 
 ¹ Gemini CLI audience caveat: individual/AI-Pro/Ultra tiers were cut off 2026-06-18 — it is a business-tier product (Standard/Enterprise) now.
+² `UserPromptSubmit` (the subagent-death nudge, issue #13) is Claude-Code-only this release — see "The hooks" above.
 
 ### Claude Code — validated
 
-One command (this also wires the two hooks):
+One command (this also wires the hooks):
 
 ```bash
 claude plugin marketplace add TheColliery/CoalHearth

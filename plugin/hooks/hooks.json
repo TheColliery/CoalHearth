@@ -5,6 +5,9 @@
     ],
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/post-tool-use.js\"" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/user-prompt-submit.js\"" }] }
     ]
   }
 }
