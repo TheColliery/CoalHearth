@@ -2,6 +2,10 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.3.1] - 2026-08-13
+
+**PATCH** — `bin/user-prompt-submit.js`'s spawn-correlation key (`` `${a.description} ${a.spawnedAt}` ``, used both when building `shownKeys` and when checking it via `.has()`) had the space between the two interpolated values written as a literal `U+0000` byte instead of ASCII `0x20`, in both occurrences. Invisible to a normal `Read` (renders as a space-sized gap) and functionally silent this release (both sides carried the identical corruption, so the internal `Set` correlation still matched itself) — but real, non-ASCII contamination: `git diff --stat` reported the file as `Bin 0 -> 5656 bytes` instead of a normal text diff, which is what surfaced it during a post-ship review of v2.3.0. Same defect class AGENTS.md already names for the Cyrillic-homoglyph-in-comments incident: a tool-authored file carrying characters the author did not intend. Fixed with a direct byte-level scan/replace (a NUL byte does not reliably round-trip through a text-based find/replace); every other file this release touched was swept for the same class — zero further hits. No behavior change, no new capability.
+
 ## [2.3.0] - 2026-08-13
 
 **MINOR** — board #94, upstream issue #13: subagent-death visibility. New backward-compatible capability (a new `UserPromptSubmit` hook + two enriched fields on an existing journal record) — see scripts-quality.md §3's decisive test.
