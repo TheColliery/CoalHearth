@@ -227,6 +227,30 @@ test('ResumeEngine.generateHandoffPrompt lists in-flight subagents (Incident E),
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+// Board #94 (issue #13): status + outcome rendered per subagent, and the
+// verify-liveness/resume-is-cheap caveat appears exactly when there is a subagent to
+// caveat about (never a stray note beside an empty "None" list).
+test('ResumeEngine.generateHandoffPrompt renders status/outcome per subagent + the verify-liveness caveat', () => {
+  const d = tmp();
+  const engine = new ResumeEngine({ outputDirectory: d }, {}, d);
+  const base = {
+    sessionId: 's1', timestamp: '2026-07-01T00:00:00.000Z', status: 'in_progress',
+    checklist: [], modifiedFiles: [], activePlan: { goal: 'X', nextSteps: [], constraints: [] },
+  };
+  const withAgents = engine.generateHandoffPrompt({
+    ...base,
+    inFlightAgents: [
+      { description: 'QC gate', subagentType: 'qa', status: 'failed', outcome: 'Agent terminated early', spawnedAt: '2026-07-01T00:00:01.000Z' },
+    ],
+  });
+  assert.match(withAgents, /QC gate.*status: failed.*"Agent terminated early"/);
+  assert.match(withAgents, /verify liveness/i, 'the do-not-trust-status-blind caveat is present when there is a subagent');
+  assert.match(withAgents, /resuming is cheap/i, "issue #13 symptom #4: 'resume first, don't wait'");
+  // No inFlightAgents -> no stray caveat beside the "None" list.
+  assert.doesNotMatch(engine.generateHandoffPrompt(base), /verify liveness/i, 'no caveat when there is nothing to caveat about');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 // GC'd-transcript detection (recovery honesty): CC hard-unlinks transcripts on a
 // version-dependent retention sweep, so a journaled transcriptPath can be GONE by resume
 // time. When it is, the block must flag it (dead `--resume`) and route deeper recovery to

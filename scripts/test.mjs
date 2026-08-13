@@ -24,6 +24,7 @@ const TESTS = [
   'lib/contained-dir.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
+  'bin/user-prompt-submit.test.js',
   'bin/ag-hooks.test.js',
 ];
 

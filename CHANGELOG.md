@@ -2,6 +2,25 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.3.0] - 2026-08-13
+
+**MINOR** — board #94, upstream issue #13: subagent-death visibility. New backward-compatible capability (a new `UserPromptSubmit` hook + two enriched fields on an existing journal record) — see scripts-quality.md §3's decisive test.
+
+### Added
+- **`inFlightAgents` records `status` + `outcome` at resolution**, not just a name. `PostToolUse` fires exactly once per `Agent`/`Task`/`Workflow` spawn call, AT resolution (success or failure) — `lib/journal-step.js`'s `deriveStatus`/`deriveOutcome` now read `tool_response` instead of discarding it: `status` is `'completed'` / `'failed'` / `'unknown'` (a small vocabulary match against `resp.status`, never assumed from absence — an unrecognized or missing status reads `'unknown'`, not `'completed'`, because the reported incident's own second subagent said `status: failed` while having actually finished); `outcome` is a best-effort, 300-char-capped snippet probed from `resp.error`/`summary`/`message`/`result`/`output`/`text` — the "7 of 11 checks done" line a revive-or-defer decision actually needs. Reaches every platform this room ships (Claude Code + Antigravity + the 5 config-only ports) — the capture lives in the ONE shared `extractSpawn`, not a per-platform fork.
+- **New `UserPromptSubmit` hook** ([`bin/user-prompt-submit.js`](bin/user-prompt-submit.js), **Claude Code only**): surfaces an unsurfaced RESOLVED subagent (`status` completed/failed) on the sanctioned UserPromptSubmit context-injection channel (hooks-safety.md Phoenix #13) — the user's very next prompt in the SAME session, not a session restart. Marks each surfaced entry `surfaced: true` under the same lock `PostToolUse` uses (H1), so the same resolution never nudges twice. The nudge text always states the caveat: a reported `status` is self-reported and has been observed wrong.
+- **`ResumeEngine.generateHandoffPrompt`** renders `status`/`outcome` per subagent in the "In-flight subagents" section, plus a caveat line (present only when there is a subagent to caveat about): verify liveness before deciding to re-dispatch or discard; resuming is cheap (issue #13's own incident: 2 tool calls) — try it before waiting on a stated reset time.
+
+### Honest scope, unchanged
+- This does **not** detect a subagent whose tool call has never resolved at all (a true mid-dispatch death, or the harness itself dying before the call could resolve) — Claude Code's `PostToolUse` only fires AT resolution, and this room does not track a PENDING/dispatch-time record (no `PreToolUse` wiring). That class is still invisible until the next `SessionStart`. Named as a follow-up, not built here — a `PreToolUse`-based pending-tracker was scoped out: the operator's own issue ranked per-subagent progress capture (shipped above) as "likely sufficient by itself," and a pending-tracker needs an unverified tool-call correlation key (`tool_use_id`-family), doubling the hook surface for a case outside the reported incident.
+- Cross-agent reach for the nudge specifically: **Claude Code only, this release.** Antigravity's `PreInvocation` fires per model call, not per tool call, so it cannot detect "a spawn just resolved" the way Claude Code's `UserPromptSubmit` can without restructuring the existing once-per-session guard — a decoupled AG variant is a named, unbuilt follow-up.
+
+### Tests
+- 4 new hermetic cases in `bin/post-tool-use.test.js` (status/outcome capture: failed/completed/unknown vocabulary, outcome capping).
+- 7 new hermetic cases in the new `bin/user-prompt-submit.test.js` (silent-when-nothing-to-show, nudge-once-then-silent, multi-entry nudge, garbage stdin, corrupt journal).
+- 1 new direct-call case in `scripts/lib/engine.test.mjs` (status/outcome rendering + the conditional caveat line).
+- `t.after()`-registered cleanup throughout the new/touched test files (scripts-quality.md §2, board #107's own shape).
+
 ## [2.2.0] - 2026-08-08
 
 **MINOR** — namespace campaign (#69+#39, owner-designated 2026-08-08): per-project `coalhearth.json` now lives under an agent dir, never bare at the project root. New backward-compatible capability (the legacy shape is still read; nothing is removed) — see scripts-quality.md §3's decisive test.

@@ -43,6 +43,41 @@ function firstString(obj, keys) {
   return undefined;
 }
 
+// Board #94 (issue #13): the single highest-value gap named by the operator was "no
+// per-subagent progress record" — when a spawn resolves (this hook fires exactly once
+// per Agent/Task/Workflow call, AT resolution, success or failure), extractSpawn used
+// to discard tool_response entirely except for a residue path. deriveStatus/deriveOutcome
+// capture what it actually says, so a revive-vs-defer decision has something to price.
+//
+// deriveStatus is deliberately NOT trusted as ground truth downstream (resume-engine's
+// prompt always says "verify liveness, do not assume from status alone") — the reported
+// incident's own second subagent said `status: failed` and had actually completed. So an
+// UNRECOGNIZED or ABSENT status reads 'unknown', never silently 'completed': assuming
+// success from silence would be the same misplaced trust in the other direction.
+const STATUS_VOCAB = [
+  [/fail|error|terminat/i, 'failed'],
+  [/complet|success|\bok\b|done/i, 'completed'],
+];
+function deriveStatus(resp) {
+  const s = typeof resp.status === 'string' ? resp.status : '';
+  if (!s) return 'unknown';
+  for (const [re, label] of STATUS_VOCAB) if (re.test(s)) return label;
+  return 'unknown';
+}
+
+// A short, size-capped best-effort snippet of WHAT the subagent reported — the "7 of 11
+// checks done" or "Now the search_path convention check" line the issue names as the
+// input the revive-or-defer decision actually needs. Probed across plausible fields
+// (the tool_response shape is undocumented, same probe-not-require discipline as
+// outputPath below); capped so one huge tool_response can't bloat the journal.
+const OUTCOME_CAP = 300;
+function deriveOutcome(resp) {
+  const str = (v) => (typeof v === 'string' && v ? v : undefined);
+  const raw = str(resp.error) || str(resp.summary) || str(resp.message) || str(resp.result) || str(resp.output) || str(resp.text);
+  if (!raw) return undefined;
+  return raw.length > OUTCOME_CAP ? `${raw.slice(0, OUTCOME_CAP)}…` : raw;
+}
+
 // Extract an in-flight-subagent record from a spawn tool_call payload (Incident E).
 // Captures only what the payload GIVES: the `description` + `subagent_type` from
 // tool_input (the stable Agent-tool arg schema) and, best-effort, an output/residue
@@ -63,7 +98,14 @@ function extractSpawn(payload) {
     // best-effort. Absent -> undefined (the recovery block just omits it). For a
     // Workflow the real recovery point is the run's own journal.jsonl/transcript dir.
     outputPath: str(resp.output_file) || str(resp.outputPath) || str(resp.output_path) || str(resp.transcriptDir) || str(resp.scriptPath),
+    // This hook fires exactly once per spawn call, AT RESOLUTION (Claude Code's
+    // PostToolUse contract) -- so `spawnedAt` names WHEN THIS HOOK OBSERVED THE CALL,
+    // which for a spawn tool is resolution time, not dispatch time. Kept as-is (many
+    // tests + the field's existing consumers key on this name) rather than renamed for
+    // cosmetic accuracy -- board #94 adds status/outcome alongside it instead.
     spawnedAt: new Date().toISOString(),
+    status: deriveStatus(resp),
+    outcome: deriveOutcome(resp),
   };
 }
 
@@ -120,4 +162,4 @@ function recordStep(cwd, config, step) {
   });
 }
 
-module.exports = { FILE_TOOL_KEYS, SPAWN_TOOL_NAMES, firstString, extractSpawn, parseToolPayload, recordStep };
+module.exports = { FILE_TOOL_KEYS, SPAWN_TOOL_NAMES, firstString, deriveStatus, deriveOutcome, extractSpawn, parseToolPayload, recordStep };

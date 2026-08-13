@@ -225,6 +225,72 @@ test('inFlightAgents: an Agent spawn is journaled (description/type/residue), a 
   }
 });
 
+// Board #94 (issue #13): the operator's own highest-ranked gap -- "no per-subagent
+// progress record ... a single line would have changed the decision immediately".
+// This hook fires exactly once per spawn call, AT RESOLUTION, so tool_response is
+// always the RESOLVED outcome -- deriveStatus/deriveOutcome must capture it instead
+// of discarding it. status is deliberately NOT trusted blind: an unrecognized/absent
+// status reads 'unknown', never silently 'completed' (the reported incident's own
+// 2nd subagent said `failed` while having actually finished -- assuming success from
+// silence would repeat that mistake in the other direction).
+test('inFlightAgents captures status + a capped outcome snippet from tool_response at resolution', () => {
+  const cwd = mkProject();
+  const home = mk();
+  const journalPath = path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json');
+  const read = () => JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  try {
+    // Reported-failed but the vocabulary is not trusted blind -- captured as 'failed'
+    // with the error text, exactly the "7 of 11 checks done" shape the issue asks for.
+    let r = run(cwd, home, JSON.stringify({
+      tool_name: 'Agent',
+      tool_input: { description: 'QC gate', subagent_type: 'qa' },
+      tool_response: { status: 'failed', error: 'Agent terminated early due to an API error: session limit' },
+    }));
+    assert.strictEqual(r.status, 0);
+    let a = read().inFlightAgents[0];
+    assert.strictEqual(a.status, 'failed');
+    assert.strictEqual(a.outcome, 'Agent terminated early due to an API error: session limit');
+
+    // A recognizable success vocabulary -> 'completed'.
+    r = run(cwd, home, JSON.stringify({
+      tool_name: 'Task',
+      tool_input: { description: 'Lint pass', subagent_type: 'linter' },
+      tool_response: { status: 'success', summary: '0 errors, 3 warnings' },
+    }));
+    assert.strictEqual(r.status, 0);
+    a = read().inFlightAgents[1];
+    assert.strictEqual(a.status, 'completed');
+    assert.strictEqual(a.outcome, '0 errors, 3 warnings');
+
+    // No status field at all, or an unrecognized word -> 'unknown', NEVER silently
+    // 'completed' -- an absent/unrecognized status is not evidence of success.
+    r = run(cwd, home, JSON.stringify({
+      tool_name: 'Agent',
+      tool_input: { description: 'Silent one', subagent_type: 'x' },
+      tool_response: {},
+    }));
+    assert.strictEqual(r.status, 0);
+    a = read().inFlightAgents[2];
+    assert.strictEqual(a.status, 'unknown');
+    assert.strictEqual(a.outcome, undefined);
+
+    // A huge outcome field is capped, never left to bloat the journal unbounded.
+    const huge = 'x'.repeat(1000);
+    r = run(cwd, home, JSON.stringify({
+      tool_name: 'Agent',
+      tool_input: { description: 'Verbose one', subagent_type: 'x' },
+      tool_response: { status: 'failed', error: huge },
+    }));
+    assert.strictEqual(r.status, 0);
+    a = read().inFlightAgents[3];
+    assert.ok(a.outcome.length <= 301, `outcome capped, got ${a.outcome.length} chars`);
+    assert.ok(a.outcome.endsWith('…'), 'a truncated outcome is marked, not silently cut');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('garbage stdin -> exit 0, no crash (Phoenix fail-silent)', () => {
   const cwd = mkProject();
   const home = mk();
