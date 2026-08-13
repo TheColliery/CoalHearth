@@ -16,7 +16,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 - Cross-agent reach for the nudge specifically: **Claude Code only, this release.** Antigravity's `PreInvocation` fires per model call, not per tool call, so it cannot detect "a spawn just resolved" the way Claude Code's `UserPromptSubmit` can without restructuring the existing once-per-session guard — a decoupled AG variant is a named, unbuilt follow-up.
 
 ### Tests
-- 4 new hermetic cases in `bin/post-tool-use.test.js` (status/outcome capture: failed/completed/unknown vocabulary, outcome capping).
+- 1 new hermetic test in `bin/post-tool-use.test.js` exercising 4 status/outcome scenarios (failed/completed/unknown vocabulary, outcome capping).
 - 7 new hermetic cases in the new `bin/user-prompt-submit.test.js` (silent-when-nothing-to-show, nudge-once-then-silent, multi-entry nudge, garbage stdin, corrupt journal).
 - 1 new direct-call case in `scripts/lib/engine.test.mjs` (status/outcome rendering + the conditional caveat line).
 - `t.after()`-registered cleanup throughout the new/touched test files (scripts-quality.md §2, board #107's own shape).
