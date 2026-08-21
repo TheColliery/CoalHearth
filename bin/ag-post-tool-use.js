@@ -18,7 +18,7 @@
 // degrades to a no-op contribution (never crash) — the session state still journals; only
 // that one tool's touched-file/spawn is skipped.
 //
-// NOT validated live on any of these platforms (tier: wired) — hence the defensive
+// NOT validated live on any of these platforms (tier: works with) — hence the defensive
 // reader. No claim here is "validated on <platform>".
 'use strict';
 

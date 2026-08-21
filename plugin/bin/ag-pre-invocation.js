@@ -37,7 +37,7 @@
 // child process, no process.exit(); the ONLY emit is each platform's one sanctioned
 // stdout channel (AG = the injectSteps JSON below).
 //
-// NOT validated live on ANY of these platforms (tier: wired): the emit shapes follow each
+// NOT validated live on ANY of these platforms (tier: works with): the emit shapes follow each
 // platform's primary docs, but no live session has proven delivery of the injected context
 // into the agent. Nothing here claims validated-on-<platform>.
 //
