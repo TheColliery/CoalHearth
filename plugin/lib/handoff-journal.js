@@ -19,10 +19,15 @@ const MAX_RETRIES = 5; // hard clamp: save() runs on the PostToolUse hot-path an
 // section is a few small sync fs ops (~1-5ms). A lock older than LOCK_STALE_MS is therefore
 // a CRASHED holder → steal it (1s >> any real section, so a live holder is never falsely
 // stolen); a live waiter polls (Atomics.wait, no CPU burn) up to LOCK_WAIT_MS then proceeds
-// LOCK-FREE best-effort. 500ms comfortably serializes a realistic fan-out (10 agents ≈ 50ms;
-// the crash-test's reachable case) with headroom, and the non-spinning sleep makes the wait
-// free on the happy path. Beyond ~20 truly-simultaneous writers the fallback may still drop
-// one — far past any reachable concurrency; the alternative (unbounded wait) risks a hang.
+// LOCK-FREE best-effort. CORRECTED (board #142/U11-B1, 2026-08-31): this comment previously
+// claimed "500ms comfortably serializes 10 agents ≈ 50ms with headroom" and put real loss
+// only "beyond ~20 truly-simultaneous writers" — FALSE, contradicted by the room's own
+// 2026-08-22 HIGH and reproduced again here (~12-18% loss AT N=10, IN ISOLATION). The actual
+// mechanism was never LOCK_WAIT_MS sizing — it was a losing writer misclassifying a Windows
+// EPERM lock-contention error as "unlockable" and skipping this whole wait/retry loop on
+// its FIRST attempt (see _acquireLock's own comment for the full finding). Fixed there;
+// LOCK_STALE_MS/LOCK_WAIT_MS below are correctly sized for what they actually bound (wait
+// latency for a genuinely busy or crashed lock), not a data-safety guarantee.
 const LOCK_STALE_MS = 1000;
 const LOCK_WAIT_MS = 500;
 const LOCK_POLL_MS = 4;
@@ -183,6 +188,21 @@ class HandoffJournal {
    * save() is atomic regardless, so the worst case is the rare lost-update this lock exists
    * to make rarer, never a torn file. Returns a release() (a no-op when it went lock-free).
    * ponytail: file-lock + stale-break + bounded wait; enough for short-lived (<100ms) hooks.
+   *
+   * ROOT CAUSE OF U11-B1 (board #142, 2026-08-31): a losing `wx` create race was assumed to
+   * always surface as EEXIST. On Windows it can instead surface as EPERM — libuv's O_EXCL
+   * emulation there returns access-denied, not exists, when the create collides with another
+   * process's fresh handle on the same name (confirmed live: instrumented all 10 concurrent
+   * writers in the crash-test's fan-out, one lost race consistently logged
+   * `unlockable code=EPERM` on its FIRST attempt). The old code treated ANY non-EEXIST error
+   * as a genuine permissions failure and bailed LOCK-FREE immediately, on attempt #1, with
+   * NONE of the wait/retry/steal logic below ever running for that writer — this, not the
+   * LOCK_WAIT_MS bound, was the actual mechanism dropping ~12-18% of writes at a reachable
+   * N=10 (reproduced IN ISOLATION, contradicting the room's own "never in isolation" test
+   * comment). EPERM is now treated as the SAME signal as EEXIST — "someone else has it right
+   * now" — except it skips the staleness steal (a stat racing the same contention can itself
+   * misreport under this condition; polling is always safe, stealing a lock that is not
+   * actually stale is not).
    */
   _acquireLock() {
     const noop = () => {};
@@ -194,13 +214,25 @@ class HandoffJournal {
         fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' }); // atomic acquire
         return () => { try { fs.rmSync(lockPath, { force: true }); } catch (_) {} };
       } catch (err) {
-        if (!err || err.code !== 'EEXIST') return noop; // unlockable (perms/etc.) -> lock-free
-        try {
-          if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
-            fs.rmSync(lockPath, { force: true }); // crashed holder -> steal + retry
-            continue;
-          }
-        } catch (_) { continue; } // lock vanished between calls -> retry the create
+        const contended = err && (err.code === 'EEXIST' || err.code === 'EPERM');
+        // A genuinely non-contention error (a real perms/disk issue, NOT EPERM) still
+        // bails lock-free immediately — unchanged. TRADE NAMED (INSPECT LOW #1, board
+        // #142): treating EPERM as contention means a genuinely broken environment that
+        // happens to surface AS EPERM (rather than some other errno) now pays up to the
+        // full LOCK_WAIT_MS poll before falling back, instead of bailing on attempt #1.
+        // Bounded (500ms) and off the happy path (a successful wx create is unaffected)
+        // — accepted over the alternative, which is exactly the silent-loss bug this fix
+        // exists to close.
+        if (!contended) return noop; // genuinely unlockable (a real perms/disk issue, not EPERM) -> lock-free
+        if (err.code === 'EEXIST') {
+          try {
+            if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+              fs.rmSync(lockPath, { force: true }); // crashed holder -> steal + retry
+              continue;
+            }
+          } catch (_) { continue; } // lock vanished between calls -> retry the create
+        }
+        // EPERM, or a live (non-stale) EEXIST holder: someone else has it -> poll.
         if (Date.now() >= deadline) return noop; // bounded -> proceed lock-free (best-effort)
         this._sleepSync(LOCK_POLL_MS);
       }

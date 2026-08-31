@@ -328,22 +328,20 @@ test('unwritable outputDir (blocked by a file) -> fail-silent, exit 0', () => {
 // writer's file must survive. RED-PROOF: point recordStep back at plain journal.load()+save()
 // (drop updateUnderLock) and this goes red (last-save-wins drops most files).
 //
-// BARRIER-BUNCHING (station-3, 2026-07-27, observed not reproduced): this test flaked
-// twice under heavy load (the full suite running 4 concurrent Node test files at once)
-// during an unrelated diff, never in isolation, never after (7 clean runs including
-// concurrent-suite load, not reproduced). Hypothesis, not proven: `[...Array(N)].map()`
-// issues all N `spawn()` calls in one synchronous tick — the OS schedules N real
-// processes essentially simultaneously, so under EXTERNAL system contention (other
-// suites' processes competing for the scheduler) more of the N can miss the lock's
-// LOCK_WAIT_MS bounded wait and fall onto the documented best-effort lock-free
-// fallback (handoff-journal.js) than under light load. The mechanical argument for
-// "not a regression from a specific diff": nothing in this file touches lock timing,
-// and any diff that adds work OUTSIDE the lock (a constructor-time syscall, e.g.) only
-// shifts when a process ARRIVES at the lock, never how the lock itself behaves once
-// held. If this flakes again on a future contained-dir.js/handoff-journal.js touch,
-// re-run the A/B this room's coder memory records (revert the touch, run the full
-// suite N times, restore, run N more) before assuming either "it's fine" or "I broke
-// it" — a raw round count alone is weak evidence either way under variable load.
+// CORRECTED (board #142/U11-B1, 2026-08-31): the paragraph below used to read
+// "observed not reproduced" / "never in isolation" and blamed external scheduler
+// contention. FALSE — this test IS flaky in isolation on a quiescent box, reproduced
+// directly (1/8 runs failed with zero other suites running). The real mechanism was
+// found by instrumenting all 10 concurrent writers: a losing `wx`-lock-create race can
+// surface as EPERM on Windows, not EEXIST, and the old _acquireLock code treated any
+// non-EEXIST error as "unlockable" and bailed LOCK-FREE on its first attempt — nothing
+// to do with LOCK_WAIT_MS or scheduler load. Fixed in handoff-journal.js's
+// _acquireLock (its own comment there carries the full finding); 50/50 and separately
+// 60/60 clean sweeps after the fix (failure was common before it, ~12-18% of runs).
+// If this flakes again on a future
+// contained-dir.js/handoff-journal.js touch, re-run the A/B this room's coder memory
+// records (revert the touch, run the full suite N times, restore, run N more) — but do
+// not default to "external load" as the explanation; check the errno first.
 test('ROOT1/H1: concurrent PostToolUse writers do not lose each other\'s modifiedFiles', async () => {
   const { spawn } = require('node:child_process');
   const cwd = mkProject();
