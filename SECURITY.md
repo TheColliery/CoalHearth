@@ -3,7 +3,7 @@
 CoalHearth is a zero-dependency, hook-pair-keyed plugin — validated on Claude Code, works with 6 other platforms (Antigravity, Gemini CLI, Copilot CLI, Devin CLI, Kiro, Augment). Its security posture:
 
 ## Reporting
-Report a suspected vulnerability by opening an issue on this repository. For a sensitive proof-of-concept, request a private channel in that issue rather than posting exploit details publicly.
+Report a security issue in this repo through GitHub's private vulnerability reporting — [Security → Report a vulnerability](https://github.com/TheColliery/CoalHearth/security/advisories/new) — never a public issue. In scope: the shipped hooks (`bin/session-start.js`, `bin/post-tool-use.js`, `bin/user-prompt-submit.js`, and the Antigravity/config-only adapters), the `lib/` journal + resume core, the installer and other `scripts/`, and the `plugin/` dist built from them. Out of scope: a vulnerability in a project's own rules/config file that CoalHearth merely reads as untrusted data (a hostile `AGENTS.md` or `.coalhearth.json`) — that is the project's own security question, not this tool's. This is a one-person-maintained project: expect the report to be read and acknowledged, triaged against the scope above, and disclosed once a fix ships, with no fixed response-time SLA. A public GitHub issue remains the right channel for an ordinary, non-security bug.
 
 ## Commit & tag signatures
 
