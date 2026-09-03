@@ -58,7 +58,8 @@ const NL = String.fromCharCode(10);
 const BS = String.fromCharCode(92);
 const TICK = new RegExp('`([^`' + BS + 'n]+)`', 'g');
 // A bare camelCase identifier: used ONLY by L3, on a surface where prose about anything
-// else barely exists. Never applied to the doc surfaces, where it measured 0% signal.
+// else barely exists. Never applied to the doc surfaces, where it measured 9 candidates for
+// 1 real key — 8 hook-protocol false positives to reach a token L1 and L2 already hold.
 const BARE = new RegExp(BS + 'b([a-z][a-z0-9]*[A-Z][A-Za-z0-9]*)' + BS + 'b', 'g');
 // A markdown table row whose FIRST cell is a single backticked token. The pipe is a
 // character class, not an escape: a hand-built backslash-pipe is one keystroke from meaning
@@ -295,8 +296,8 @@ export function checkConfigKeys({
   if (keyTables.length) cover.push('L2 ' + l2Rows + ' rows->' + l2Hits);
 
   // L3 — THE SHIPPED TEMPLATE'S COMMENT HALF, bare identifiers. Scoped to a surface whose
-  // prose is ABOUT config and nothing else, which is why the bare rule is safe here and
-  // measured 0% noise (2 candidates, both real) while scoring 0% signal on the doc surfaces.
+  // prose is ABOUT config and nothing else, which is why the bare rule is safe here (measured:
+  // 2 candidates, both real, 0% noise) and is refused on the doc surfaces (9 candidates, 1 real).
   let l3Lines = 0, l3Hits = 0;
   for (const f of templateFiles) {
     let text;
