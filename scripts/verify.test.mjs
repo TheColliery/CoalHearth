@@ -24,6 +24,16 @@ function mkTmp() {
 // imports + build-plugin.mjs's checkDist), plugin/ (the dist-parity check), and
 // .github/ISSUE_TEMPLATE (the version-pin check).
 const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin', 'platform-configs', 'scripts', 'plugin', '.github'];
+// Root DOCS the config-key gate (CWK-060) names as hand-picked surfaces. Added when that gate
+// landed and this fixture went RED on its own incompleteness -- the sandbox copied directories
+// only, so every root .md was absent and the gate correctly reported a wiring bug. That red is
+// the fix working: an incomplete fixture used to look identical to a passing one.
+const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md'];
+
+function seed(tmp) {
+  for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
+  for (const f of COPY_FILES) fs.cpSync(path.join(repo, f), path.join(tmp, f));
+}
 
 function run(tmp) {
   return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8' });
@@ -32,7 +42,7 @@ function run(tmp) {
 test('verify.mjs negative path: an over-cap .claude-plugin/plugin.json description FAILs the gate', () => {
   const tmp = mkTmp();
   try {
-    for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
+    seed(tmp);
 
     const clean = run(tmp);
     assert.equal(clean.status, 0, `pristine copy must PASS, got:\n${clean.stdout}${clean.stderr}`);
@@ -54,7 +64,7 @@ test('verify.mjs negative path: an over-cap .claude-plugin/plugin.json descripti
 test('verify.mjs negative path: a truthy non-string plugin.json description FAILs loud, never silently 0 chars', () => {
   const tmp = mkTmp();
   try {
-    for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
+    seed(tmp);
 
     const pluginJsonPath = path.join(tmp, '.claude-plugin', 'plugin.json');
     const pj = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));

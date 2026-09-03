@@ -13,6 +13,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TESTS = [
   'scripts/lib/config-schema.test.mjs',
   'scripts/lib/config-load.test.mjs',
+  'scripts/lib/config-keys.test.mjs',
   'scripts/lib/jsonc.test.mjs',
   'scripts/lib/hooks.test.mjs',
   'scripts/lib/engine.test.mjs',

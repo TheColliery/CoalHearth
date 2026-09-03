@@ -136,6 +136,55 @@ try {
   else errors.forEach(fail);
 } catch (e) { fail(`factory config: ${e.message}`); }
 
+// config-key drift (CWK-060): every config key NAMED on a user-facing surface must RESOLVE
+// in config-schema.mjs, or be declared. Born from a flock class — four sibling rooms shipped
+// ship-text naming a key their schema did not carry, invisible to every gate any of us had.
+//
+// SCOPE DERIVATION, stated rather than implied (AGENTS.md, THE MEASUREMENT'S OWN FOURTH
+// TENSE). WALKED, so a new file is covered the day it lands: commands/*.md (readdir). CHOSEN
+// by decision, so a new one is NOT covered until someone adds it here: the five root/shipped
+// docs and the config template. What is deliberately NOT reached, and why, is enumerated in
+// config-keys.mjs's own surface list with the measurement behind each exclusion. A clean run
+// is coverage of THOSE surfaces only — never of every surface this room ships.
+console.log('config keys:');
+try {
+  const { checkConfigKeys } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-keys.mjs')).href);
+  const { CONFIG_SCHEMA } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-schema.mjs')).href);
+  // NAME the intended surfaces; let the checker report what it could not read. A caller that
+  // existsSync-filters first hides its own scope gap — the silent narrowing this gate exists
+  // to catch, committed by the gate's own wiring.
+  const cmdDir = path.join(repo, 'commands');
+  const cmdMd = (fs.existsSync(cmdDir) ? fs.readdirSync(cmdDir) : [])
+    .filter((f) => f.endsWith('.md')).map((f) => path.join('commands', f));
+  const named = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md',
+    path.join('platform-configs', 'hooks', 'README.md')];
+  const template = path.join('platform-configs', '.coalhearth.json');
+  const mdFiles = [...named, ...cmdMd];
+  const { findings, coverage } = checkConfigKeys({
+    schema: CONFIG_SCHEMA,
+    mdFiles,
+    // Hand-named surfaces FAIL when unreadable; `cmdMd` is readdir-derived and cannot go
+    // stale, so it is deliberately absent from this list.
+    namedSurfaces: [...named, template],
+    templateFiles: [template],
+    keyTables: [{ file: 'README.md', heading: 'Configure' }],
+    read: (f) => fs.readFileSync(path.join(repo, f), 'utf8'),
+  });
+  // PER-LOCATOR COVERAGE EVERY RUN — a number a reader can sanity-check against the files is
+  // the only defence against a locator that silently found nothing and reported clean.
+  console.log('  --   coverage: ' + coverage);
+  const hard = findings.filter((f) => f.level !== 'SKIP');
+  for (const f of findings) {
+    if (f.level === 'SKIP') console.log('  --   ' + f.msg);
+    else fail(f.msg);
+  }
+  // The pass line is QUALIFIED when the gate has declared blind spots: an unqualified "every
+  // config key resolves" would be false while a declared key is read and discarded.
+  const blindSkips = findings.filter((f) => f.level === 'SKIP' && f.msg.startsWith('blind to'));
+  const scope = blindSkips.length ? 'every REACHABLE config key' : 'every config key';
+  if (hard.length === 0) ok(`${scope} named across ${mdFiles.length} doc + 1 template surface resolves in the schema`);
+} catch (e) { fail(`config-key drift check crashed: ${e.message}`); }
+
 console.log('libs (import check):');
 for (const lib of ['config-schema.mjs', 'config-load.mjs', 'jsonc.mjs']) {
   try { await import(pathToFileURL(path.join(repo, 'scripts', 'lib', lib)).href); ok(`${lib} imports`); }
