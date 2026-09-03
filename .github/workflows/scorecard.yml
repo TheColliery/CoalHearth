@@ -13,6 +13,16 @@ on:
 permissions:
   contents: read
 
+# cancel-in-progress FALSE, and the reason is the OPENSSF API PUBLISH specifically -- NOT
+# the SARIF upload, which codeql.yml correctly treats as safe to cancel (atomic,
+# last-writer-wins; a cancel leaves the prior analysis standing, merely stale). Narrowed
+# after INSPECT LOW-2 caught this unit stating opposite verdicts on the same operation in
+# two files. The publish is the real differentiator: a cancelled run can leave it partially
+# applied, so a superseded run is allowed to finish rather than be killed mid-write.
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   analysis:
     name: Scorecard analysis

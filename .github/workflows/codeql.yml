@@ -1,23 +1,37 @@
 name: CodeQL
 
+# CWK-058 — the path filter moved OFF `on:` and INTO in-job classification. Same reason as
+# ci.yml: `on: paths-ignore` leaves a required check PENDING rather than green, so the
+# ruleset (which pins `analyze (javascript)`) was unsatisfiable on a doc-only push.
+#
+# SHAPE NOTE, and it differs from ci.yml deliberately: the required check IS this job's own
+# name, so the JOB must always run — gating it with `if:` would make the check-run vanish or
+# report `skipped`, which is the same unsatisfiability wearing different clothes. The
+# classification therefore lives in a STEP, and the expensive CodeQL steps are what skip.
+#
+# THE ASYMMETRY WITH ci.yml IS INTENTIONAL AND MUST BE PRESERVED: CodeQL skips ALL markdown
+# (`**.md`), CI skips only the six NON-SHIPPED docs. A shipped `commands/*.md` reaches
+# plugin/, so CI must run dist-sync on it; no markdown ever needs a security scan. Widening
+# this list to match CI's, or narrowing CI's to match this, silently drops coverage.
+
 on:
   push:
     branches: [main]
-    paths-ignore:
-      # CodeQL analyzes js/ts only — NO markdown needs a security scan, so skip ALL docs (a doc-only commit doesn't run CodeQL). Shipped SKILL.md/commands consistency is ci.yml's job (verify dist-sync), not CodeQL's.
-      - '**.md'
-      - 'LICENSE'
   pull_request:
     branches: [main]
-    paths-ignore:
-      # CodeQL analyzes js/ts only — NO markdown needs a security scan, so skip ALL docs (a doc-only commit doesn't run CodeQL). Shipped SKILL.md/commands consistency is ci.yml's job (verify dist-sync), not CodeQL's.
-      - '**.md'
-      - 'LICENSE'
   schedule:
     - cron: '0 6 * * 1'
 
 permissions:
   contents: read
+
+# cancel-in-progress TRUE. This workflow DOES publish outside its own run (it uploads a
+# SARIF to the code-scanning API), but the write is ATOMIC and last-writer-wins: a cancelled
+# run leaves the PREVIOUS analysis standing, never a half-applied one. Superseding a run
+# mid-analysis costs a stale result until the next push, not a corrupted one.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
@@ -27,8 +41,122 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          fetch-depth: 0 # the diff needs history to compare against
+
+      # EVERY ${{ }} REACHES THE SHELL THROUGH env:, NEVER INSIDE run: -- Actions expands
+      # ${{ }} by text substitution before bash parses, so a path carrying a quote becomes
+      # CODE (git does not quote a single-quote in a filename). An env var is data, always.
+      # (INSPECT HIGH-1.)
+      - id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -f # noglob: a filename containing a glob character must not expand
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+            changed=$(git diff --name-only "$base"...HEAD || true)
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            changed='' # a scheduled run always analyses
+          else
+            case "$EVENT_BEFORE" in
+              ''|0000000000000000000000000000000000000000) changed='' ;;
+              *) changed=$(git diff --name-only "$EVENT_BEFORE" "$HEAD_SHA" || true) ;;
+            esac
+          fi
+          # FAIL-SAFE POLARITY: cannot tell -> ANALYSE. Guessing "docs only" while unsure
+          # would skip a real security scan and report success for it.
+          if [ -z "$changed" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "changed=(could not determine, or scheduled — analysing)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *.md|LICENSE) ;;
+              *) docs_only=false ;;
+            esac
+          done <<< "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "changed=$(echo "$changed" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
+      - if: steps.classify.outputs.docs_only != 'true'
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           languages: javascript-typescript
           queries: security-and-quality
-      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+      - id: analyze
+        if: steps.classify.outputs.docs_only != 'true'
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+
+      - name: honest verdict
+        if: always()
+        shell: bash
+        env: # data, not code -- see the classify step's note
+          DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
+          CHANGED: ${{ steps.classify.outputs.changed }}
+          CLASSIFY_OUTCOME: ${{ steps.classify.outcome }}
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+        run: |
+          docs_only="$DOCS_ONLY"
+          changed="$CHANGED"
+          outcome="$CLASSIFY_OUTCOME"
+          analyzed="$ANALYZE_OUTCOME"
+
+          # BRANCH 1 — the classifier failed: nothing was DETERMINED, which is not the same
+          # claim as "nothing needed analysing".
+          if [ "$outcome" != "success" ]; then
+            {
+              echo "## CodeQL — CLASSIFIER FAILED"
+              echo
+              echo "The step that decides whether this push needs analysis did not succeed"
+              echo "(outcome: \`$outcome\`), so **nothing was determined**. Not a clean"
+              echo "bill of health, and not 'there was nothing to scan'."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # BRANCH 2 — the analysis actually ran.
+          if [ "$docs_only" != "true" ]; then
+            # The upload is REPORTED FROM THE STEP'S OWN OUTCOME, never asserted. Claiming a
+            # SARIF landed without consulting the step that lands it is the same overclaim
+            # this unit exists to remove (INSPECT LOW-1).
+            {
+              echo "## CodeQL — the analysis was ATTEMPTED"
+              echo
+              case "$analyzed" in
+                success) echo "\`security-and-quality\` queries executed and the SARIF upload step succeeded." ;;
+                '') echo "**The analyze step reported no outcome** — treat this as no completed analysis." ;;
+                *) echo "**The analyze step did not succeed (\`$analyzed\`)** — no completed analysis for this push." ;;
+              esac
+              echo
+              echo "Changed paths: \`$changed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            [ "$analyzed" = "success" ] && exit 0 || exit 1
+          fi
+
+          # BRANCH 3 — nothing to analyse.
+          {
+            echo "## CodeQL — NO ANALYSIS RAN. This is not a clean bill of health."
+            echo
+            echo "Every changed file is markdown or LICENSE, so CodeQL was not initialised:"
+            echo "**no query was executed and no SARIF was uploaded** for this push. Read"
+            echo "it as *'there was nothing to analyze'*, never as *'the analysis passed'*."
+            echo
+            echo "It reports success for ONE reason only: the branch ruleset requires the"
+            echo "\`analyze (javascript)\` context, and a check that can never go green on a"
+            echo "doc-only change makes that ruleset unsatisfiable by construction."
+            echo
+            echo "Changed paths: \`$changed\`"
+            echo
+            echo "> Known bound: in the checks LIST this is indistinguishable from a real"
+            echo "> pass, because the context name is exactly what the ruleset pins. This"
+            echo "> summary is the only place the difference is visible."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0

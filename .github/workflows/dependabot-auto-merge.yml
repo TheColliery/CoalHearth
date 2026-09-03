@@ -14,6 +14,13 @@ on: pull_request
 permissions:
   contents: read
 
+# cancel-in-progress FALSE, and keyed to the PR rather than the ref: this workflow acts
+# on state outside its own run (`gh pr merge --auto` arms a merge on a real PR). Killing a
+# superseded run could leave a PR un-armed with nothing to re-arm it.
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   auto-merge:
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}

@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# cancel-in-progress TRUE: report-only, writes nothing outside its own run.
+concurrency:
+  group: markdownlint-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest

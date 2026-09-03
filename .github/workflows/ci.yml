@@ -1,33 +1,98 @@
 name: CI
 
+# CWK-058 — the path filter moved OFF `on:` and INTO a job-level classifier.
+#
+# WHY: a workflow skipped by `on: paths-ignore` leaves its checks PENDING, never green
+# (GitHub's own skip-workflow-runs docs). The branch ruleset requires `all-green`, so a
+# doc-only push made that check unsatisfiable BY CONSTRUCTION — it can only pass on a
+# bypass-holding account, and blocks forever on any other.
+#
+# WHY NOT A COMPANION WORKFLOW: `paths` and `paths-ignore` are NOT complements —
+# `paths` fires if AT LEAST ONE file matches (∃), `paths-ignore` skips only when ALL
+# files match (∀). A companion would fire ALONGSIDE this one on a mixed push and emit
+# TWO check-runs of the same name. No path-filter pair can express "every file is a doc";
+# only a job can.
+#
+# So the workflow now ALWAYS fires, each required check-run exists EXACTLY ONCE, and the
+# expensive matrix is what gets skipped — not the check the ruleset pins.
+
 on:
   push:
     branches: [main]
-    paths-ignore:
-      # skip verify/test only for NON-shipped docs — a SHIPPED markdown artifact (skills/**/SKILL.md, commands/*.md) MUST run CI (verify checks dist-sync)
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      - 'PRIVACY.md'
-      - 'SECURITY.md'
-      - 'LICENSE'
   pull_request:
     branches: [main]
-    paths-ignore:
-      # skip verify/test only for NON-shipped docs — a SHIPPED markdown artifact (skills/**/SKILL.md, commands/*.md) MUST run CI (verify checks dist-sync)
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'CONTRIBUTING.md'
-      - 'PRIVACY.md'
-      - 'SECURITY.md'
-      - 'LICENSE'
 
 permissions:
   contents: read
 
+# One run per ref. cancel-in-progress TRUE: this workflow writes NO state outside its own
+# run — it reads the tree and reports. Killing a superseded run loses nothing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # THE CLASSIFIER. Answers one question: is EVERY changed file a NON-SHIPPED doc?
+  # The list is deliberately NARROWER than CodeQL's — a SHIPPED markdown artifact
+  # (commands/*.md) MUST run CI, because verify.mjs checks dist-sync and a shipped .md
+  # reaches plugin/. That asymmetry is the point, not an oversight.
+  classify:
+    name: classify
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.c.outputs.docs_only }}
+      changed: ${{ steps.c.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the diff needs history to compare against
+      # EVERY ${{ }} REACHES THE SHELL THROUGH env:, NEVER INSIDE run:. Actions expands
+      # ${{ }} by TEXT SUBSTITUTION before bash parses the script, so a value carrying a
+      # quote becomes CODE. git does not quote a single-quote in a path (it quotes the
+      # double-quote, backslash, control and non-ASCII bytes -- not the single-quote), so a
+      # file named x'; cmd; '.md would have executed cmd inside the very job the ruleset
+      # pins, where an injected `exit 0` forges a green over a red matrix. An env var is
+      # data, always. (INSPECT HIGH-1.)
+      - id: c
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -f # noglob: a filename containing a glob character must not expand
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+            changed=$(git diff --name-only "$base"...HEAD || true)
+          else
+            case "$EVENT_BEFORE" in
+              ''|0000000000000000000000000000000000000000) changed='' ;;
+              *) changed=$(git diff --name-only "$EVENT_BEFORE" "$HEAD_SHA" || true) ;;
+            esac
+          fi
+          # FAIL-SAFE POLARITY: cannot tell what changed -> RUN the suite. A classifier
+          # that guesses "docs only" when it does not know skips real coverage silently.
+          if [ -z "$changed" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "changed=(could not determine — running the suite)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              README.md|CHANGELOG.md|CONTRIBUTING.md|PRIVACY.md|SECURITY.md|LICENSE) ;;
+              *) docs_only=false ;;
+            esac
+          done <<< "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "changed=$(echo "$changed" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
   gate:
     name: gate (${{ matrix.os }} · node ${{ matrix.node }})
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -46,19 +111,74 @@ jobs:
       - run: node scripts/verify.mjs
       - run: node scripts/test.mjs
 
-
-  # A single STABLE required-check context (the matrix names drift; this does not).
-  # Succeeds iff every matrix gate passed or was legitimately skipped; fails if any
-  # gate failed. Rulesets require `all-green`, never the per-matrix names.
+  # THE REQUIRED CHECK. Runs on every push so the ruleset is always satisfiable, and
+  # reports WHICH of three things happened — never two.
   all-green:
     name: all-green
-    needs: gate
+    needs: [classify, gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: gate result
+        shell: bash
+        env: # data, not code -- see the classify step's note
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          CHANGED: ${{ needs.classify.outputs.changed }}
         run: |
-          case "${{ needs.gate.result }}" in
-            success|skipped) echo "gate ${{ needs.gate.result }}"; exit 0 ;;
-            *) echo "gate ${{ needs.gate.result }}"; exit 1 ;;
-          esac
+          classify="$CLASSIFY_RESULT"
+          gate="$GATE_RESULT"
+          docs_only="$DOCS_ONLY"
+          changed="$CHANGED"
+
+          # BRANCH 1 — the classifier itself failed. Reporting "nothing to run" here would
+          # be a lie: the truth is that nothing could be DETERMINED. This branch exists
+          # because a two-branch summary commits this unit's own defect class inside its
+          # own honesty step.
+          if [ "$classify" != "success" ]; then
+            {
+              echo "## CI — CLASSIFIER FAILED"
+              echo
+              echo "The job that decides whether this push needs the suite did not succeed"
+              echo "(result: \`$classify\`), so **nothing was determined**. This is not"
+              echo "'there was nothing to run' and it is not a clean bill of health."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # BRANCH 2 — the suite actually ran.
+          if [ "$docs_only" != "true" ]; then
+            {
+              echo "## CI — the suite RAN"
+              echo
+              echo "Matrix result: \`$gate\` (3 OS × node 22/24)."
+              echo
+              echo "Changed paths: \`$changed\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            case "$gate" in
+              success) exit 0 ;;
+              *) exit 1 ;;
+            esac
+          fi
+
+          # BRANCH 3 — nothing to run.
+          {
+            echo "## CI — NO SUITE RAN. This is not a clean bill of health."
+            echo
+            echo "Every changed file is a NON-SHIPPED doc, so \`verify.mjs\` and"
+            echo "\`test.mjs\` were not executed against this push. **No dist-sync check"
+            echo "was performed and no test was run.** Read this as *'there was nothing"
+            echo "to test'*, never as *'the tests passed'*."
+            echo
+            echo "It reports success for ONE reason only: the branch ruleset requires the"
+            echo "\`all-green\` context, and a check that can never go green on a doc-only"
+            echo "change makes that ruleset unsatisfiable by construction."
+            echo
+            echo "Changed paths: \`$changed\`"
+            echo
+            echo "> Known bound: in the checks LIST this is indistinguishable from a real"
+            echo "> pass, because the context name is exactly what the ruleset pins. This"
+            echo "> summary is the only place the difference is visible."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
