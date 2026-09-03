@@ -29,6 +29,19 @@ node scripts/test.mjs           # zero-dependency test suite (node --test, expli
 * **Add tests:** every lib change gets a unit test; every hook-behavior change gets a **hermetic spawn test** (spawn the real hook, sandbox TEMP + HOME). Register a new test *file* in `scripts/test.mjs` (the runner fails on an unlisted orphan).
 * **Language & tone:** shipped source and docs stay in English.
 
+### What CI does on a docs-only change
+
+Both required checks — `all-green` (CI) and `analyze (javascript)` (CodeQL) — **always run**, on
+every push. A change touching only non-shipped docs still reports them green, and each workflow
+writes a **job summary saying plainly that nothing ran**: no dist-sync check, no tests, no CodeQL
+query, no SARIF. Read that as *"there was nothing to check"*, never as *"the checks passed"* — in
+the checks list the two are indistinguishable, and the summary is the only place they differ.
+
+The two filters are deliberately **not** the same width. CodeQL skips every `.md`; CI skips only
+the six non-shipped root docs, because a **shipped** markdown file (`commands/*.md`) reaches
+`plugin/` and must still pass the dist-sync gate. Widening either one to match the other silently
+drops coverage.
+
 ---
 
 ## 🖥️ Supported Platforms
