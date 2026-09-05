@@ -15,6 +15,22 @@ let fails = 0;
 const ok = (m) => console.log(`  ok   ${m}`);
 const fail = (m) => { console.log(`  FAIL ${m}`); fails++; };
 
+// THE SHIP-TEXT SURFACE SET, declared ONCE and read by BOTH gates below (the config-key
+// gate and the pointer gate). Two gates over overlapping surfaces must agree or state why
+// they differ; a sibling room shipped two whose sets differed by one unnamed file, so a
+// pass line read as ship-text coverage while a tracked ship-text surface went unread.
+// Hand-named docs are chosen by name (an unreadable one is a wiring bug); commands/*.md is
+// readdir-derived, so a new command is covered the day it lands.
+function shipText() {
+  const cmdDir = path.join(repo, 'commands');
+  const cmdMd = (fs.existsSync(cmdDir) ? fs.readdirSync(cmdDir) : [])
+    .filter((f) => f.endsWith('.md')).map((f) => path.join('commands', f));
+  const named = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md',
+    path.join('platform-configs', 'hooks', 'README.md')];
+  const template = path.join('platform-configs', '.coalhearth.json');
+  return { named, template, cmdMd, mdFiles: [...named, ...cmdMd] };
+}
+
 console.log('files:');
 for (const [label, p] of [
   ['bin/session-start.js', path.join(repo, 'bin', 'session-start.js')],
@@ -153,13 +169,7 @@ try {
   // NAME the intended surfaces; let the checker report what it could not read. A caller that
   // existsSync-filters first hides its own scope gap — the silent narrowing this gate exists
   // to catch, committed by the gate's own wiring.
-  const cmdDir = path.join(repo, 'commands');
-  const cmdMd = (fs.existsSync(cmdDir) ? fs.readdirSync(cmdDir) : [])
-    .filter((f) => f.endsWith('.md')).map((f) => path.join('commands', f));
-  const named = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md',
-    path.join('platform-configs', 'hooks', 'README.md')];
-  const template = path.join('platform-configs', '.coalhearth.json');
-  const mdFiles = [...named, ...cmdMd];
+  const { named, template, cmdMd, mdFiles } = shipText();
   const { findings, coverage } = checkConfigKeys({
     schema: CONFIG_SCHEMA,
     mdFiles,
@@ -184,6 +194,116 @@ try {
   const scope = blindSkips.length ? 'every REACHABLE config key' : 'every config key';
   if (hard.length === 0) ok(`${scope} named across ${mdFiles.length} doc + 1 template surface resolves in the schema`);
 } catch (e) { fail(`config-key drift check crashed: ${e.message}`); }
+
+// pointer drift (CWK-075): every PATH this repo's ship-text points at must resolve to a
+// TRACKED file. Three states, not two — tracked is silent, GITIGNORED and existing-but-
+// UNTRACKED both FAIL, because from any other machine "gitignored" and "does not exist" are
+// indistinguishable and such a citation was never durable.
+//
+// SURFACE SET: DELIBERATELY IDENTICAL to block 2.9's config-key gate, ~60 lines up. Two
+// gates in one file reading the same surfaces is the default; a divergence would need a
+// stated reason and there is none. A sibling room shipped two gates whose sets differed by
+// one unnamed file — a pass line reading as ship-text coverage while a tracked ship-text
+// surface went unread, which is this gate's own class one level up.
+console.log('pointer drift:');
+try {
+  const { checkPointers } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
+  const { projectConfigCandidates } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-load.mjs')).href);
+  const { execFileSync } = await import('node:child_process');
+  const os = await import('node:os');
+
+  // GIT IS AN OPTIONAL ENHANCEMENT, NEVER A RUNTIME REQUIREMENT (no-external-assumption).
+  // This gate's whole question is "reachable from a CLONE", which only git can answer, so
+  // without it the honest answer is a NAMED SKIP -- never a FAIL (that would redden a
+  // non-git user's gate over a question nobody can ask there) and never a silent pass.
+  // Surfaced by this room's own verify.test.mjs, whose sandbox is a plain directory copy
+  // with no .git -- the same fixture that caught the config-key gate's scope gap.
+  let trackedList = null;
+  let gitWhy = '';
+  try {
+    // stderr is SWALLOWED, not inherited: without this, `fatal: not a git repository` prints
+    // above the gate's own line and reads as a crash rather than a degrade (INSPECT LOW-2).
+    trackedList = execFileSync('git', ['ls-files'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').filter(Boolean);
+  } catch (e) {
+    // NAME THE CAUSE THE PROBE ACTUALLY DETERMINED (INSPECT LOW-1). The first wording said
+    // "git is unavailable" for both cases; measured in this room's own fixture -- a plain
+    // directory copy with git ON PATH -- git was present and the truth was "not a git repo".
+    // Keyed on e.code per node/runtime.md 7 (error.code is stable, error.message is not).
+    gitWhy = e && e.code === 'ENOENT'
+      ? 'git is not installed here'
+      : 'this directory is not a git repository';
+    trackedList = null;
+  }
+  if (trackedList === null) {
+    console.log(`  --   pointer drift NOT CHECKED: ${gitWhy}, and "reachable from a clone" is a question only git can answer`);
+  } else {
+  const tracked = new Set(trackedList);
+  const trackedDirs = new Set();
+  for (const f of tracked) { const p = f.split('/'); for (let i = 1; i < p.length; i++) trackedDirs.add(p.slice(0, i).join('/')); }
+
+  // CONFIG HOMES, DERIVED from this room's own candidate order rather than enumerated, so
+  // the set cannot rot the day that order changes.
+  const agentHomes = new Set();
+  for (const c of projectConfigCandidates(repo, os.homedir())) {
+    const r = path.relative(repo, c).split(path.sep).join('/');
+    if (!r || r.startsWith('..') || path.isAbsolute(r) || !r.includes('/')) continue;
+    const first = r.split('/')[0];
+    if (first.startsWith('.') && first.length > 1) agentHomes.add(first);
+  }
+
+  // THE FULL TOP-LEVEL ENUMERATION — FILES AND HIDDEN ENTRIES INCLUDED. A dirs-only,
+  // non-hidden enumeration is the hazard CWK-078 names, and it is not hypothetical here:
+  // this room gitignores six top-level FILES (AGENTS.md, CLAUDE.md, MEMORY.md,
+  // COALHEARTH_BLUEPRINT.md, skills-lock.json, skillspector-*.json) and two dot-dirs, so
+  // that shape would find NONE of the eight and a citation into one would fall out of scope
+  // SILENTLY rather than FAILing — the quieter and worse symptom.
+  const topAll = fs.readdirSync(repo, { withFileTypes: true }).map((e) => e.name).filter((n) => n !== '.git');
+  const ourRoots = new Set(topAll);
+  for (const f of tracked) ourRoots.add(f.split('/')[0]);
+
+  // IGNORED ROOTS: asked of git, never parsed out of .gitignore. Agent homes are excluded
+  // BEFORE the question — .claude/ and .agents/ are gitignored here AND are the user-tree
+  // paths our shipped prose names, so leaving them in would FAIL a correct citation.
+  const ignoredRoots = new Set();
+  for (const name of topAll) {
+    if (tracked.has(name) || trackedDirs.has(name) || agentHomes.has(name)) continue;
+    try { execFileSync('git', ['check-ignore', '-q', '--', name], { cwd: repo }); ignoredRoots.add(name); } catch { /* not ignored */ }
+  }
+
+  const readOrNull = (p) => { try { return fs.readFileSync(path.join(repo, p), 'utf8'); } catch { return null; } };
+  // ONE constant, not a second hand-kept literal. The "DELIBERATELY IDENTICAL" claim above
+  // was true by hand only -- two literals and two readdir calls that agree until someone
+  // edits one (INSPECT LOW-3). Now the invariant is structural: both gates read shipText().
+  const { mdFiles: ptrMd, template: ptrTemplate } = shipText();
+  const labels = [...ptrMd, ptrTemplate].map((l) => l.split(path.sep).join('/'));
+  const surfaces = labels.map((l) => ({ label: l, text: readOrNull(l) }));
+
+  // NO historyOnly SURFACE IS PASSED, and the flag is therefore READ BY NOTHING here. That
+  // is deliberate: CHANGELOG.md is where this room's history lives and it is out of both
+  // gates' surface sets, so a history-only lane would be a name implying a mechanism that
+  // does not exist. The parameter stays in the module (an adopter with a history surface
+  // needs it); this room simply does not feed one.
+  const findings = checkPointers({
+    surfaces,
+    ourRoots,
+    ignoredRoots,
+    agentHomes,
+    hasEntry: (relDir, name) => { try { return fs.existsSync(path.join(repo, relDir, name)); } catch { return false; } },
+    resolve: (p) => (tracked.has(p) || trackedDirs.has(p) ? 'tracked'
+      : fs.existsSync(path.join(repo, p)) ? 'untracked' : 'missing'),
+  });
+
+  // PRINT the derived enumeration. A set that comes back wrong (or empty) is exactly the
+  // failure this room was warned about, and it is invisible unless it is shown.
+  console.log(`  --   top-level entries fed to git check-ignore: ${topAll.length} (files + hidden included) — ${ignoredRoots.size} gitignored, ${agentHomes.size} agent home(s): ${[...agentHomes].sort().join(' ')}`);
+  const hardP = findings.filter((f) => f.level !== 'SKIP');
+  for (const f of findings) {
+    if (f.level === 'SKIP') console.log('  --   ' + f.msg);
+    else fail(f.msg);
+  }
+  if (!hardP.length) ok(`every path this repo points at from ${surfaces.length} ship-text surface(s) (${findings.checked} in-scope citations) resolves to a TRACKED file — sections and symbols are NOT checked, see scripts/lib/pointer-check.mjs`);
+  }
+} catch (e) { fail(`pointer drift check crashed: ${e.message}`); }
 
 console.log('libs (import check):');
 for (const lib of ['config-schema.mjs', 'config-load.mjs', 'jsonc.mjs']) {
