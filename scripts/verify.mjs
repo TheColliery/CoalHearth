@@ -169,7 +169,7 @@ try {
   // NAME the intended surfaces; let the checker report what it could not read. A caller that
   // existsSync-filters first hides its own scope gap — the silent narrowing this gate exists
   // to catch, committed by the gate's own wiring.
-  const { named, template, cmdMd, mdFiles } = shipText();
+  const { named, template, mdFiles } = shipText();
   const { findings, coverage } = checkConfigKeys({
     schema: CONFIG_SCHEMA,
     mdFiles,
