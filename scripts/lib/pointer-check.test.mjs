@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { pointerCandidates, checkPointers } from './pointer-check.mjs';
+import { pointerCandidates, checkPointers, looksPathShaped, deriveIgnoredRoots } from './pointer-check.mjs';
 
 const OURS = new Set(['scripts', 'lib', 'bin', 'README.md', '.github', 'commands']);
 const base = (over = {}) => ({
@@ -229,4 +229,96 @@ test('a repeated token is judged once per surface, not once per occurrence', () 
   }));
   assert.equal(fails(f).length, 1);
   assert.equal(f.checked, 1);
+});
+
+// ---------------------------------------------------------------- CWK-079: looksPathShaped
+test('looksPathShaped: a trailing slash is accepted with no check on what precedes it', () => {
+  assert.equal(looksPathShaped('scripts/'), true);
+  assert.equal(looksPathShaped('a/'), true);
+});
+
+test('looksPathShaped: a `.ext`-shaped last segment is accepted', () => {
+  assert.equal(looksPathShaped('scripts/verify.mjs'), true);
+  assert.equal(looksPathShaped('README.md'), true);
+});
+
+test('looksPathShaped: an extensionless last segment is rejected — the NAMED residue', () => {
+  assert.equal(looksPathShaped('scripts/lib'), false);
+  assert.equal(looksPathShaped('lib/gone'), false);
+});
+
+test('looksPathShaped: a trailing `:line` or `:line-line` suffix is stripped before the test', () => {
+  assert.equal(looksPathShaped('scripts/verify.mjs:42'), true);
+  assert.equal(looksPathShaped('scripts/verify.mjs:42-50'), true);
+  assert.equal(looksPathShaped('scripts/lib:42'), false);
+});
+
+// ---------------------------------------------------------------- CWK-079: deriveIgnoredRoots
+test('deriveIgnoredRoots: candidateRoots are shape-QUALIFIED first segments, existence-independent', () => {
+  const { candidateRoots } = deriveIgnoredRoots({
+    surfaces: [{ label: 'README.md', text: '`lib/real.js` `commands/x.md` `scripts/lib`' }],
+    checkIgnore: () => [],
+  });
+  // `lib/real.js` and `commands/x.md` both shape-qualify (`.ext`-suffixed) -> `lib`, `commands`.
+  // `scripts/lib` is extensionless -> shape-REJECTED at looksPathShaped, so `scripts` never
+  // becomes a candidate from THIS token alone (its own non-locality residue, pinned below).
+  assert.deepEqual([...candidateRoots].sort(), ['commands', 'lib']);
+});
+
+test('deriveIgnoredRoots: agent homes are held out BEFORE the probe, never fed to checkIgnore', () => {
+  const seen = [];
+  const { toProbe, homesHeldOut } = deriveIgnoredRoots({
+    surfaces: [{ label: 'README.md', text: '`.claude/coalhearth/x.json` `lib/real.js`' }],
+    agentHomes: new Set(['.claude']),
+    checkIgnore: (roots) => { seen.push(...roots); return []; },
+  });
+  assert.deepEqual(toProbe.sort(), ['lib']);
+  assert.equal(homesHeldOut, 1);
+  assert.deepEqual(seen.sort(), ['lib']);
+});
+
+test('deriveIgnoredRoots: checkIgnore drives the ignoredRoots set directly, no other logic decides it', () => {
+  const { ignoredRoots } = deriveIgnoredRoots({
+    surfaces: [{ label: 'README.md', text: '`lib/real.js` `scripts/verify.mjs`' }],
+    checkIgnore: (roots) => roots.filter((r) => r === 'lib'),
+  });
+  assert.deepEqual([...ignoredRoots], ['lib']);
+});
+
+test('deriveIgnoredRoots: no surfaces, or a checkIgnore that returns nothing, is empty and never crashes', () => {
+  const a = deriveIgnoredRoots({ surfaces: [], checkIgnore: () => [] });
+  assert.deepEqual([...a.ignoredRoots], []);
+  const b = deriveIgnoredRoots({ surfaces: [{ label: 'x', text: 'no candidates here' }] });
+  assert.deepEqual([...b.ignoredRoots], []); // checkIgnore omitted entirely -> [] by construction
+});
+
+// ---------------------------------------------------------------- CWK-079: NON-LOCALITY
+// A shape-rejected token is NOT exempt from the check. It is still probed and can still FAIL
+// the moment ANY OTHER path-shaped citation shares its first segment — because ignoredRoots is
+// a per-ROOT set, never a per-TOKEN one. Two plants, both drawn from this room's own tree
+// shape (a real extensionless path, `lib`, beside a real `.mjs`-suffixed sibling):
+test('NON-LOCALITY: an extensionless plant ALONE never contributes its root -> silent', () => {
+  const surfaces = [{ label: 'README.md', text: '`lib/gone`' }];
+  const { ignoredRoots } = deriveIgnoredRoots({ surfaces, checkIgnore: (roots) => roots });
+  // `lib` never reached candidateRoots (shape-rejected), so checkIgnore was never asked about
+  // it and cannot have marked it ignored -- this is the residue named at deriveIgnoredRoots.
+  assert.deepEqual([...ignoredRoots], []);
+  const findings = checkPointers(base({ surfaces, ignoredRoots, resolve: () => 'tracked' }));
+  assert.deepEqual(fails(findings), []);
+});
+
+test('NON-LOCALITY: the SAME extensionless plant beside a path-shaped sibling under the same root -> BOTH FAIL', () => {
+  const surfaces = [{ label: 'README.md', text: '`lib/gone` and `lib/real.js`' }];
+  // checkIgnore reports every root it is ASKED about as ignored -- `lib` is asked about only
+  // because `lib/real.js` (the sibling) shape-qualifies and exposes the root to the probe.
+  const { candidateRoots, toProbe, ignoredRoots } = deriveIgnoredRoots({ surfaces, checkIgnore: (roots) => roots });
+  assert.deepEqual([...candidateRoots], ['lib']);
+  assert.deepEqual(toProbe, ['lib']);
+  assert.deepEqual([...ignoredRoots], ['lib']);
+  const findings = checkPointers(base({ surfaces, ignoredRoots, resolve: () => 'tracked' }));
+  // BOTH tokens FAIL as gitignored -- the extensionless one (`lib/gone`, shape-rejected at
+  // discovery) is judged identically to the shape-accepted one, because checkPointers never
+  // consults looksPathShaped at all; it only reads the ignoredRoots SET the sibling exposed.
+  assert.equal(fails(findings).length, 2);
+  assert.ok(fails(findings).every((m) => /lives under the gitignored `lib`/.test(m)), fails(findings).join(' | '));
 });

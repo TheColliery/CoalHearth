@@ -95,8 +95,12 @@ export function checkDist(distRoot = dist) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.includes('--check')) {
     const f = checkDist();
-    if (f.length) { console.error('plugin/ dist OUT OF SYNC:\n' + f.map((x) => '  ' + x).join('\n') + '\n-> run: node scripts/build-plugin.mjs'); process.exit(1); }
-    console.log('plugin/ dist in sync with source.');
+    // node/runtime.md 7: process.exitCode, never process.exit() (can drop a pending stdout
+    // write). The `else` is load-bearing here -- setting exitCode alone would fall through
+    // to the "in sync" line below on an OUT-OF-SYNC dist. No truncation was reproduced at
+    // this site; the ban is unconditional regardless.
+    if (f.length) { console.error('plugin/ dist OUT OF SYNC:\n' + f.map((x) => '  ' + x).join('\n') + '\n-> run: node scripts/build-plugin.mjs'); process.exitCode = 1; }
+    else console.log('plugin/ dist in sync with source.');
   } else {
     buildDist();
     console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json) from source.');

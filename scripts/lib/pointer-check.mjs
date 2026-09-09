@@ -11,6 +11,15 @@
 // one are indistinguishable, so such a citation was never durable — not even on the day it
 // was written.
 //
+// SCRIPTS/ COMMENTS ARE NOT A WALKED SURFACE HERE — CWK-079 FINDINGS-BACK, corrected against
+// a premise imported unchecked from CoalMine's own port. `shipText()` in verify.mjs names 8
+// surfaces and NOT ONE lives under `scripts/`, so a backticked path written into a comment in
+// THIS file or in verify.mjs is never read by this gate, in either direction: it does not
+// become a citation the gate checks, AND a WRONG path written into such a comment is NOT
+// caught by this gate. State exhibits by name, never in backticks, out of caution — not
+// because backticking one here would trip anything, but because the property is a residue,
+// not a guarantee, and a future widening of shipText() to cover `scripts/` would change it.
+//
 // ============================================================================
 // MEASURED ON THIS ROOM'S OWN SURFACES BEFORE ANY OF IT WAS CHOSEN. Re-derive with the
 // block in verify.mjs; never quote these numbers forward.
@@ -106,6 +115,80 @@ const DOTSEG = /(^|\/)\.\.?(\/|$)/;
 // platform) instead of platform-conditional, which is the room's own recorded lesson:
 // resolve-and-contain, never segment-scan, because a scan misses `\` on Windows.
 const BACKSLASH = /\\/;
+
+// CWK-079 — looksPathShaped(tok): a SHAPE test for candidate-root DISCOVERY, never for
+// judgement. A token surviving pointerCandidates() carries a `/`, but a `/` alone does not
+// make it a PATH -- a backticked ratio, `prefer/should`, `try/finally` all reach here too.
+// Strip a trailing `:line(-line)?` first, then accept iff the token ends in `/` (a directory
+// citation) or its LAST segment carries a `.ext`-shaped suffix.
+//
+// GATES DISCOVERY ONLY -- feeding deriveIgnoredRoots' candidate-root set below. It is NEVER
+// applied inside checkPointers, and it NEVER narrows pointerCandidates itself: a shape-
+// rejected token (an extensionless real path like `scripts/lib`) is still a real citation and
+// checkPointers keeps resolving it in full. See the NON-LOCALITY property at
+// deriveIgnoredRoots, and the pinned regression test in pointer-check.test.mjs.
+export function looksPathShaped(tok) {
+  const t = tok.replace(/:\d+(-\d+)?$/, '');
+  if (t.endsWith('/')) return true;
+  return /\.[A-Za-z0-9]{1,10}$/.test(t.split('/').pop());
+}
+
+// CWK-079 — ignored-root discovery, EXISTENCE-INDEPENDENT by design. `.gitignore` is TRACKED,
+// so `git check-ignore` answers for an ABSENT path exactly as for a present one -- the PATTERN
+// is what matters, never what the caller happens to have on local disk. The predecessor of
+// this function read `fs.readdirSync(repo)`, which is DEAD CODE on a clean clone: a clone
+// carries no gitignored files by definition, so that branch ran at zero for every user and
+// every CI leg (measured 2026-09-10: this working copy 29 fed/6 gitignored vs a fresh
+// `git clone --depth 1` of the same commit, 21 fed/0 gitignored).
+//
+// `checkIgnore` is INJECTED (a batched `git check-ignore --stdin` call in production, a
+// Set-backed stub in tests) so this function stays zero-I/O and unit-testable with no git
+// repo required -- the same reason `resolve`/`hasEntry` are injected into checkPointers below.
+//
+// NAMED BOUND (a) — FOREIGN-NAME COLLISION: a citation describing the SCANNED USER's own tree
+// (an install path like `.claude/coalhearth/…`) could in principle collide with OUR OWN
+// `.gitignore` pattern, the same root spelled two ways with two different owners. Narrowing
+// this on existence or on `ourRoots` would re-open the exact vacuity CWK-079 closes -- a
+// candidate that merely "doesn't exist locally" is precisely the case this rewrite exists to
+// keep probing. The one guard that IS applied here, agent-home hold-out, runs BEFORE the
+// probe rather than narrowing the probe's own logic, and is enough to close the case actually
+// measured in this room: MEASURED POPULATION = 0. This room's one prior foreign-home
+// collision (VENDOR_HOMES' `.github/hooks`, from CWK-075 — GitHub Copilot CLI's hook home in
+// the scanned user's tree, colliding with our own tracked `.github/workflows`) never reaches
+// this function at all, because `.github` is TRACKED here, not gitignored — `git check-ignore`
+// answers false for it regardless of who a citation describes, and that collision is resolved
+// entirely inside checkPointers' own vendor-home scope logic, a different layer.
+//
+// NAMED BOUND (b) — NOT-A-PATH-AT-ALL, narrowed at discovery by looksPathShaped, with the
+// residue named in both directions: a trailing-slash token is accepted here with no check on
+// what precedes it (git answers "not ignored" for a pattern that matches nothing, so this
+// costs nothing but a wasted probe); an extensionless real path (`scripts/lib`) no longer
+// contributes its OWN first segment to candidateRoots.
+//
+// THE NON-LOCALITY PROPERTY, and why bound (b)'s residue is not a gap: a shape-rejected token
+// is NOT exempt from the check — it is still probed and can still FAIL the moment ANY OTHER
+// path-shaped citation shares its first segment, because ignoredRoots is a per-ROOT set, not
+// a per-TOKEN one, and checkPointers judges every in-scope token against it regardless of
+// what that token's own shape looked like. Pinned as a two-plant regression test in
+// pointer-check.test.mjs.
+export function deriveIgnoredRoots({ surfaces = [], agentHomes = new Set(), checkIgnore }) {
+  const candidateRoots = new Set();
+  for (const s of surfaces) {
+    if (typeof s.text !== 'string') continue;
+    for (const tok of pointerCandidates(s.text)) {
+      if (!looksPathShaped(tok)) continue;
+      candidateRoots.add(tok.split('/')[0]);
+    }
+  }
+  let homesHeldOut = 0;
+  const toProbe = [];
+  for (const root of candidateRoots) {
+    if (agentHomes.has(root)) { homesHeldOut++; continue; }
+    toProbe.push(root);
+  }
+  const ignored = typeof checkIgnore === 'function' ? checkIgnore(toProbe) : [];
+  return { candidateRoots, toProbe, homesHeldOut, ignoredRoots: new Set(ignored) };
+}
 
 // Candidate extraction. Exported so an adopter measures its OWN funnel with this instrument
 // rather than re-implementing it and getting different numbers.

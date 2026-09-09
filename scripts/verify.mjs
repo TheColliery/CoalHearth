@@ -207,9 +207,9 @@ try {
 // surface went unread, which is this gate's own class one level up.
 console.log('pointer drift:');
 try {
-  const { checkPointers } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
+  const { checkPointers, deriveIgnoredRoots } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
   const { projectConfigCandidates } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-load.mjs')).href);
-  const { execFileSync } = await import('node:child_process');
+  const { execFileSync, spawnSync } = await import('node:child_process');
   const os = await import('node:os');
 
   // GIT IS AN OPTIONAL ENHANCEMENT, NEVER A RUNTIME REQUIREMENT (no-external-assumption).
@@ -242,7 +242,8 @@ try {
   for (const f of tracked) { const p = f.split('/'); for (let i = 1; i < p.length; i++) trackedDirs.add(p.slice(0, i).join('/')); }
 
   // CONFIG HOMES, DERIVED from this room's own candidate order rather than enumerated, so
-  // the set cannot rot the day that order changes.
+  // the set cannot rot the day that order changes. UNCHANGED by CWK-079 (already derived,
+  // not disk-listed) -- the defect this port closes was ignoredRoots, not agentHomes.
   const agentHomes = new Set();
   for (const c of projectConfigCandidates(repo, os.homedir())) {
     const r = path.relative(repo, c).split(path.sep).join('/');
@@ -251,24 +252,13 @@ try {
     if (first.startsWith('.') && first.length > 1) agentHomes.add(first);
   }
 
-  // THE FULL TOP-LEVEL ENUMERATION — FILES AND HIDDEN ENTRIES INCLUDED. A dirs-only,
-  // non-hidden enumeration is the hazard CWK-078 names, and it is not hypothetical here:
-  // this room gitignores six top-level FILES (AGENTS.md, CLAUDE.md, MEMORY.md,
-  // COALHEARTH_BLUEPRINT.md, skills-lock.json, skillspector-*.json) and two dot-dirs, so
-  // that shape would find NONE of the eight and a citation into one would fall out of scope
-  // SILENTLY rather than FAILing — the quieter and worse symptom.
+  // ourRoots stays disk-derived — a DIFFERENT question ("which top-level names belong to
+  // THIS repo, for scope purposes") than ignoredRoots' ("which cited roots does .gitignore
+  // match"). CWK-079 closes the latter's existence-dependence; ourRoots' own disk read is not
+  // the defect this ticket names.
   const topAll = fs.readdirSync(repo, { withFileTypes: true }).map((e) => e.name).filter((n) => n !== '.git');
   const ourRoots = new Set(topAll);
   for (const f of tracked) ourRoots.add(f.split('/')[0]);
-
-  // IGNORED ROOTS: asked of git, never parsed out of .gitignore. Agent homes are excluded
-  // BEFORE the question — .claude/ and .agents/ are gitignored here AND are the user-tree
-  // paths our shipped prose names, so leaving them in would FAIL a correct citation.
-  const ignoredRoots = new Set();
-  for (const name of topAll) {
-    if (tracked.has(name) || trackedDirs.has(name) || agentHomes.has(name)) continue;
-    try { execFileSync('git', ['check-ignore', '-q', '--', name], { cwd: repo }); ignoredRoots.add(name); } catch { /* not ignored */ }
-  }
 
   const readOrNull = (p) => { try { return fs.readFileSync(path.join(repo, p), 'utf8'); } catch { return null; } };
   // ONE constant, not a second hand-kept literal. The "DELIBERATELY IDENTICAL" claim above
@@ -277,6 +267,27 @@ try {
   const { mdFiles: ptrMd, template: ptrTemplate } = shipText();
   const labels = [...ptrMd, ptrTemplate].map((l) => l.split(path.sep).join('/'));
   const surfaces = labels.map((l) => ({ label: l, text: readOrNull(l) }));
+
+  // CWK-079 — IGNORED ROOTS, PATTERN-BASED, EXISTENCE-INDEPENDENT. Replaces the disk-derived
+  // shape (`fs.readdirSync(repo)` over what THIS machine happens to hold), which was DEAD CODE
+  // on a clean clone: a clone carries no gitignored files by definition, so that branch ran at
+  // ZERO for every user and every CI leg. Mechanism, named bound and the non-locality property
+  // → scripts/lib/pointer-check.mjs's deriveIgnoredRoots. `checkIgnore` here is the ONE place
+  // this room shells out to git for it: a single batched `git check-ignore --stdin` call over
+  // every candidate root, `first + '/'` appended (git cannot infer an ABSENT path is a
+  // directory, so a `dir/`-anchored .gitignore pattern would not otherwise match the bare
+  // name).
+  const { candidateRoots, toProbe, homesHeldOut, ignoredRoots } = deriveIgnoredRoots({
+    surfaces,
+    agentHomes,
+    checkIgnore: (roots) => {
+      if (!roots.length) return [];
+      const ci = spawnSync('git', ['check-ignore', '--stdin'],
+        { cwd: repo, encoding: 'utf8', input: roots.map((r) => r + '/').join('\n') + '\n' });
+      if (ci.error || typeof ci.stdout !== 'string') return [];
+      return ci.stdout.split('\n').map((l) => l.trim().replace(/\/$/, '')).filter(Boolean);
+    },
+  });
 
   // NO historyOnly SURFACE IS PASSED, and the flag is therefore READ BY NOTHING here. That
   // is deliberate: CHANGELOG.md is where this room's history lives and it is out of both
@@ -293,9 +304,13 @@ try {
       : fs.existsSync(path.join(repo, p)) ? 'untracked' : 'missing'),
   });
 
-  // PRINT the derived enumeration. A set that comes back wrong (or empty) is exactly the
-  // failure this room was warned about, and it is invisible unless it is shown.
-  console.log(`  --   top-level entries fed to git check-ignore: ${topAll.length} (files + hidden included) — ${ignoredRoots.size} gitignored, ${agentHomes.size} agent home(s): ${[...agentHomes].sort().join(' ')}`);
+  // PRINT the derived enumeration, CITED and PROBED as separate numbers — each means exactly
+  // one thing. CITED = distinct first segments that survived shape-discovery from ship-text.
+  // PROBED = CITED minus agent homes, the ones actually put to git check-ignore.
+  // INSPECT LOW-2: "N of M held out" read as if M-N were a LEAK. Reworded so the
+  // denominator cannot be misread -- homesHeldOut is CITED-and-excluded, never a shortfall
+  // against the known agent-home count (an agent home never cited owes nothing here).
+  console.log(`  --   gitignored-root citations: ${candidateRoots.size} distinct shape-qualified first segment(s) cited, ${toProbe.length} probed through one git check-ignore call (${homesHeldOut} agent-home root(s) cited and held out, of ${agentHomes.size} known) — ${ignoredRoots.size} gitignored`);
   const hardP = findings.filter((f) => f.level !== 'SKIP');
   for (const f of findings) {
     if (f.level === 'SKIP') console.log('  --   ' + f.msg);
@@ -345,4 +360,9 @@ try {
 } catch (e) { fail(`version pins: ${e.message}`); }
 
 console.log(fails ? `\nVERIFY: FAIL (${fails})` : '\nVERIFY: PASS');
-process.exit(fails ? 1 : 0);
+// CWK-071: process.exit() forces the process to exit before pending stdout writes flush
+// (node/runtime.md 7); process.exitCode + a natural exit gets the same fail-loud non-zero
+// exit this gate has always needed, without that risk. No runtime truncation of this line
+// was ever reproduced here -- the mechanism is real, applying it to this CLI gate is a
+// reading, not a settled ruling (per the order's own framing).
+process.exitCode = fails ? 1 : 0;

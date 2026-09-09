@@ -30,23 +30,33 @@ const TESTS = [
   'bin/ag-hooks.test.js',
 ];
 
-const missing = TESTS.filter((t) => !fs.existsSync(path.join(repo, t)));
-if (missing.length) {
-  console.error(`test runner: ${missing.length} listed test file(s) MISSING — ${missing.join(', ')}`);
-  process.exit(1);
-}
-
-const onDisk = [];
-for (const dir of ['scripts', 'scripts/lib', 'lib', 'bin']) {
-  for (const f of fs.readdirSync(path.join(repo, dir))) {
-    if (f.endsWith('.test.mjs') || f.endsWith('.test.js')) onDisk.push(`${dir}/${f}`);
+// CWK-071: process.exit() forces the process to exit before pending stdout writes flush
+// (node/runtime.md 7) -- set process.exitCode and let the process exit naturally instead.
+// Wrapped in main() so an early-exit path is a plain `return`, keeping this a flat script
+// (no async needed: spawnSync below is already synchronous).
+function main() {
+  const missing = TESTS.filter((t) => !fs.existsSync(path.join(repo, t)));
+  if (missing.length) {
+    console.error(`test runner: ${missing.length} listed test file(s) MISSING — ${missing.join(', ')}`);
+    process.exitCode = 1;
+    return;
   }
-}
-const orphans = onDisk.filter((f) => !TESTS.includes(f));
-if (orphans.length) {
-  console.error(`test runner: ${orphans.length} on-disk test(s) NOT in the suite — ${orphans.join(', ')}. Add to scripts/test.mjs.`);
-  process.exit(1);
+
+  const onDisk = [];
+  for (const dir of ['scripts', 'scripts/lib', 'lib', 'bin']) {
+    for (const f of fs.readdirSync(path.join(repo, dir))) {
+      if (f.endsWith('.test.mjs') || f.endsWith('.test.js')) onDisk.push(`${dir}/${f}`);
+    }
+  }
+  const orphans = onDisk.filter((f) => !TESTS.includes(f));
+  if (orphans.length) {
+    console.error(`test runner: ${orphans.length} on-disk test(s) NOT in the suite — ${orphans.join(', ')}. Add to scripts/test.mjs.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const r = spawnSync(process.execPath, ['--test', ...TESTS], { cwd: repo, stdio: 'inherit' });
+  process.exitCode = r.status ?? 1;
 }
 
-const r = spawnSync(process.execPath, ['--test', ...TESTS], { cwd: repo, stdio: 'inherit' });
-process.exit(r.status ?? 1);
+main();
