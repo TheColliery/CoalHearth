@@ -1,15 +1,32 @@
 // Single source of truth for every .coalhearth.json key. Mirrors CoalTipple's
 // scripts/lib/config-schema.mjs pattern (series parity), adapted for CoalHearth's
-// 4 nested groups (budgets/journal/recovery/update) instead of a flat key list — the
-// factory config + config/schema.json (draft-07) both derive from this file.
+// nested groups (journal/recovery/update — budgets tombstoned, see below) instead of a
+// flat key list, plus one top-level SCALAR (`language`, AL-2) — the factory config +
+// config/schema.json (draft-07) both derive from this file.
 //
 // Spec fields per group-key:
 //   type   'bool' | 'int' | 'number' | 'string' | 'enum'
 //   min/max bounds for 'int'/'number'
 //   values allowed values for 'enum' (compared case-insensitively)
 //   help   one-line description
+//
+// AL-2 (owner-signed): `language` is a TOP-LEVEL SCALAR, not a group — the ONE entry in
+// this object that carries its own `.type` field directly rather than holding sub-key
+// specs. Reason (head-ruled): the user-visible key name must read the same in every
+// room ("language": "auto") — nesting it under a group here would spell it
+// `ui.language` in CoalHearth and `language` everywhere else, and our nesting is an
+// internal shape, not a user-facing one. Every consumer of this object (validateConfig
+// below, scripts/lib/config-keys.mjs's container/leaf derivation, engine.test.mjs's
+// group count) branches on `.type` presence to tell a scalar entry from a group.
 
 export const CONFIG_SCHEMA = {
+  // 5 Standard Systems #2 (AGENTS.md): factory AUTO follows the conversation's
+  // language, EN fallback, no extra work — this key exists to LOCK it. A lock
+  // translates PROSE only; commands/paths/identifiers/config keys/severity labels
+  // stay VERBATIM. Shape ported verbatim from the flock exemplar, CoalMine's
+  // scripts/lib/config-schema.mjs:17 (`type: 'enum'`, the same six values) — no
+  // `flags` field, because this room ships no CLI/configure.mjs to read one (CWK-065).
+  language: { type: 'enum', values: ['auto', 'th', 'en', 'ja', 'zh', 'es'], help: 'Lock the reply language (auto, th, en, ja, zh, es). Translates prose only — commands, paths, identifiers and config keys stay verbatim. Default auto' },
   // TOMBSTONED — the entire `budgets` group (`maxTokens`, `warningTokenPercentage`) is
   // removed together with the advisory budget guardrail, joining the earlier beta.6
   // `maxTurns`/`warningTurnThreshold` tombstone (the IDENTICAL flaw): a FRESH BudgetTracker
@@ -66,17 +83,31 @@ export function validateValue(spec, v) {
 
 // Validate a full parsed config object (only the known groups/keys; unknown
 // top-level groups or unknown keys within a known group are reported, never thrown).
+// AL-2: a top-level entry carrying its OWN `.type` field (e.g. `language`) is a
+// SCALAR leaf, validated directly against the cfg value — never descended into as if
+// it held sub-keys (`.type`/`.values`/`.help` are the spec's own fields, not config).
 export function validateConfig(cfg) {
   const errors = [];
-  for (const [group, value] of Object.entries(cfg)) {
-    const groupSpec = CONFIG_SCHEMA[group];
-    if (!groupSpec) { errors.push(`group '${group}' not in schema`); continue; }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) { errors.push(`group '${group}' must be an object`); continue; }
+  for (const [name, value] of Object.entries(cfg)) {
+    const spec = CONFIG_SCHEMA[name];
+    // r29 findings-back LOW 4: an UNRECOGNIZED top-level entry is not known to be a group
+    // at all — that is exactly what "not in schema" means — so calling it one here would
+    // be a guess this branch has no basis for (a scalar like `{verbosity:'loud'}` is
+    // equally plausible). "group" is correct ONLY past this point, once `spec` resolves
+    // and is confirmed to carry no `.type` of its own.
+    if (!spec) { errors.push(`key '${name}' not in schema`); continue; }
+    if (spec.type) {
+      const err = validateValue(spec, value);
+      if (err) errors.push(`'${name}' ${err}`);
+      continue;
+    }
+    const groupSpec = spec;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { errors.push(`group '${name}' must be an object`); continue; }
     for (const [key, v] of Object.entries(value)) {
-      const spec = groupSpec[key];
-      if (!spec) { errors.push(`'${group}.${key}' not in schema`); continue; }
-      const err = validateValue(spec, v);
-      if (err) errors.push(`'${group}.${key}' ${err}`);
+      const keySpec = groupSpec[key];
+      if (!keySpec) { errors.push(`'${name}.${key}' not in schema`); continue; }
+      const err = validateValue(keySpec, v);
+      if (err) errors.push(`'${name}.${key}' ${err}`);
     }
   }
   return errors;

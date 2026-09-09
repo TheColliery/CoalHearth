@@ -2,6 +2,22 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.4.0] - 2026-09-09
+
+**MINOR** — AL-2 + AL-6 (owner-signed 2026-09-05), one release: a new user-settable config key, and a ship-text fix to what it reads.
+
+### Added
+
+- **`language` config key** (top-level scalar, not nested under a group — `{"language": "auto"}`) locks the reply language to `auto` / `th` / `en` / `ja` / `zh` / `es`. Factory `auto` follows the conversation's own language with an English fallback, per 5 Standard Systems #2 (AGENTS.md); a lock translates **prose only** — commands, paths, identifiers, config keys and severity labels stay verbatim. Shape ported verbatim from CoalMine's `scripts/lib/config-schema.mjs:17` (one flock, one color). Wired minimally: `bin/session-start.js` appends one directive naming the locked language to what it already emits on the sanctioned SessionStart channel (the recovery block, the journal-dir-blocked warning, the self-update nudge) — never a new standalone emission, and an absent/`auto`/unrecognized value emits nothing. — test: `scripts/lib/engine.test.mjs` (`validateConfig` scalar-vs-group branch), `lib/load-config.test.js` (the merge-cascade fix below), `scripts/lib/config-keys.test.mjs` (the gate's own scalar handling)
+
+### Fixed
+
+- **`commands/update.md:9`** named the legacy root `.coalhearth.json` as if it were the only config home — this room's loader reads a project's own agent-dir config (`.claude/coal/coalhearth.json`, then `.agents`, then `.gemini`) **first**, and the bare root file **last**. A user following the old sentence on a project that already carries an agent-dir config edited a file the loader never consults for that project — the change silently did nothing, with no signal that it hadn't taken. Fixed in the source, both twins regenerated identically by the room's own build. A sweep of every `commands/*.md` and shipped root doc found no sibling line with the same bare-path shape. — test: none (ship-text only; no test exercises doc prose)
+
+### Changed (internal, no behavior change for an existing config)
+
+- **The project/global merge in `lib/load-config.js`** now distinguishes a scalar top-level entry from a group before merging — a scalar (`language`) is never spread as though it were a group object (which would explode a string into indexed characters); it resolves project-wins-else-global with no per-key merge, same polarity every other key already had. Every existing GROUP key's merge behavior is byte-for-byte unchanged. — test: `lib/load-config.test.js` (4 new cases: scalar not spread, scalar falls back to global, project-only scalar, an existing group's merge unaffected)
+
 ## [2.3.2] - 2026-08-31
 
 **PATCH** — two HIGH findings from a CoalBoard audit round (board #142, U11), both fixed at root cause, no new capability, no breaking change.

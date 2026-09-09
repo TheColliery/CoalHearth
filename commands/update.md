@@ -6,6 +6,6 @@ Kind-1 self-update — the **agent** verifies (online), the **hook** only schedu
 
 1. **Check.** Web-check the latest published CoalHearth tag (any means available — the GitHub releases/tags page or API; `git ls-remote --tags` works too when git exists) vs the installed `version` in `.claude-plugin/plugin.json`.
 2. **Offer (consent-gated — the only token spend).** Newer available → OFFER `claude plugin update coalhearth@coalhearth` (then restart). Already current → say so in one line.
-3. **Cadence.** To change how updates are handled, set `update.updateMode` (`ask` | `auto` | `remind` | `off`) and `update.updateCheckDays` in `.coalhearth.json`. `auto` lets this check run when due without re-asking; `off` silences it entirely.
+3. **Cadence.** To change how updates are handled, set `update.updateMode` (`ask` | `auto` | `remind` | `off`) and `update.updateCheckDays` in your CoalHearth config — see README's Configure section for where that lives (a project's own agent-dir config is read before the legacy root `.coalhearth.json`). `auto` lets this check run when due without re-asking; `off` silences it entirely.
 
 This is orthogonal to the journal/resume hooks (their own config groups) and never auto-applies — it offers, the user runs the update.

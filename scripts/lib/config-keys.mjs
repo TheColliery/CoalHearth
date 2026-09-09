@@ -91,15 +91,21 @@ export const NOT_CONFIG = {
 // until it is written down here. That is what makes acquiring a blind spot impossible to do
 // silently; "warns loudly" was never the requirement.
 //
-// EMPTY HERE, AND THE DISPATCH PREDICTED OTHERWISE — worth stating, because the prediction's
-// premise is a real gap in this room. It expected at least one entry on the grounds that
-// AGENTS.md's 5 Standard Systems #2 mandates a `language` key flock-wide and a lowercase word
-// is undetectable. CoalHearth's schema HAS NO `language` KEY AT ALL (6 leaves, none of them
-// it), so there is nothing to declare — the blind spot is absent because the mandated key is
-// absent. That is a finding about the schema, not a clean bill of health, and it is recorded
-// in MEMORY.md rather than silently closed here. If `language` is ever added it will fail
-// this gate's precondition on the day it lands, which is the mechanism working.
-export const BLIND_KEYS = {};
+// AL-2 (owner-signed) ADDED `language` to the schema and first landed here as a PERMANENT
+// entry — WRONG, caught by INSPECT (r29 findings-back MEDIUM): `language` is bare and
+// all-lowercase, so L1's dotted-prose rule and L3's camelCase-bare rule are structurally
+// blind to it, but L2 (the shape-free key table) is NOT — INSPECT typo'd README's row to
+// `languag` and the gate FAILed naming it, which is a locator READING and CHECKING the
+// token, the opposite of "read and discarded." Declaring a REACHABLE key blind is a false
+// coverage claim, permanent because the scalar branch of the expiry loop was a no-op — see
+// checkConfigKeys' precondition for the fix (reachability, not dottedness: a scalar counts
+// as reached the moment this room's own `verify.mjs` wires a `keyTables` entry into the
+// call, which it always does). `language` needs NO entry here as a result — EMPTY is the
+// correct, re-verified state, not a regression to the pre-AL-2 wording it happens to match.
+export const BLIND_KEYS = {
+  // empty: every schema key today is either dotted-and-CONTAINER_RE-reachable (the three
+  // groups' six leaves) or a scalar with L2 wired (`language`) — nothing left undeclared.
+};
 
 // A key that was REAL and has been RETIRED. Named rather than silently uncovered, per the
 // sibling rail. EMPTY here BY MEASUREMENT, and the reason is worth recording so a later
@@ -133,26 +139,30 @@ export const RETIRED_KEYS = {};
 //   OUT the JSON half of platform-configs/.coalhearth.json — it IS config, and verify.mjs
 //       already validates it key-by-key against the schema, so scanning it would double-report
 //       what that check owns. THE COMMENT HALF IS NOT COVERED BY THAT ARGUMENT and is scanned
-//       (L3): measured, its 9 comment lines name `updateMode` and `updateCheckDays` in BARE
-//       form and ship verbatim into a user's config home. A prior room shipped this exclusion
-//       with the reason "it IS config, already schema-validated" and that reason is FALSE of
-//       the comment half; this port splits the file rather than repeating it.
+//       (L3): measured, its 12 comment lines (AL-2 added 3, for `language`) name `updateMode`
+//       and `updateCheckDays` in BARE form and ship verbatim into a user's config home —
+//       `language`'s own comment lines carry no camelCase word, so the real/noise count is
+//       unchanged at 2/0. A prior room shipped this exclusion with the reason "it IS config,
+//       already schema-validated" and that reason is FALSE of the comment half; this port
+//       splits the file rather than repeating it.
 //   OUT plugin/ twins — byte-identical copies enforced by verify.mjs's own parity check;
 //       scanning both sides would double every finding and add no coverage.
 //
-// THE EXEMPLAR'S SECOND EXPORT, `checkConfigReadPath`, IS NOT PORTED — stated with its reason
-// rather than dropped silently (INSPECT LOW). The sibling convention it enforces is ONE
-// CONFIG-READ PATH PER ROOM: no key is read from a bare project file without the global tier
-// being named. Measured by hand on this room's in-scope surfaces before deciding: exactly ONE
-// line qualifies — `commands/update.md`'s "set `update.updateMode` … in `.coalhearth.json`",
-// which names the file with no global tier beside it. README's Configure section carries a
+// THE EXEMPLAR'S SECOND EXPORT, `checkConfigReadPath`, IS STILL NOT PORTED — stated with its
+// reason rather than dropped silently (INSPECT LOW). The sibling convention it enforces is
+// ONE CONFIG-READ PATH PER ROOM: no key is read from a bare project file without the global
+// tier being named. Measured by hand on this room's in-scope surfaces at the time: exactly
+// ONE line qualified — `commands/update.md`'s "set `update.updateMode` … in `.coalhearth.json`",
+// which named the file with no global tier beside it. README's Configure section carries a
 // universal rail that governs README's own surface (it names `~/.claude/.coalhearth.json` and
 // the full own-dir → `.claude` → `.agents` → `.gemini` → legacy order), and a rail governs the
-// surface it CLAIMS to govern, never a different file. So the finding is real and is returned
-// as its own item: `commands/` is inside the shipped `plugin/` dist, so fixing that line changes
-// the shipped artifact and owes a version bump, a tag, a Release and both propagation scripts
-// (scripts-quality.md §3) — a release cycle this scripts-only gate unit has no business
-// carrying. Port the checker with that fix, not before it.
+// surface it CLAIMS to govern, never a different file. **THAT ONE LINE IS FIXED (AL-6,
+// owner-signed) — `commands/update.md:9` now points at README's Configure section instead of
+// naming the bare file, and a fresh sweep of every `commands/*.md` + shipped root doc found no
+// sibling of the same shape.** So the exemplar's checker would find ZERO qualifying lines here
+// today, not one — a smaller, not a stronger, case for porting it. Still not ported: a checker
+// with nothing to catch buys nothing, and the sibling-sweep discipline above already covers
+// the class by hand at every touch. Port it if a second instance of the shape is ever found.
 
 // RESIDUE, stated exactly: a key named in BARE form, in free prose, on a doc surface, while
 // absent from the schema. L1 cannot see it (no container prefix), L2 cannot (not in the key
@@ -198,15 +208,21 @@ export function checkConfigKeys({
   retired = RETIRED_KEYS,
 }) {
   const findings = [];
-  const containers = Object.keys(schema);
+  // AL-2: a top-level entry carrying its OWN `.type` field (e.g. `language`) is a SCALAR
+  // key, not a group of sub-keys — Object.keys() on it would read the SPEC's own fields
+  // ('type'/'values'/'help') as if they were config keys. Split before deriving anything.
+  const allTop = Object.keys(schema);
+  const scalars = allTop.filter((k) => schema[k] && typeof schema[k].type === 'string');
+  const containers = allTop.filter((k) => !scalars.includes(k));
   const leaves = new Set(containers.flatMap((g) => Object.keys(schema[g])));
   const dotted = new Set(containers.flatMap((g) => Object.keys(schema[g]).map((k) => g + '.' + k)));
   // CONTAINERS ARE KNOWN NAMES TOO, and leaving them out was a real defect this port's own
   // history proof caught: an earlier era of this room's README listed GROUP rows (`journal`,
   // `recovery`, `update`) as the key table's first cells, and L2 — which is shape-free by
   // design — convicted every one of them as unresolved. A group name is a real schema name;
-  // a table row naming one is a correct claim, not drift.
-  const known = new Set([...dotted, ...leaves, ...containers]);
+  // a table row naming one is a correct claim, not drift. A SCALAR key belongs in `known` for
+  // the identical reason — `language` is itself the whole claim a table row makes about it.
+  const known = new Set([...dotted, ...leaves, ...containers, ...scalars]);
   // Containers are derived from the live schema on every run, so a renamed or added group is
   // covered the day it lands — there is no roster to keep complete.
   // Container names are ESCAPED before interpolation. They come from the schema, not from a
@@ -227,8 +243,20 @@ export function checkConfigKeys({
 
   // PRECONDITION — a HARD GATE. Any schema key no locator can reach must be DECLARED in
   // BLIND_KEYS with its reason, or the gate FAILs rather than silently checking less than it
-  // claims. L1 reaches a key through its dotted path, so the test is against CONTAINER_RE.
-  const invisible = [...dotted].filter((k) => !CONTAINER_RE.test(k)).sort();
+  // claims. THE TEST IS REACHABILITY, NOT SHAPE (r29 findings-back MEDIUM, corrected from a
+  // dottedness-only test that read a genuinely-reachable scalar as permanently blind): a
+  // DOTTED key is reached through L1's CONTAINER_RE, exactly as before. A bare SCALAR key
+  // has no dot for L1 and no internal capital for L3's BARE rule — both are structurally
+  // blind to it — but L2 (the shape-free key table) is NOT: it reads any first cell in a
+  // wired table, unconditional on the token's shape. So a scalar is reachable iff the
+  // CALLER wired at least one `keyTables` entry into this run; `verify.mjs` always does, so
+  // no CoalHearth scalar needs a BLIND_KEYS entry. A room that ports this gate WITHOUT
+  // wiring L2 at all gets told — every scalar FAILs the precondition until either L2 is
+  // wired or the key is declared, the adopter case this re-scope exists for.
+  const l2Wired = keyTables.length > 0;
+  const invisible = [...dotted].filter((k) => !CONTAINER_RE.test(k))
+    .concat(l2Wired ? [] : scalars)
+    .sort();
   const accepted = invisible.filter((k) => Object.hasOwn(blind, k));
   if (accepted.length) {
     findings.push({
@@ -360,11 +388,21 @@ export function checkConfigKeys({
   }
   // BLIND_KEYS expires on the same EVENT principle: an entry is true only while the key is
   // BOTH in the schema AND unreachable. Either half changing makes the declaration a lie.
+  // A SCALAR key (no dot) is checked against `scalars`, not `dotted`, and against the SAME
+  // reachability test the precondition uses (`l2Wired`) rather than CONTAINER_RE, which
+  // structurally can never match an undotted token — a scalar's blindness is REACHABILITY,
+  // not shape, so its expiry must ask the same question or it can never fire (the r29
+  // MEDIUM: a prior version of this branch was a deliberate `// stays declared` no-op,
+  // which made a stale declaration permanent by construction). If a room later wires L2
+  // where it had none, a declared-blind scalar correctly expires here, same as a dotted key
+  // does when L1 gains reach.
   for (const tok of Object.keys(blind)) {
-    if (!dotted.has(tok)) {
+    if (dotted.has(tok)) {
+      if (CONTAINER_RE.test(tok)) findings.push({ level: 'FAIL', msg: 'BLIND_KEYS declares ' + tok + ' as unreachable, but a locator can now see it — delete the entry' });
+    } else if (scalars.includes(tok)) {
+      if (l2Wired) findings.push({ level: 'FAIL', msg: 'BLIND_KEYS declares ' + tok + ' as unreachable, but a locator can now see it — delete the entry' });
+    } else {
       findings.push({ level: 'FAIL', msg: 'BLIND_KEYS declares ' + tok + ', but it is not in the schema at all — the key is gone, delete the entry' });
-    } else if (CONTAINER_RE.test(tok)) {
-      findings.push({ level: 'FAIL', msg: 'BLIND_KEYS declares ' + tok + ' as unreachable, but a locator can now see it — delete the entry' });
     }
   }
 

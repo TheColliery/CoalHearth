@@ -52,6 +52,23 @@ function updateDue(config) {
   } catch { return false; }
 }
 
+// AL-2 (owner-signed) — 5 Standard Systems #2: factory AUTO follows the conversation's
+// language, EN fallback, no extra work; `language` LOCKS it. A lock translates PROSE
+// only — commands, paths, identifiers and config keys stay VERBATIM. The recognized
+// values mirror scripts/lib/config-schema.mjs's enum (ESM, scripts/-only) -- duplicated
+// here rather than imported, the same shape this file's updateMode/updateCheckDays
+// clamps already take (bin/ is CJS, scripts/lib/*.mjs is ESM, and Phoenix #4 forecloses
+// bridging that with an async import on a fail-silent sync entrypoint). Fail-safe
+// polarity, same as the rest of this hook: absent, 'auto', or anything unrecognized
+// emits NOTHING.
+const LANGUAGE_VALUES = ['auto', 'th', 'en', 'ja', 'zh', 'es'];
+function languageDirective(config) {
+  const raw = config && config.language;
+  const v = typeof raw === 'string' ? raw.toLowerCase() : '';
+  if (!v || v === 'auto' || LANGUAGE_VALUES.indexOf(v) === -1) return '';
+  return ' [CoalHearth] Language locked to \'' + v + '\': reply in that language, prose only — every command, path, identifier and config key stays verbatim.';
+}
+
 function main() {
   const config = loadConfig();
   const recovery = config.recovery || {};
@@ -65,7 +82,7 @@ function main() {
   // and expected (containedOutputDir's own auto-anchor already refused it) — only warn when
   // there IS a project and its journal dir is still blocked, the actionable case.
   if (!engine.outputDir && findWorkspaceRoot(process.cwd())) {
-    console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.');
+    console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.' + languageDirective(config));
   }
 
   const aborted = engine.detectAbortedSession();
@@ -100,14 +117,14 @@ function main() {
       if (out && !markedResumed) {
         out += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
       }
-      if (out) console.log(out); // sanctioned SessionStart context-injection channel (Phoenix #13)
+      if (out) console.log(out + languageDirective(config)); // sanctioned SessionStart context-injection channel (Phoenix #13)
     }
   }
 
   // Orthogonal to the resume path (its own off-switch is update.updateMode) — rides the
   // same sanctioned SessionStart context-injection channel.
   if (updateDue(config)) {
-    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.');
+    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.' + languageDirective(config));
   }
 }
 

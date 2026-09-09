@@ -73,6 +73,26 @@ test('no journal present: exits 0, silent, prints nothing', () => {
   cleanup(home, cwd);
 });
 
+// r29 findings-back LOW 1: every prior AL-2 test forces an emission FIRST, then checks the
+// directive rode along -- none pins the Phoenix #13 case the wiring was built around, a
+// session where NOTHING else had to be said. `languageDirective` is only ever appended to
+// an existing `console.log`; a refactor to a standalone print (the one thing the order
+// forbids) would pass every other AL-2 test in the suite and still be silent here only by
+// accident. RED-PROOF: change `languageDirective`'s call sites in bin/session-start.js from
+// `console.log(x + languageDirective(config))` to an unconditional standalone
+// `console.log(languageDirective(config))` right after `const config = loadConfig();` and
+// this goes red (stdout gains the directive with nothing else printed).
+test('AL-2 (Phoenix #13): a locked language with NOTHING else to say emits NOTHING, not a standalone directive', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: 'th' }), 'utf8');
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '', 'no journal, no update due, journal dir fine -> nothing already being said, so nothing is said');
+  assert.strictEqual(r.stderr, '');
+  cleanup(home, cwd);
+});
+
 test('in_progress journal: exits 0, prints the recovery block, marks resumed', () => {
   const { home, cwd } = sandbox();
   const outDir = path.join(cwd, '.claude', 'coalhearth');
@@ -375,5 +395,102 @@ test('ROOT3/H5: a file blocking the journal dir produces a non-silent signal (no
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.stderr, '');
   assert.match(r.stdout, /\[CoalHearth\][^\n]*journal directory/i, 'a one-line signal that warm-resume protection is OFF');
+  cleanup(home, cwd);
+});
+
+// AL-2 (owner-signed): a LOCKED `language` appends ONE short directive to whichever
+// sanctioned emission already fired — never a standalone print. Exercised on the H5
+// warning here (the emission this file already sandboxes); the recovery-block and
+// self-update-due surfaces have their own cases in scripts/lib/hooks.test.mjs.
+test('AL-2: a locked language appends a directive to the H5 journal-dir warning', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: 'th' }), 'utf8');
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker'); // a FILE where the journal dir must be
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  // ONE line: the H5 warning and the directive share it, never a second console.log.
+  assert.strictEqual(r.stdout.split('\n').filter((l) => l.trim()).length, 1, 'appended, not a new standalone print');
+  assert.match(r.stdout, /journal directory/i);
+  assert.match(r.stdout, /Language locked to 'th'/, 'the directive rides the same line');
+  assert.match(r.stdout, /verbatim/i);
+  cleanup(home, cwd);
+});
+
+// 'auto', absent, and an unrecognized value are all fail-safe: nothing appended, byte-
+// identical to the language-unset H5 case above.
+test('AL-2: language "auto" appends nothing to the H5 warning (fail-safe, matches unset)', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: 'auto' }), 'utf8');
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker');
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /Language locked/);
+  cleanup(home, cwd);
+});
+
+test('AL-2: an unrecognized language value appends nothing (fail-safe, never a guess at intent)', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: 'fr' }), 'utf8');
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker');
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /Language locked/);
+  cleanup(home, cwd);
+});
+
+// r29 findings-back LOW 2: only the string 'fr' was ever tested for rejection -- the
+// GARBAGE TYPES a malformed/cloned config can actually carry were unpinned.
+// `languageDirective` special-cases `typeof raw === 'string'`; everything else must fall
+// through silently, matching validateConfig's own "must be a string" rejection rather than
+// throwing or guessing. RED-PROOF, run and confirmed, not merely argued: replacing the
+// `typeof raw === 'string' ? raw.toLowerCase() : ''` guard with `String(raw).toLowerCase()`
+// (a coercion instead of a type check) reddens exactly the ARRAY case below and only it --
+// `String(['th'])` coerces to `'th'`, a real accepted value, so a single-element array
+// silently fires the directive under the mutant. The object/number/null cases stay green
+// under this specific mutant (`String({})`/`String(123)`/`String(null)` never match the
+// enum either way) -- each case in this loop guards a DIFFERENT collapse of the type check,
+// and the array case is the one that caught a live coercion bug class, not a hypothetical.
+for (const [label, value] of [['an object', {}], ['a number', 123], ['null', null], ['an array', ['th']]]) {
+  test(`AL-2 LOW-2: language as ${label} appends nothing (garbage type, fail-safe)`, () => {
+    const { home, cwd } = sandbox();
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: value }), 'utf8');
+    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker');
+
+    const r = runHook(cwd, home);
+
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.doesNotMatch(r.stdout, /Language locked/, `${label} must never fire the directive`);
+    cleanup(home, cwd);
+  });
+}
+
+// Case-insensitive accept, consistent with validateConfig's own `v.toLowerCase()` compare.
+test('AL-2 LOW-2: an uppercase language value still fires the directive (case-insensitive, matches validateConfig)', () => {
+  const { home, cwd } = sandbox();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ update: { updateMode: 'off' }, language: 'TH' }), 'utf8');
+  fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'coalhearth'), 'blocker');
+
+  const r = runHook(cwd, home);
+
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /Language locked to 'th'/, 'TH normalizes to lowercase th, same as a lowercase th would');
   cleanup(home, cwd);
 });

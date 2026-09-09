@@ -641,15 +641,23 @@ test('config-schema validateValue enforces type + bounds', () => {
 
 test('config-schema validateConfig passes the factory shape and flags unknown group/key', () => {
   const factory = {
+    language: 'auto',
     journal: { outputDirectory: '.claude/coalhearth', atomicityRetries: 3 },
     recovery: { autoInjectPrompt: true, stashUnsavedChanges: true },
     update: { updateMode: 'ask', updateCheckDays: 14 },
   };
   assert.deepStrictEqual(validateConfig(factory), [], 'factory config is valid');
-  assert.ok(Object.keys(CONFIG_SCHEMA).length === 3, 'three config groups (journal/recovery/update) — budgets retired');
-  assert.deepStrictEqual(validateConfig({ nope: {} }), ["group 'nope' not in schema"]);
+  // AL-2: `language` is a top-level SCALAR (carries its own `.type`), not a group — counting
+  // Object.keys() directly would read 3 groups + 1 scalar as "4 groups" and silently stop
+  // guarding the budgets tombstone below. Count GROUPS ONLY (no `.type` of their own).
+  const groupCount = Object.keys(CONFIG_SCHEMA).filter((k) => !CONFIG_SCHEMA[k].type).length;
+  assert.ok(groupCount === 3, 'three config groups (journal/recovery/update) — budgets retired');
+  assert.ok(CONFIG_SCHEMA.language && CONFIG_SCHEMA.language.type === 'enum', 'language is a top-level scalar enum, not a group');
+  assert.deepStrictEqual(validateConfig({ nope: {} }), ["key 'nope' not in schema"]);
   assert.deepStrictEqual(validateConfig({ journal: { bogus: 1 } }), ["'journal.bogus' not in schema"]);
   assert.deepStrictEqual(validateConfig({ journal: { atomicityRetries: 0 } }), ["'journal.atomicityRetries' must be >= 1"]);
+  assert.deepStrictEqual(validateConfig({ language: 'fr' }), ["'language' must be one of: auto, th, en, ja, zh, es"], 'a scalar entry validates its VALUE directly, not as a group object');
+  assert.deepStrictEqual(validateConfig({ language: { auto: true } }), ["'language' must be one of: auto, th, en, ja, zh, es"], 'a scalar entry given an object is rejected as a bad enum value, never silently descended into');
   assert.match(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'sometimes'), /must be one of/);
   assert.strictEqual(validateValue({ type: 'enum', values: ['ask', 'auto', 'remind', 'off'] }, 'OFF'), null, 'enum compares case-insensitively');
 });
@@ -662,7 +670,7 @@ test('tombstone: the budgets group is REMOVED from the schema (guardrail retired
   assert.strictEqual(CONFIG_SCHEMA.budgets, undefined, 'the budgets group is gone from the schema');
   assert.deepStrictEqual(
     validateConfig({ budgets: { maxTokens: 100 } }),
-    ["group 'budgets' not in schema"],
+    ["key 'budgets' not in schema"],
     'a stale config carrying the retired group is reported, not silently honored'
   );
 });

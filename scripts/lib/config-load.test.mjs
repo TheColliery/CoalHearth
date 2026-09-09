@@ -52,6 +52,72 @@ test('loadMergedConfig returns {} when neither file exists (never throws)', (t) 
   assert.deepEqual(loadMergedConfig({ cwd, home }), {});
 });
 
+// AL-2 -- mirrors lib/load-config.test.js's identical cases 1:1 (this file's own header
+// comment). `language` is a top-level SCALAR, not a group -- spreading a string as though
+// it were an object would explode it into indexed characters ({0:'a',1:'u',...}).
+test('AL-2: a top-level scalar (language) is NOT spread -- project wins outright, no per-key merge', (t) => {
+  const home = mkSandboxHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ language: 'en' }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ language: 'th' }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.language, 'th', 'project scalar wins outright, and is not exploded into an object');
+});
+
+test('AL-2: a scalar set only globally falls back correctly when the project never touches it', (t) => {
+  const home = mkSandboxHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ language: 'ja' }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ journal: { atomicityRetries: 2 } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.language, 'ja', 'global scalar survives when the project config never sets the key');
+  assert.equal(merged.journal.atomicityRetries, 2, 'a real GROUP alongside the scalar still merges per-key, unaffected');
+});
+
+test('AL-2: a scalar set only by the project (no global at all) survives -- and a real group merge is unaffected', (t) => {
+  const home = mkSandboxHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ language: 'zh', recovery: { stashUnsavedChanges: false } }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.language, 'zh');
+  assert.equal(merged.recovery.stashUnsavedChanges, false, 'a real GROUP with no global counterpart still merges to a fresh object');
+});
+
+// r29 findings-back LOW 3 (mirrored 1:1 from lib/load-config.test.js) -- a MIXED tier (one
+// side a group, the other a present scalar) used to run the group-merge branch regardless
+// and silently discard whichever side was not object-shaped.
+test('AL-2 LOW-3: project scalar wins over global group-garbage (mixed tier, project-wins preserved)', (t) => {
+  const home = mkSandboxHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ language: { a: 1 } }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ language: 'th' }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.equal(merged.language, 'th', 'a present project scalar wins outright over a global object, mixed-shape or not');
+});
+
+test('AL-2 LOW-3: a mixed-shape project value still wins outright over a global scalar', (t) => {
+  const home = mkSandboxHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ language: 'th' }));
+  const projectDir = path.join(home, 'proj');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.coalhearth.json'), JSON.stringify({ language: {} }));
+  const merged = loadMergedConfig({ cwd: projectDir, home });
+  assert.deepEqual(merged.language, {}, 'a present project value (however wrong-shaped) still wins outright -- resolving that is validateConfig\'s job, not the merge\'s');
+});
+
 // hooks-safety.md §9 (config-cascade clamp): mirrors lib/load-config.js's clamp test
 // 1:1. RED-PROOF: revert loadMergedConfig's updateMode post-clamp and this goes red.
 test('consent-cascade clamp: a project cannot re-escalate a user-silenced updateMode (hooks-safety.md §9)', (t) => {

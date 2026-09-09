@@ -134,7 +134,7 @@ CoalHearth's core value is its two automatic hooks (above); the two commands bel
 
 ## ⚙️ Configure
 
-Everything is tunable in `coalhearth.json` (global `~/.claude/.coalhearth.json` overlaid per-group by a project config; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional.
+Everything is tunable in `coalhearth.json` (global `~/.claude/.coalhearth.json` overlaid by a project config — per-group for a nested key, whole-value for a top-level scalar like `language`; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional.
 
 **Per-project config location — THE READ ORDER IS A RAIL, identical in every room of this series:**
 
@@ -148,9 +148,12 @@ The high-impact keys:
 
 | Key | Default | What it does |
 |---|---|---|
+| `language` | `auto` | Lock the reply language: `auto` / `th` / `en` / `ja` / `zh` / `es`. **Top-level** — not inside a group, unlike every other row here (see below). |
 | `recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
 | `recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
 | `update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+
+`language` sits at the **top level** of `coalhearth.json`, not nested under a group — `{"language": "auto"}`, never `{"recovery": {"language": "auto"}}`. `auto` (the factory default) follows the conversation's own language with an English fallback, no extra config needed. A lock (`th`/`en`/`ja`/`zh`/`es`) translates **prose only** — commands, paths, identifiers, config keys and severity labels stay verbatim regardless of the lock. What actually honors it: the SessionStart hook's own emissions (the recovery block, the journal-dir warning, the self-update nudge) append one directive naming the locked language when it is set to anything other than `auto`; nothing else in this room reads the key today.
 
 **Two exceptions to project-wins:** `update.updateMode` and `recovery.autoInjectPrompt` gate an outward action (a nudge; the whole recovery-block injection), so a project `.coalhearth.json` — untrusted, it arrives with whatever repo you clone — can only QUIETEN either one relative to your global config, never re-enable something you turned off globally. Every other key (caps, paths, `stashUnsavedChanges`) stays plain project-wins.
 

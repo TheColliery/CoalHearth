@@ -1,4 +1,8 @@
 {
+  // Lock the reply language (auto, th, en, ja, zh, es). Factory auto follows the
+  // conversation's language; a lock translates prose only — commands, paths,
+  // identifiers and config keys stay verbatim.
+  "language": "auto",
   // Handoff journal (the recovery core — this is the part that matters).
   "journal": {
     "outputDirectory": ".claude/coalhearth",

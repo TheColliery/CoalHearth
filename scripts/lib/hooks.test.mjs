@@ -468,3 +468,49 @@ test('case 14: updateCheckDays:0 clamped -> 2nd SessionStart throttled, not re-n
     clean(home, cwd);
   }
 });
+
+// AL-2 (owner-signed) — 5SS #2: `language` LOCKS the factory-auto reply language. Each
+// sanctioned emission this hook already prints gets ONE short directive appended, never a
+// standalone print (Phoenix #13 does not widen). Recovery-block coverage lives here
+// because the fixture machinery (writeJournal, FIXTURE) already lives in this file; the
+// H5 case lives in bin/session-start.test.js, next to that emission's own tests.
+test('AL-2: a locked language appends a directive to the self-update-due directive', () => {
+  const { home, cwd } = sandbox();
+  try {
+    writeGlobalCfg(home, { update: { updateMode: 'auto', updateCheckDays: 0 }, language: 'ja' });
+    const r = run(SESSION_START, cwd, home);
+    assertGraceful(r);
+    assert.match(r.stdout, /self-update due/);
+    assert.match(r.stdout, /Language locked to 'ja'/, 'appended to the same directive, not a second print');
+    assert.strictEqual(r.stdout.trim().split('\n').filter((l) => l.trim()).length, 1, 'still one line, not a new standalone emission');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+test('AL-2: a locked language appends a directive to the resume recovery block', () => {
+  const { home, cwd } = sandbox();
+  try {
+    writeGlobalCfg(home, { update: { updateMode: 'off' }, language: 'zh' });
+    writeJournal(cwd, FIXTURE);
+    const r = run(SESSION_START, cwd, home);
+    assertGraceful(r);
+    assert.match(r.stdout, /CoalHearth Warm-Resume Recovery/, 'the recovery block still renders');
+    assert.match(r.stdout, /Language locked to 'zh'/, 'the directive rides the same block, not a second print');
+  } finally {
+    clean(home, cwd);
+  }
+});
+
+test('AL-2: language absent from config appends nothing to either surface (fail-safe default)', () => {
+  const { home, cwd } = sandbox();
+  try {
+    muteUpdate(home);
+    writeJournal(cwd, FIXTURE);
+    const r = run(SESSION_START, cwd, home);
+    assertGraceful(r);
+    assert.doesNotMatch(r.stdout, /Language locked/, 'no language configured -> no directive, ever');
+  } finally {
+    clean(home, cwd);
+  }
+});

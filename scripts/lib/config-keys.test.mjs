@@ -25,7 +25,7 @@ const FULL_TABLE = '## Configure\n\n| Key | Default |\n|---|---|\n| `update.upda
 
 test('L1 prose: a dotted key that does not resolve FAILs, naming file and key', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA,
+    schema: SCHEMA, blind: {}, // isolated from the real module's BLIND_KEYS (AL-2 added `language`)
     mdFiles: ['README.md'],
     templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     read: mk({ 'README.md': 'Set `journal.historyLimit` to rotate.\n', tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
@@ -37,7 +37,7 @@ test('L1 prose: a dotted key that does not resolve FAILs, naming file and key', 
 
 test('L1 prose: a resolving dotted key is silent, and a non-key dotted token is not a candidate', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA,
+    schema: SCHEMA, blind: {},
     mdFiles: ['README.md'],
     templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     // `fs.statSync` and `task.md` are the shapes a naive dotted rule flagged (measured 11 FPs);
@@ -50,7 +50,7 @@ test('L1 prose: a resolving dotted key is silent, and a non-key dotted token is 
 test('L2 key table is SHAPE-FREE: a BARE unresolved first cell FAILs where L1 is blind', () => {
   const table = '## Configure\n\n| Key | Default |\n|---|---|\n| `bareInvented` | `1` |\n';
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: [], templateFiles: ['tpl'],
+    schema: SCHEMA, blind: {}, mdFiles: [], templateFiles: ['tpl'],
     keyTables: [{ file: 'README.md', heading: 'Configure' }],
     read: mk({ 'README.md': table, tpl: FULL_TEMPLATE }),
   });
@@ -63,7 +63,7 @@ test('L2: a CONTAINER name as the first cell RESOLVES — a group row is a corre
   // The defect this room's own history proof caught: an earlier README listed group rows.
   const table = '## Configure\n\n| Key | Default |\n|---|---|\n| `journal` | — |\n| `recovery` | — |\n';
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: [], templateFiles: ['tpl'],
+    schema: SCHEMA, blind: {}, mdFiles: [], templateFiles: ['tpl'],
     keyTables: [{ file: 'README.md', heading: 'Configure' }],
     read: mk({ 'README.md': table, tpl: FULL_TEMPLATE }),
   });
@@ -72,7 +72,7 @@ test('L2: a CONTAINER name as the first cell RESOLVES — a group row is a corre
 
 test('L3 template comments: a bare unresolved key in a SHIPPED comment FAILs', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: [], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    schema: SCHEMA, blind: {}, mdFiles: [], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     templateFiles: ['platform-configs/.coalhearth.json'],
     read: mk({
       'platform-configs/.coalhearth.json': '{\n  // legacyRetryCap is honoured here\n  "journal": {}\n}',
@@ -86,7 +86,7 @@ test('L3 template comments: a bare unresolved key in a SHIPPED comment FAILs', (
 
 test('L3 scans the COMMENT half only: a camelCase JSON value is not a candidate', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: [], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    schema: SCHEMA, blind: {}, mdFiles: [], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     templateFiles: ['tpl'],
     read: mk({ tpl: '{\n  // updateMode: ask\n  "journal": { "outputDirectory": "someInventedPath" }\n}', 'T.md': FULL_TABLE }),
   });
@@ -167,7 +167,7 @@ test('BLIND_KEYS expiry: a declaration the rule CAN now see FAILs (the list cann
 // PENDING / NOT_CONFIG / RETIRED — rule 1 (no longer true) and rule 2 (protects nothing).
 test('PENDING_KEYS suppresses the FAIL for an honestly-planned key', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: ['README.md'], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    schema: SCHEMA, blind: {}, mdFiles: ['README.md'], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     pending: { 'journal.rotateAfter': 'CWK-999 planned' },
     read: mk({ 'README.md': 'Planned: `journal.rotateAfter`.\n', tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
   });
@@ -213,7 +213,7 @@ test('rule 2 is GATED on a complete scan: an unreadable surface degrades to SKIP
 
 test('RETIRED_KEYS: a retired key is reported BY NAME as a SKIP, never silently uncovered', () => {
   const r = checkConfigKeys({
-    schema: SCHEMA, mdFiles: ['README.md'], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    schema: SCHEMA, blind: {}, mdFiles: ['README.md'], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
     retired: { 'journal.historyLimit': 'dropped at v0.1.0-beta.4' },
     read: mk({ 'README.md': 'Once `journal.historyLimit`.\n', tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
   });
@@ -253,4 +253,95 @@ test('MEDIUM-2: a readdir-derived surface that is absent does NOT fail (only han
   });
   assert.ok(!fails(r).some((m) => /hand-named surface/.test(m)), fails(r).join(' | '));
   assert.ok(skips(r).some((m) => /declaration-pruning not checked/.test(m)), skips(r).join(' | '));
+});
+
+// AL-2 — a top-level SCALAR schema entry (its own `.type`, e.g. `language`), not a group.
+// A schema key with no dot to give L1's CONTAINER_RE and no internal capital for L3's BARE
+// rule is structurally blind to both, by construction, same class as a hyphenated leaf.
+// r29 findings-back MEDIUM: reachability is by L2 (the key table), gated on whether the
+// CALLER wired one in — the precondition tests THAT, never a per-mention content check.
+const SCHEMA_WITH_LANG = { ...SCHEMA, language: { type: 'enum', values: ['auto', 'th', 'en', 'ja', 'zh', 'es'] } };
+
+test('AL-2: an undeclared scalar trips the precondition when NO key table is wired at all (the adopter case)', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, blind: {}, mdFiles: [], templateFiles: ['tpl'], keyTables: [],
+    read: mk({ tpl: FULL_TEMPLATE }),
+  });
+  assert.ok(fails(r).some((m) => /schema key language cannot be detected by any locator/.test(m)), fails(r).join(' | '));
+});
+
+test('AL-2: an undeclared scalar does NOT trip the precondition once a key table is wired — no BLIND_KEYS entry needed', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, blind: {}, mdFiles: [], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    read: mk({ tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
+  });
+  assert.ok(!fails(r).some((m) => /cannot be detected/.test(m)), fails(r).join(' | '));
+  assert.deepEqual(skips(r).filter((m) => m.startsWith('blind to')), [], 'nothing declared, nothing to disclose');
+});
+
+test('AL-2: BLIND_KEYS declaring a scalar SKIPs the precondition FAIL when no key table is wired', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, mdFiles: [], templateFiles: ['tpl'], keyTables: [],
+    blind: { language: 'top-level scalar, no key table wired in this call' },
+    read: mk({ tpl: FULL_TEMPLATE }),
+  });
+  assert.ok(!fails(r).some((m) => /cannot be detected/.test(m)), fails(r).join(' | '));
+  assert.ok(skips(r).some((m) => /^blind to 1 DECLARED schema key\(s\) no locator can reach: language/.test(m)), skips(r).join(' | '));
+});
+
+test('AL-2: a scalar key resolves via L2 (the key table) once a row names it — shape-free, same as any other key', () => {
+  const table = '## Configure\n\n| Key | Default |\n|---|---|\n| `language` | `auto` |\n';
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, blind: {}, mdFiles: [], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    read: mk({ tpl: FULL_TEMPLATE, 'T.md': table }),
+  });
+  assert.deepEqual(fails(r), []);
+});
+
+test('AL-2: a wrong scalar name in the key table FAILs — L2 reads and CHECKS it, never "discards" it (the MEDIUM\'s own experiment)', () => {
+  const table = '## Configure\n\n| Key | Default |\n|---|---|\n| `languag` | `auto` |\n';
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, blind: {}, mdFiles: [], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    read: mk({ tpl: FULL_TEMPLATE, 'T.md': table }),
+  });
+  assert.ok(fails(r).some((m) => /documents languag, which does not resolve/.test(m)), fails(r).join(' | '));
+});
+
+test('AL-2: a scalar key mentioned bare in ordinary prose is invisible to L1 and L3 — still true, no longer excused by BLIND_KEYS', () => {
+  // `language` has no dot (L1 blind) and no internal capital (L3's BARE never matches
+  // all-lowercase) — a free-prose mention outside the key table is genuinely uncaught,
+  // unlike a dotted key. NOT declared blind here: a key table IS wired, so the STRUCTURAL
+  // precondition passes regardless of this one prose mention going unseen.
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, blind: {}, mdFiles: ['README.md'], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    read: mk({ 'README.md': 'Set `language` to lock replies.\n', tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
+  });
+  assert.deepEqual(fails(r), []);
+});
+
+test('AL-2 BLIND_KEYS expiry: a declared scalar that is STILL unreachable (no key table wired) does not falsely expire', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, mdFiles: [], templateFiles: ['tpl'], keyTables: [],
+    blind: { language: 'no key table wired here' },
+    read: mk({ tpl: FULL_TEMPLATE }),
+  });
+  assert.ok(!fails(r).some((m) => /a locator can now see it/.test(m)), fails(r).join(' | '));
+});
+
+test('AL-2 BLIND_KEYS expiry: a declared scalar that a key table now reaches correctly EXPIRES (the list cannot rot into a bypass)', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA_WITH_LANG, mdFiles: [], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    blind: { language: 'stale — a key table is wired now' },
+    read: mk({ tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
+  });
+  assert.ok(fails(r).some((m) => /BLIND_KEYS declares language as unreachable, but a locator can now see it/.test(m)), fails(r).join(' | '));
+});
+
+test('AL-2 BLIND_KEYS expiry: a scalar declaration whose key actually left the schema still FAILs', () => {
+  const r = checkConfigKeys({
+    schema: SCHEMA, mdFiles: [], templateFiles: ['tpl'], keyTables: [{ file: 'T.md', heading: 'Configure' }],
+    blind: { language: 'stale — the key was removed' },
+    read: mk({ tpl: FULL_TEMPLATE, 'T.md': FULL_TABLE }),
+  });
+  assert.ok(fails(r).some((m) => /BLIND_KEYS declares language, but it is not in the schema at all/.test(m)), fails(r).join(' | '));
 });

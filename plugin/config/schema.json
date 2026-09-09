@@ -3,6 +3,7 @@
   "title": "CoalHearthConfig",
   "type": "object",
   "properties": {
+    "language": { "type": "string", "enum": ["auto", "th", "en", "ja", "zh", "es"], "default": "auto" },
     "journal": {
       "type": "object",
       "properties": {

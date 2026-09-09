@@ -195,8 +195,40 @@ function loadConfig(opts) {
   const global = readJsonc(globalConfigPath(home));
   const project = readJsonc(projectConfigPath(cwd, home, ownDir));
   const merged = {};
-  for (const group of new Set([...Object.keys(global), ...Object.keys(project)])) {
-    merged[group] = { ...(global[group] || {}), ...(project[group] || {}) };
+  // AL-2 added a top-level SCALAR key (`language`) alongside the existing nested groups
+  // (journal/recovery/update). Spreading a scalar as though it were a group object is a
+  // real bug, not a hypothetical one -- `{...'auto'}` explodes a string into indexed
+  // characters (`{0:'a',1:'u',...}`). A key is a GROUP here iff its value is a genuine
+  // object (not null, not an array) on the side that actually supplies it.
+  //
+  // r29 findings-back LOW 3: a MIXED tier (one side a group, the OTHER side PRESENT but
+  // not a group -- a malformed config, e.g. project `language: {}` against a schema that
+  // wants a string) used to fall through to the per-key merge branch below regardless,
+  // which silently DISCARDS whichever side is not object-shaped -- `{...g, ...{}}` drops a
+  // present, wrong-shaped `p` entirely, and the reverse drops a present `g`. That is not
+  // project-wins, it is object-shape-wins, and it can discard the tier that should have
+  // won. Per-key group merging is only MEANINGFUL when BOTH sides are real groups; the
+  // moment either present side is not a group, there is no key-by-key merge to perform --
+  // the two sides disagree on what KIND of value this key even is, so the key resolves as
+  // ONE ATOM, plain project-wins, exactly like a scalar-vs-scalar disagreement already did.
+  // A side that is simply ABSENT (undefined, never touched this tier) is not part of that
+  // disagreement -- it still yields a FRESH per-key copy of whichever real group remains,
+  // preserving the immutability guarantee below (never hand back a shared reference into
+  // `global`/`project`).
+  for (const key of new Set([...Object.keys(global), ...Object.keys(project)])) {
+    const g = global[key];
+    const p = project[key];
+    const gIsGroup = g && typeof g === 'object' && !Array.isArray(g);
+    const pIsGroup = p && typeof p === 'object' && !Array.isArray(p);
+    if (gIsGroup && pIsGroup) {
+      merged[key] = { ...g, ...p };
+    } else if (gIsGroup && p === undefined) {
+      merged[key] = { ...g };
+    } else if (pIsGroup && g === undefined) {
+      merged[key] = { ...p };
+    } else {
+      merged[key] = p !== undefined ? p : g;
+    }
   }
   // Post-clamp ONLY updateMode + autoInjectPrompt (see the two functions above) —
   // every other key in every group keeps the plain project-wins merge just performed.
