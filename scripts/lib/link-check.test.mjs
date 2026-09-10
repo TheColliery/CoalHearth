@@ -49,6 +49,13 @@ test('extractCitations: a link inside a fenced code block is an example, not a c
   assert.deepEqual(extractCitations(md), [{ target: './here.md', line: 5 }]);
 });
 
+test('extractCitations: a GFM link title (`[x](./y.md "title")`) is stripped from the target, never treated as part of the path', () => {
+  // Rot-canary QUICK catch, r33: pre-fix this returned './README.md "a title"' as the
+  // target, which then false-FAILs a perfectly valid link (the title text is not a path).
+  assert.deepEqual(extractCitations('[text](./README.md "a title")'), [{ target: './README.md', line: 1 }]);
+  assert.deepEqual(extractCitations("[text](./README.md 'a title')"), [{ target: './README.md', line: 1 }]);
+});
+
 test('extractCitations: external targets (scheme URIs) are extracted but resolve as out of scope', () => {
   const md = '[a](./b.md) [ext](https://example.com) [mail](mailto:x@example.com) [anchor](#foo)';
   const targets = extractCitations(md).map((c) => c.target);

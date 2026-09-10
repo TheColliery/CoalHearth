@@ -89,6 +89,17 @@ export function headingAnchors(text) {
   return anchors;
 }
 
+// A GFM link MAY carry a trailing ` "title"` / ` 'title'` after the destination
+// (`[text](./x.md "a title")`) -- strip it before the destination is ever treated as a
+// path, or a perfectly valid link false-FAILs as broken (the title text becomes part of
+// the "path", which then cannot exist). Rot-canary QUICK catch, r33: no real doc in this
+// room uses a link title today, so nothing had exercised this -- confirmed live before
+// the fix (`[t](./README.md "a title")` resolved as target `./README.md "a title"`).
+function stripLinkTitle(raw) {
+  const m = /^(\S+)\s+["'](?:[^"']*)["']\s*$/.exec(raw);
+  return m ? m[1] : raw;
+}
+
 // [{ target, line }] for every markdown link/image `[label](target)` / `![alt](target)` in
 // `text`, fence-aware. A citation written INSIDE a fenced code block is an EXAMPLE, not a
 // claim about this tree (the identical reasoning pointer-check.mjs already applies to
@@ -103,7 +114,7 @@ export function extractCitations(text) {
     LINK_RE.lastIndex = 0;
     let m;
     while ((m = LINK_RE.exec(lines[i]))) {
-      out.push({ target: m[1].trim(), line: i + 1 });
+      out.push({ target: stripLinkTitle(m[1].trim()), line: i + 1 });
     }
   }
   return out;
