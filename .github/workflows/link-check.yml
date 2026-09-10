@@ -1,0 +1,65 @@
+name: link-check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.md'
+
+permissions:
+  contents: read
+
+# cancel-in-progress TRUE (CWK-058, canon: .github/SKILL-REPO-PATTERN.md) -- this workflow
+# reads files and publishes nothing, so a superseded run leaves nothing half-done behind.
+concurrency:
+  group: link-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # NOT continue-on-error, unlike markdownlint.yml -- a real gate, no report-only pass.
+      #
+      # ENGINE: scripts/lib/link-check.mjs, this room's own port of the canon DEFAULT
+      # (.github/SKILL-REPO-PATTERN.md:91 -- "a small scripts/lib/link-check.mjs walking the
+      # repo's own .md files"), never CoalLedger's scripts/lib/md-checks.mjs (that room's own
+      # CommonMark+GFM AST, named out of scope for this room by the chief's own order).
+      #
+      # SCOPE: every TRACKED .md file, excluding `plugin/**` (the GENERATED dist copy --
+      # scanning it double-reports every finding the source already caught) and
+      # `scripts/fixtures/**` (the engine's OWN test fixtures, which deliberately carry
+      # planted defects its unit tests assert against -- scanning them here would fail this
+      # gate by design, forever).
+      #
+      # NEVER continue-on-error, and never wrapped: unlike CoalLedger's own md-checks.mjs
+      # (which serves a second consumer and therefore never sets an exit code, forcing its
+      # workflow to wrap the bare CLI call in a shell tail-grep -- the exact shape its own
+      # head self-caught as a silent always-green no-op before fixing it), this engine has
+      # exactly one consumer and sets process.exitCode on findings AT THE SOURCE
+      # (scripts/lib/link-check.mjs's own CLI entry). The step below runs it bare and lets
+      # its own exit code decide the job -- there is no wrap-and-grep shape to get wrong here.
+      #
+      # FAILS CLOSED ON AN EMPTY FILE LIST -- the CWK-079 fail-open class this room has now
+      # paid for three times (r30, r31 x2): if the `git ls-files | grep -v ... | grep -v ...`
+      # chain ever yields nothing (a layout change moves every doc under an excluded prefix),
+      # this step exits 1 BEFORE the engine ever runs, rather than reporting a false-clean
+      # PASS having scanned nothing. Proven both directions below (RED-PROVE, r33 BUILD
+      # return): the real committed tree exits 0; a forced-empty file list exits 1 without
+      # reaching the engine at all; scripts/fixtures/defects-links.md alone exits 1 with both
+      # planted findings named.
+      - run: |
+          files=$(git ls-files '*.md' | grep -v '^plugin/' | grep -v '^scripts/fixtures/')
+          if [ -z "$files" ]; then
+            echo "::error::link-check found NO markdown files to scan -- the scope filter is broken, not the tree"
+            exit 1
+          fi
+          node scripts/lib/link-check.mjs $files
