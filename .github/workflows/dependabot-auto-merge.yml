@@ -14,12 +14,22 @@ on: pull_request
 permissions:
   contents: read
 
-# cancel-in-progress FALSE, and keyed to the PR rather than the ref: this workflow acts
-# on state outside its own run (`gh pr merge --auto` arms a merge on a real PR). Killing a
-# superseded run could leave a PR un-armed with nothing to re-arm it.
+# cancel-in-progress TRUE (CWK-058, superseding the FALSE reading below), keyed to the PR
+# rather than the ref. The landed canon's discriminator is ATOMICITY, not read-vs-write:
+# `gh pr merge --auto` arming a merge is IDEMPOTENT, not a partial external state a killed
+# run could strand -- a killed run simply leaves the merge NOT-YET-ARMED, and the next run
+# for the same PR (a new push, or Dependabot's own retry) arms it the same way. There is no
+# half-armed state to leave behind, unlike scorecard.yml's OpenSSF publish.
+#
+# THE PRIOR READING, kept for the record rather than erased: "this workflow acts on state
+# outside its own run (`gh pr merge --auto` arms a merge on a real PR); killing a superseded
+# run could leave a PR un-armed with nothing to re-arm it" -- true that nothing re-arms it
+# AUTOMATICALLY, but "un-armed" is exactly the SAFE, cancel-in-progress side of this flag:
+# a killed run costs one un-armed PR, re-armed by the next trigger, never a corrupted or
+# partially-applied merge.
 concurrency:
   group: dependabot-auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   auto-merge:
