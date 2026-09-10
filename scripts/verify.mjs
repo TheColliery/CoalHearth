@@ -15,19 +15,25 @@ let fails = 0;
 const ok = (m) => console.log(`  ok   ${m}`);
 const fail = (m) => { console.log(`  FAIL ${m}`); fails++; };
 
-// THE SHIP-TEXT SURFACE SET, declared ONCE and read by BOTH gates below (the config-key
-// gate and the pointer gate). Two gates over overlapping surfaces must agree or state why
-// they differ; a sibling room shipped two whose sets differed by one unnamed file, so a
-// pass line read as ship-text coverage while a tracked ship-text surface went unread.
-// Hand-named docs are chosen by name (an unreadable one is a wiring bug); commands/*.md is
-// readdir-derived, so a new command is covered the day it lands.
-function shipText() {
-  const cmdDir = path.join(repo, 'commands');
+// THE SHIP-TEXT SURFACE SET, for the CONFIG-KEY gate below. CWK-090 fix 3: this used to be
+// a SECOND hand-kept literal, independently agreeing with the pointer gate's own list until
+// someone edited one — now it is a VIEW over pointer-check.mjs's own DEFAULT_SURFACE_PLAN
+// (the plan's doc rows only: not `comments`/`hash-comments` kind, not `historyOnly`),
+// projected into the path-list shape `checkConfigKeys()` expects (paths it reads itself,
+// never pre-read text — a different consumption style from the pointer gate's own
+// `collectSurfaces()`, so this stays a projection rather than a shared call). ONE declared
+// source feeds both gates — the invariant INSPECT LOW-3 of CWK-075 first established for the
+// shipText() name, now backed by an actual shared plan instead of two literals that happened
+// to agree. `plan` is DEFAULT_SURFACE_PLAN, passed in by each caller after its own dynamic
+// import (node/runtime.md §1: a scripts/lib import stays inside the check that needs it).
+function shipText(plan) {
+  const docRows = plan.filter((r) => r.kind !== 'comments' && r.kind !== 'hash-comments' && !r.historyOnly);
+  const template = docRows.find((r) => r.root === path.join('platform-configs', '.coalhearth.json').split(path.sep).join('/')).root;
+  const named = docRows.filter((r) => !r.dir && r.root !== template).map((r) => r.root);
+  const cmdRow = docRows.find((r) => r.dir);
+  const cmdDir = path.join(repo, cmdRow.root);
   const cmdMd = (fs.existsSync(cmdDir) ? fs.readdirSync(cmdDir) : [])
-    .filter((f) => f.endsWith('.md')).map((f) => path.join('commands', f));
-  const named = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md',
-    path.join('platform-configs', 'hooks', 'README.md')];
-  const template = path.join('platform-configs', '.coalhearth.json');
+    .filter((f) => f.endsWith('.md')).map((f) => path.join(cmdRow.root, f));
   return { named, template, cmdMd, mdFiles: [...named, ...cmdMd] };
 }
 
@@ -166,10 +172,11 @@ console.log('config keys:');
 try {
   const { checkConfigKeys } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-keys.mjs')).href);
   const { CONFIG_SCHEMA } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-schema.mjs')).href);
+  const { DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
   // NAME the intended surfaces; let the checker report what it could not read. A caller that
   // existsSync-filters first hides its own scope gap — the silent narrowing this gate exists
   // to catch, committed by the gate's own wiring.
-  const { named, template, mdFiles } = shipText();
+  const { named, template, mdFiles } = shipText(DEFAULT_SURFACE_PLAN);
   const { findings, coverage } = checkConfigKeys({
     schema: CONFIG_SCHEMA,
     mdFiles,
@@ -200,17 +207,46 @@ try {
 // UNTRACKED both FAIL, because from any other machine "gitignored" and "does not exist" are
 // indistinguishable and such a citation was never durable.
 //
-// SURFACE SET: DELIBERATELY IDENTICAL to block 2.9's config-key gate, ~60 lines up. Two
-// gates in one file reading the same surfaces is the default; a divergence would need a
-// stated reason and there is none. A sibling room shipped two gates whose sets differed by
-// one unnamed file — a pass line reading as ship-text coverage while a tracked ship-text
-// surface went unread, which is this gate's own class one level up.
+// SURFACE SET: pointer-check.mjs's own DEFAULT_SURFACE_PLAN — the SAME plan the config-key
+// gate's shipText() projects a doc-only view of, ~15 lines up (CWK-090 fix 3). This gate
+// additionally walks the plan's `comments`/`hash-comments` rows (scripts/bin/lib source
+// comments, .githooks/) and its one `historyOnly` row (CHANGELOG.md) — a WIDER surface set
+// than the config-key gate's by design, stated here rather than left to look like the
+// drifted-list class CWK-075's own INSPECT LOW-3 was written against: config keys are not a
+// question script comments or published history can meaningfully answer, so the two gates'
+// sets diverging on THOSE rows is not the silent-drift failure that invariant guards against.
 console.log('pointer drift:');
 try {
-  const { checkPointers, deriveIgnoredRoots } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
+  const { checkPointers, deriveCandidateRoots, applyCheckIgnoreProbe, collectSurfaces, DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
   const { projectConfigCandidates } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-load.mjs')).href);
   const { execFileSync, spawnSync } = await import('node:child_process');
   const os = await import('node:os');
+
+  // io PRIMITIVES for collectSurfaces() -- plain fs/path, no scripts/lib import, so these
+  // are safe as ordinary functions rather than needing the dynamic-import treatment
+  // node/runtime.md 1 reserves for local libs.
+  const walkMd = (dir, out = []) => {
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walkMd(p, out);
+      else if (e.name.endsWith('.md')) out.push(p);
+    }
+    return out;
+  };
+  const walkSrc = (dir, keep, out = []) => {
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walkSrc(p, keep, out);
+      else if (keep(e.name)) out.push(p);
+    }
+    return out;
+  };
+  const relToRepo = (p) => path.relative(repo, p).split(path.sep).join('/');
+  const commentLines = (src) => src.split('\n').filter((l) => /^\s*(\/\/|\*)/.test(l)).join('\n');
+  const hashComments = (src) => src.split('\n').filter((l) => /^\s*#/.test(l)).join('\n');
+  const readOrNull = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
 
   // GIT IS AN OPTIONAL ENHANCEMENT, NEVER A RUNTIME REQUIREMENT (no-external-assumption).
   // This gate's whole question is "reachable from a CLONE", which only git can answer, so
@@ -260,40 +296,36 @@ try {
   const ourRoots = new Set(topAll);
   for (const f of tracked) ourRoots.add(f.split('/')[0]);
 
-  const readOrNull = (p) => { try { return fs.readFileSync(path.join(repo, p), 'utf8'); } catch { return null; } };
-  // ONE constant, not a second hand-kept literal. The "DELIBERATELY IDENTICAL" claim above
-  // was true by hand only -- two literals and two readdir calls that agree until someone
-  // edits one (INSPECT LOW-3). Now the invariant is structural: both gates read shipText().
-  const { mdFiles: ptrMd, template: ptrTemplate } = shipText();
-  const labels = [...ptrMd, ptrTemplate].map((l) => l.split(path.sep).join('/'));
-  const surfaces = labels.map((l) => ({ label: l, text: readOrNull(l) }));
+  // CWK-090 fix 3: the surface list is now DATA (DEFAULT_SURFACE_PLAN, pointer-check.mjs),
+  // collected here with THIS room's own fs IO -- adopted rather than narrowed (see the block
+  // header above and the plan's own module comment for the measured residue that made
+  // adoption safe: every "unresolved" comment citation is an agent or vendor home).
+  const surfaces = collectSurfaces(repo, DEFAULT_SURFACE_PLAN, {
+    join: path.join, walkMd, walkSrc, read: readOrNull, rel: relToRepo, commentLines, hashComments,
+  });
 
   // CWK-079 — IGNORED ROOTS, PATTERN-BASED, EXISTENCE-INDEPENDENT. Replaces the disk-derived
   // shape (`fs.readdirSync(repo)` over what THIS machine happens to hold), which was DEAD CODE
   // on a clean clone: a clone carries no gitignored files by definition, so that branch ran at
-  // ZERO for every user and every CI leg. Mechanism, named bound and the non-locality property
-  // → scripts/lib/pointer-check.mjs's deriveIgnoredRoots. `checkIgnore` here is the ONE place
-  // this room shells out to git for it: a single batched `git check-ignore --stdin` call over
-  // every candidate root, `first + '/'` appended (git cannot infer an ABSENT path is a
-  // directory, so a `dir/`-anchored .gitignore pattern would not otherwise match the bare
-  // name).
-  const { candidateRoots, toProbe, homesHeldOut, ignoredRoots } = deriveIgnoredRoots({
-    surfaces,
-    agentHomes,
-    checkIgnore: (roots) => {
-      if (!roots.length) return [];
-      const ci = spawnSync('git', ['check-ignore', '--stdin'],
-        { cwd: repo, encoding: 'utf8', input: roots.map((r) => r + '/').join('\n') + '\n' });
-      if (ci.error || typeof ci.stdout !== 'string') return [];
-      return ci.stdout.split('\n').map((l) => l.trim().replace(/\/$/, '')).filter(Boolean);
-    },
+  // ZERO for every user and every CI leg. Discovery lives in pointer-check.mjs's
+  // deriveCandidateRoots; the check-ignore CALL and its fail-open-or-populate logic live in
+  // applyCheckIgnoreProbe, DI'd with `runCheckIgnore` so a WIRING mutation here (not only a
+  // classifier mutation inside pointer-check.mjs) has something to redden (CWK-090 fix 1).
+  const { candidateRoots, toProbe, homesHeldOut } = deriveCandidateRoots({ surfaces, agentHomes });
+  const ignoredRoots = new Set();
+  // PROBE SUFFIX (CWK-090 fix 2, main's ruling): a path UNDER the root, never the bare
+  // `root + '/'` -- see applyCheckIgnoreProbe's own comment (pointer-check.mjs) for the
+  // CRLF-fixture false-match this replaces.
+  const PROBE_SUFFIX = '/.pointer-check-probe';
+  applyCheckIgnoreProbe({
+    toProbe, PROBE_SUFFIX, ignoredRoots, fail,
+    runCheckIgnore: (input) => spawnSync('git', ['check-ignore', '--stdin'], { cwd: repo, encoding: 'utf8', input }),
   });
 
-  // NO historyOnly SURFACE IS PASSED, and the flag is therefore READ BY NOTHING here. That
-  // is deliberate: CHANGELOG.md is where this room's history lives and it is out of both
-  // gates' surface sets, so a history-only lane would be a name implying a mechanism that
-  // does not exist. The parameter stays in the module (an adopter with a history surface
-  // needs it); this room simply does not feed one.
+  // CHANGELOG.md NOW CARRIES `historyOnly: true` (DEFAULT_SURFACE_PLAN, CWK-090 fix 3) --
+  // checkPointers binds it to the gitignored-root check only, never the ordinary resolve
+  // check: published history is never fixed forward, but a gitignored citation was never
+  // correct on any day, even the day the entry was written.
   const findings = checkPointers({
     surfaces,
     ourRoots,
@@ -316,7 +348,7 @@ try {
     if (f.level === 'SKIP') console.log('  --   ' + f.msg);
     else fail(f.msg);
   }
-  if (!hardP.length) ok(`every path this repo points at from ${surfaces.length} ship-text surface(s) (${findings.checked} in-scope citations) resolves to a TRACKED file — sections and symbols are NOT checked, see scripts/lib/pointer-check.mjs`);
+  if (!hardP.length) ok(`every path this repo points at from ${surfaces.length} surface(s) (${findings.checked} in-scope citations) resolves to a TRACKED file — sections and symbols are NOT checked, see scripts/lib/pointer-check.mjs`);
   }
 } catch (e) { fail(`pointer drift check crashed: ${e.message}`); }
 

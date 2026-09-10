@@ -11,14 +11,16 @@
 // one are indistinguishable, so such a citation was never durable — not even on the day it
 // was written.
 //
-// SCRIPTS/ COMMENTS ARE NOT A WALKED SURFACE HERE — CWK-079 FINDINGS-BACK, corrected against
-// a premise imported unchecked from CoalMine's own port. `shipText()` in verify.mjs names 8
-// surfaces and NOT ONE lives under `scripts/`, so a backticked path written into a comment in
-// THIS file or in verify.mjs is never read by this gate, in either direction: it does not
-// become a citation the gate checks, AND a WRONG path written into such a comment is NOT
-// caught by this gate. State exhibits by name, never in backticks, out of caution — not
-// because backticking one here would trip anything, but because the property is a residue,
-// not a guarantee, and a future widening of shipText() to cover `scripts/` would change it.
+// SCRIPTS/ COMMENTS ARE NOW A WALKED SURFACE — SUPERSEDED, CWK-090 fix 3 (r30's own residue
+// sentence, corrected). r30 read this as CoalMine's variable set imported unchecked and
+// declared it out; main ruled the OTHER way — the surface list is a declared INPUT, the
+// DEFAULT includes script comments, and a room narrows it only by deleting a row and stating
+// the reason in that row's own `why` (DEFAULT_SURFACE_PLAN, below), never by a silent module
+// comment. So: a backticked path written into a comment in THIS file, verify.mjs, or any
+// `.mjs`/`.js` file under scripts/, bin/, or lib/ IS a citation this gate now checks — the
+// self-reference hazard the rest of this header already names for its own MEASURED-numbers
+// section applies here identically. See DEFAULT_SURFACE_PLAN for the one deliberate
+// narrowing kept (test files' own comments, excluded with its own reason).
 //
 // ============================================================================
 // MEASURED ON THIS ROOM'S OWN SURFACES BEFORE ANY OF IT WAS CHOSEN. Re-derive with the
@@ -104,6 +106,106 @@ export const VENDOR_HOMES = [
   { path: '.github/hooks', reason: 'GitHub Copilot CLI hook home in the USER tree; `.github/workflows/` is ours, same root' },
 ];
 
+// SURFACE PLAN, DECLARED (CWK-090 fix 3, findings-back r30/r31). "scripts/ comments are
+// NOT a walked surface here" was this room's own r30 finding, and it stood only until main
+// ruled the other way: the surface list is a DECLARED INPUT of the gate, the DEFAULT is the
+// exemplar's (docs + script comments — a stale pointer in a comment misleads the next reader
+// exactly as one in a doc does), and a room that narrows it DELETES the row and states the
+// reason in that row's OWN `why`, never by leaving the row out silently or editing the
+// driver. This room ADOPTS THE DEFAULT: measured population of path-shaped comment citations
+// across scripts/bin/lib before adopting = 7 "unresolved" against a crude probe, but every
+// one is an agent home (`.claude/`, `.agents/`) or a vendor home (`.github/hooks`, from
+// VENDOR_HOMES above) that the crude probe does not hold out — the REAL gate (agentHomes +
+// vendorHomes) reads 0 residue (re-derive with verify.mjs's own pass line, never trust this
+// sentence forward).
+//
+// THE NARROWING FORM, one sentence an adopter copies rather than guesses: a room that walks
+// fewer surfaces DELETES the row and states its reason in the row's own `why`, never by
+// editing `collectSurfaces` or leaving the row in place unused. TWO deliberate narrowings
+// from the exemplar's own default, stated here rather than silently: (1) this room does not
+// add a `.github/ISSUE_TEMPLATE` row or a `.ps1`-comment row (the exemplar's PowerShell-
+// fallback class) — this room ships no `.ps1` files at all (`node/runtime.md` §3's own
+// bin/lib CJS, scripts/ ESM split has no PowerShell lane), so that row's precondition does
+// not exist here; (2) the three comment rows' `ext` excludes `.test.` files (see each row's
+// own `why`) — a test file's comments quote fixture strings, not citations.
+//
+// `kind` is one of four: `md` (a directory of markdown files, walked recursively, whole
+// text) · `raw` (a single file's whole text, OR a directory walk with an extension filter
+// and no comment-line stripping) · `comments` (a directory walk, `//`/`*`-prefixed lines
+// only) · `hash-comments` (a directory walk, `#`-prefixed lines only). `dir: true` means
+// `root` is a directory to walk; its absence means `root` is one exact file. `historyOnly:
+// true` marks a surface `checkPointers` binds to the gitignored-root case only, never the
+// ordinary resolve check (CHANGELOG.md — published history is never fixed forward).
+export const DEFAULT_SURFACE_PLAN = [
+  { kind: 'raw', root: 'README.md',
+    why: 'the front door — every install/config claim starts here' },
+  { kind: 'raw', root: 'SECURITY.md',
+    why: 'the disclosure surface, and it cites internal paths (e.g. a hook line ref)' },
+  { kind: 'raw', root: 'PRIVACY.md',
+    why: 'the privacy surface, and it cites internal paths' },
+  { kind: 'raw', root: 'CONTRIBUTING.md',
+    why: 'the dev-facing surface, and it cites internal paths' },
+  { kind: 'raw', root: 'platform-configs/hooks/README.md',
+    why: 'the per-platform wiring doc; it names install paths in the USER tree (agent/vendor homes) and ours' },
+  { kind: 'md', root: 'commands', dir: true,
+    why: 'command docs are ship-text a user reads' },
+  { kind: 'raw', root: 'platform-configs/.coalhearth.json',
+    why: 'the factory config template a user\'s own project config starts from' },
+  { kind: 'raw', root: 'CHANGELOG.md', historyOnly: true,
+    why: 'published history is never fixed forward — a path correct when the entry was written is not a defect now, but a gitignored citation was never correct on any day' },
+  // `.test.` FILES ARE NARROWED OUT, WITH A REASON, NOT BY SILENT SHAPE. A test file's own
+  // comments quote deliberately-fake example fixtures as part of describing what the code
+  // under test does with them — content ABOUT citations, never a citation itself.
+  // Deliberately not naming the fixtures themselves as literals here: this comment is
+  // itself a WALKED surface (scripts/, this very row), and backticking one would
+  // manufacture the exact FAIL it is describing — measured live while porting this row,
+  // when this file's OWN test file (pointer-check.test.mjs) tripped three such FAILs on
+  // its own fixture strings before the exclusion existed, the identical self-reference
+  // hazard this header already names for its measured-numbers section, one class over.
+  { kind: 'comments', root: 'scripts', dir: true, ext: /^(?!.*\.test\.mjs$).*\.mjs$/,
+    why: 'a path inside CODE is exercised by the tests; a path inside a COMMENT is exercised by nothing at all — adopted per CWK-090 fix 3, main\'s ruling against this room\'s own r30 finding' },
+  { kind: 'comments', root: 'bin', dir: true, ext: /^(?!.*\.test\.js$).*\.js$/,
+    why: 'same class as the scripts/ row — bin/ side; CJS per this room\'s own named divergence (node/runtime.md §3)' },
+  { kind: 'comments', root: 'lib', dir: true, ext: /^(?!.*\.test\.js$).*\.js$/,
+    why: 'same class as the scripts/ row — lib/ side; CJS per this room\'s own named divergence (node/runtime.md §3)' },
+  { kind: 'hash-comments', root: '.githooks', dir: true,
+    why: '.githooks/ and hooks/ are physically separate directories (AGENTS.md) — a glob scoped to hooks/** never reaches these' },
+];
+
+// COLLECT — plan-driven, DI'd fs so this module stays pure (it imports nothing today and
+// must not start). `io.join`/`io.walkMd`/`io.walkSrc`/`io.read`/`io.rel` are the SAME
+// filesystem primitives the caller already owns; `io.commentLines`/`io.hashComments` are the
+// two comment-line filters. `io.walkMd(dir)` returns absolute `.md` paths recursively;
+// `io.walkSrc(dir, keep)` returns absolute paths whose basename passes `keep(name)`. Runs the
+// plan in ORDER, so a room's own surface count/order is exactly its plan's — no hidden
+// reordering.
+export function collectSurfaces(repo, plan, io) {
+  const surfaces = [];
+  for (const row of plan) {
+    if (row.dir) {
+      const abs = io.join(repo, row.root);
+      if (row.kind === 'md') {
+        for (const f of io.walkMd(abs)) surfaces.push({ label: io.rel(f), text: io.read(f) });
+      } else {
+        const keep = row.ext ? (n) => row.ext.test(n) : () => true;
+        for (const f of io.walkSrc(abs, keep)) {
+          const src = io.read(f);
+          let text;
+          if (row.kind === 'comments') text = src === null ? null : io.commentLines(src);
+          else if (row.kind === 'hash-comments') text = src === null ? null : io.hashComments(src);
+          else text = src; // 'raw' dir-walk: whole file, no comment-line filter
+          surfaces.push({ label: io.rel(f), text });
+        }
+      }
+    } else {
+      const s = { label: row.root, text: io.read(io.join(repo, row.root)) };
+      if (row.historyOnly) s.historyOnly = true;
+      surfaces.push(s);
+    }
+  }
+  return surfaces;
+}
+
 const GLOB = /[*?[\]{}|]/;
 const OUTSIDE = /^([~/]|[A-Za-z]:|[a-z][a-z0-9+.-]*:\/\/)/;
 // A `.` or `..` SEGMENT — never a dot-DIR like `.github`, which is a real name.
@@ -141,9 +243,13 @@ export function looksPathShaped(tok) {
 // every CI leg (measured 2026-09-10: this working copy 29 fed/6 gitignored vs a fresh
 // `git clone --depth 1` of the same commit, 21 fed/0 gitignored).
 //
-// `checkIgnore` is INJECTED (a batched `git check-ignore --stdin` call in production, a
-// Set-backed stub in tests) so this function stays zero-I/O and unit-testable with no git
-// repo required -- the same reason `resolve`/`hasEntry` are injected into checkPointers below.
+// SPLIT FROM CHECK-IGNORE (CWK-090 findings-back class, ported ahead of hitting it here):
+// this function does DISCOVERY ONLY — candidateRoots/toProbe/homesHeldOut — and calls no
+// git. The check-ignore CALL and its fail-open-or-populate logic live in
+// applyCheckIgnoreProbe below, DI'd with `runCheckIgnore`, so a WIRING mutation (not only a
+// classifier mutation) has something to redden. CoalMine's own room hit this defect class
+// THREE times before separating the two concerns this way; porting the separation rather
+// than re-discovering it here.
 //
 // NAMED BOUND (a) — FOREIGN-NAME COLLISION: a citation describing the SCANNED USER's own tree
 // (an install path like `.claude/coalhearth/…`) could in principle collide with OUR OWN
@@ -171,7 +277,7 @@ export function looksPathShaped(tok) {
 // a per-TOKEN one, and checkPointers judges every in-scope token against it regardless of
 // what that token's own shape looked like. Pinned as a two-plant regression test in
 // pointer-check.test.mjs.
-export function deriveIgnoredRoots({ surfaces = [], agentHomes = new Set(), checkIgnore }) {
+export function deriveCandidateRoots({ surfaces = [], agentHomes = new Set() }) {
   const candidateRoots = new Set();
   for (const s of surfaces) {
     if (typeof s.text !== 'string') continue;
@@ -186,8 +292,63 @@ export function deriveIgnoredRoots({ surfaces = [], agentHomes = new Set(), chec
     if (agentHomes.has(root)) { homesHeldOut++; continue; }
     toProbe.push(root);
   }
-  const ignored = typeof checkIgnore === 'function' ? checkIgnore(toProbe) : [];
-  return { candidateRoots, toProbe, homesHeldOut, ignoredRoots: new Set(ignored) };
+  return { candidateRoots, toProbe, homesHeldOut };
+}
+
+// CHECK-IGNORE CLASSIFIER (CWK-090 fix 1), pure -- takes the exact shape a
+// `spawnSync('git', ['check-ignore', '--stdin'], {...})` result carries and answers ONE
+// question: did this run actually tell us anything? Exit 0 and exit 1 both SUCCEED (1 =
+// "none of the fed paths are ignored", not an error); a spawn error or any OTHER status
+// (128 included -- a bad pattern, an unreadable `.gitignore`, a broken worktree) means the
+// run answered NOTHING, and the caller must not treat an empty stdout as "zero ignored".
+// THE PRE-FIX code here checked only `ci.error || typeof ci.stdout !== 'string'` -- any
+// non-0 status short of a spawn error fell through to "read stdout" (empty, since git wrote
+// nothing useful there on a real error), silently produced an empty `ignoredRoots`, and the
+// gate printed a git-derived "0 gitignored" count over a run that derived no facts at all.
+export function classifyCheckIgnoreResult(ci) {
+  if (ci.error) {
+    return { ok: false, message: `git check-ignore --stdin failed to spawn: ${ci.error.message}` };
+  }
+  if (ci.status !== 0 && ci.status !== 1) {
+    const stderrLine = typeof ci.stderr === 'string' ? ci.stderr.split('\n')[0].trim() : '';
+    return {
+      ok: false,
+      message: `git check-ignore --stdin exited ${ci.status}${stderrLine ? ` -- ${stderrLine}` : ''} -- cannot tell which cited roots are gitignored`,
+    };
+  }
+  return { ok: true, stdout: typeof ci.stdout === 'string' ? ci.stdout : '' };
+}
+
+// APPLY the check-ignore probe's verdict onto `ignoredRoots`, or FAIL loudly. Moved OUT of
+// verify.mjs so a unit test drives the EXACT code verify.mjs runs, with an injected
+// `runCheckIgnore` in place of a real `spawnSync` -- an inline `if (!verdict.ok) { fail(...) }
+// else {...}` sitting directly in verify.mjs is exactly the shape CoalMine's own room found
+// itself mutating to `if (false)` and watching the suite stay green, three times, because
+// nothing exercised the branch from outside. `runCheckIgnore(input)` takes the newline-joined
+// probe input and returns the same `{status, stdout, stderr, error}` shape a real `spawnSync`
+// result carries.
+//
+// PROBE SUFFIX (CWK-090 fix 2, main's ruling, one shape): feeds `root + PROBE_SUFFIX` (a path
+// UNDER the root) rather than a bare `root + '/'`. A bare-root feed can FALSELY match under a
+// CRLF `.gitignore` for a root that does not exist on disk (measured by CoalFace, reproduced
+// at scale by CoalMine as a cascade of false FAILs across every absent root in such a
+// fixture) -- `first + '/'`'s only correct justification (git cannot infer that an ABSENT
+// path is a directory, so a `dir/`-anchored pattern would not otherwise match the bare name)
+// still holds for a path UNDER the root, without the bare-root shape's false-match exposure.
+// Each returned line has the fixed suffix stripped to recover the root.
+export function applyCheckIgnoreProbe({ toProbe, PROBE_SUFFIX, ignoredRoots, fail, runCheckIgnore }) {
+  if (!toProbe.length) return;
+  const ci = runCheckIgnore(toProbe.map((n) => n + PROBE_SUFFIX).join('\n') + '\n');
+  const verdict = classifyCheckIgnoreResult(ci);
+  if (!verdict.ok) {
+    fail(verdict.message);
+    return;
+  }
+  for (const line of verdict.stdout.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    ignoredRoots.add(t.endsWith(PROBE_SUFFIX) ? t.slice(0, -PROBE_SUFFIX.length) : t.replace(/\/$/, ''));
+  }
 }
 
 // Candidate extraction. Exported so an adopter measures its OWN funnel with this instrument
