@@ -219,7 +219,7 @@ function main() {
   // no per-leaf aliases (neither exemplar's own `spec.flags` mechanism is used by any
   // leaf in this schema today).
   const flagMap = new Map();
-  for (const fs_ of FLAG_SPECS) flagMap.set(`--${fs_.flagKey}`, fs_);
+  for (const flagSpec of FLAG_SPECS) flagMap.set(`--${flagSpec.flagKey}`, flagSpec);
 
   for (let i = 0; i < args.length; i++) {
     const entry = flagMap.get(args[i]);
