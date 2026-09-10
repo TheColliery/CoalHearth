@@ -18,7 +18,7 @@ CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm in
 
 ```bash
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
-node scripts/verify.mjs         # gate: manifests, factory config vs schema, dist-sync, version pins
+node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, dist-sync, version pins
 node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list)
 ```
 

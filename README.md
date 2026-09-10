@@ -142,16 +142,18 @@ Everything is tunable in `coalhearth.json` (global `~/.claude/.coalhearth.json` 
 2. Other known agent dirs, fixed order: `.claude` → `.agents` → `.gemini` (first **found** wins).
 3. LEGACY: `<project>/.coalhearth.json` at the project root (the pre-2026-08-08 shape) — still read normally, no breakage for an existing config.
 
-Write target = wherever the config was found; nothing found anywhere = the running agent's own dir. CoalHearth has **no project-config writer** — `coalhearth.json`, global or project, is always hand-edited (by you or another tool), never written by CoalHearth itself, so there is no automatic move-on-write to expect.
+Write target = wherever the config was found; nothing found anywhere = the running agent's own dir. **`coalhearth.json` still has no HOOK writer** — the hooks that run every session never write config, only read it; that half of "always hand-edited" stays true. What changed: [`scripts/configure.mjs`](scripts/configure.mjs) is now a USER-INVOKED CLI that edits it for you — `node scripts/configure.mjs --language th` — so "never written by CoalHearth itself" no longer describes the whole picture. Nothing runs it on your behalf; you or your agent runs it explicitly, the same way you'd run any other script in this repo.
 
-The high-impact keys:
+The high-impact keys, and the exact CLI flag for each (`node scripts/configure.mjs <flag> <value>`; `--global` targets `~/.claude/.coalhearth.json` instead of the project config; `node scripts/configure.mjs --help` lists all seven):
 
-| Key | Default | What it does |
-|---|---|---|
-| `language` | `auto` | Lock the reply language: `auto` / `th` / `en` / `ja` / `zh` / `es`. **Top-level** — not inside a group, unlike every other row here (see below). |
-| `recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
-| `recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
-| `update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+| Key | Flag | Default | What it does |
+|---|---|---|---|
+| `language` | `--language` | `auto` | Lock the reply language: `auto` / `th` / `en` / `ja` / `zh` / `es`. **Top-level** — not inside a group, unlike every other row here (see below). |
+| `recovery.autoInjectPrompt` | `--recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
+| `recovery.stashUnsavedChanges` | `--recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
+| `update.updateMode` | `--update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+
+Every flag is the dotted key **verbatim** — `--journal.outputDirectory`, `--journal.atomicityRetries`, and `--update.updateCheckDays` follow the same rows below and aren't repeated here; a flat `--outputDirectory` would spell one key two ways, so there is no shorthand form.
 
 `language` sits at the **top level** of `coalhearth.json`, not nested under a group — `{"language": "auto"}`, never `{"recovery": {"language": "auto"}}`. `auto` (the factory default) follows the conversation's own language with an English fallback, no extra config needed. A lock (`th`/`en`/`ja`/`zh`/`es`) translates **prose only** — commands, paths, identifiers, config keys and severity labels stay verbatim regardless of the lock. What actually honors it: the SessionStart hook's own emissions (the recovery block, the journal-dir warning, the self-update nudge) append one directive naming the locked language when it is set to anything other than `auto`; nothing else in this room reads the key today.
 
