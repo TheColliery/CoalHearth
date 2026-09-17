@@ -119,7 +119,17 @@ export function renderInline(raw) {
     if (p.code) return p.t;
     let t = p.t;
     t = t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');                    // link / image -> its text
-    t = t.replace(/<\/?[A-Za-z][^>]*>/g, '');                            // raw HTML tags
+    // CodeQL #18 js/incomplete-multi-character-sanitization: a SINGLE pass leaves a tag
+    // behind on a nested/overlapping shape (an OUTER `<` and an early INNER tag consumed
+    // together by one match exposes a fresh, real tag behind them -- e.g.
+    // `<<script>script>x</<script>/script>` -> `<script>x<//script>` after one replace,
+    // literally containing "<script", the exact alert text). Repeat until the string stops
+    // changing -- CodeQL's own query-help fix for this rule -- so no `<[A-Za-z]...>` shape
+    // can survive removal by construction, however many times it must nest. Bounded: each
+    // pass either removes at least one tag or the loop ends (never removes 0 chars and
+    // re-loops), so this cannot run away on real input.
+    let prev;
+    do { prev = t; t = t.replace(/<\/?[A-Za-z][^>]*>/g, ''); } while (t !== prev);
     // r34 FIXBACK2 LOW-1: an ESCAPED `_`/`*` must never re-enter the emphasis pass as a live
     // delimiter -- GitHub keeps `\_b\_` as `_b_` (the escaped underscores survive as literal
     // characters), but the old order resolved `\_` -> `_` BEFORE the emphasis pass, with

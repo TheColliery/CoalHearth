@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { githubSlug, extractHeadings, headingAnchors, extractCitations, checkFile, checkFiles, Anchorer, buildTrackedIndex, classifyTrackedIndexResult } from './link-check.mjs';
+import { githubSlug, renderInline, extractHeadings, headingAnchors, extractCitations, checkFile, checkFiles, Anchorer, buildTrackedIndex, classifyTrackedIndexResult } from './link-check.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const engine = path.join(repo, 'scripts', 'lib', 'link-check.mjs');
@@ -45,6 +45,19 @@ test('githubSlug: r34 FIXBACK2 LOW-1 -- an escaped emphasis delimiter survives t
   // own keep-set and is dropped regardless of whether emphasis-stripping ever touched it.
   // Kept here so a future change to the star sentinel is proven not to regress this row.
   assert.equal(githubSlug('a \\*b\\* c'), 'a-b-c');
+});
+
+test('renderInline: r34-CODEQL #18 (js/incomplete-multi-character-sanitization) -- a nested HTML tag shape leaves no <letter tag behind after repeated removal passes', () => {
+  // CodeQL alert #18, scripts/lib/link-check.mjs:122, commit d4d5041: a SINGLE regex pass on
+  // the tag-strip can leave a live tag behind when one tag's own bracket range nests inside
+  // another's. Empirically verified BEFORE trusting the order's own suggested example --
+  // `<scr<script>ipt>` does NOT reproduce it (the greedy [^>]* consumes straight through to
+  // the first real `>` and leaves only stray text, "ipt>", no <letter shape survives at
+  // all). The shape that DOES survive a single pass: the OUTER `<` and an early INNER tag
+  // get consumed together by one match, exposing a fresh, real `<script>` tag behind them --
+  // single-pass output for this exact string is literally `<script>alert(1)<//script>`.
+  const evil = '<<script>script>alert(1)</<script>/script>';
+  assert.doesNotMatch(renderInline(evil), /<[A-Za-z]/, 'no live <letter tag shape may survive renderInline, however many times it must loop');
 });
 
 test('headingAnchors: de-duplicates repeated headings the way GitHub does (-1, -2, ...)', () => {
