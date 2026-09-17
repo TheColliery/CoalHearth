@@ -68,8 +68,25 @@ import { execFileSync } from 'node:child_process';
 
 const EXTERNAL_RE = /^([a-z][a-z0-9+.-]*:|\/\/)/i; // a URI scheme (http:, mailto:, tel:, ...) or protocol-relative `//`
 const LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
-const FENCE_RE = /^\s*```/;
 const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+
+// Fence detection, per CommonMark: a fenced code block opens with 3+ BACKTICK or 3+ TILDE
+// characters and is closed ONLY by a fence of the SAME character, at least as long as the
+// opener. r34 FIXBACK2 LOW-2: the old `FENCE_RE = /^\s*```/` was backtick-only (a `~~~`
+// fence was never recognised as a fence at all) and length-blind (a blind boolean toggle, so
+// ANY 3+-backtick line closed a fence regardless of length or character) -- a four-backtick
+// fence whose BODY held a bare three-backtick line toggled closed early, inverting fence
+// state for the rest of the document; a tilde fence was invisible, so headings inside one
+// were wrongly extracted as real headings.
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})/;
+function fenceOpen(line) {
+  const m = FENCE_OPEN_RE.exec(line);
+  return m ? { ch: m[1][0], len: m[1].length } : null;
+}
+function fenceCloses(line, fence) {
+  const m = FENCE_OPEN_RE.exec(line);
+  return !!m && m[1][0] === fence.ch && m[1].length >= fence.len;
+}
 
 const CODE_SPAN_RE = /(`+)([\s\S]*?[^`])\1(?!`)/g;
 const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
@@ -103,12 +120,24 @@ export function renderInline(raw) {
     let t = p.t;
     t = t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');                    // link / image -> its text
     t = t.replace(/<\/?[A-Za-z][^>]*>/g, '');                            // raw HTML tags
-    t = t.replace(/\\([!-\/:-@[-`{-~])/g, (x, ch) => ch);               // backslash escape -> the literal char
+    // r34 FIXBACK2 LOW-1: an ESCAPED `_`/`*` must never re-enter the emphasis pass as a live
+    // delimiter -- GitHub keeps `\_b\_` as `_b_` (the escaped underscores survive as literal
+    // characters), but the old order resolved `\_` -> `_` BEFORE the emphasis pass, with
+    // nothing marking that underscore as escaped, so it satisfied the emphasis regex and got
+    // stripped along with its own escaping. Swap an escaped `_`/`*` for a SENTINEL first --
+    // written as a JS escape SEQUENCE in source (four characters, backslash-x-0-0), never a
+    // raw byte in the FILE (this room's own `2c53643` lesson: a raw NUL in the file is
+    // invisible to a normal Read) -- run the emphasis pass, then restore the literal
+    // character. The sentinel is neither `_` nor `*`, so the emphasis regex cannot see it.
+    t = t.replace(/\\_/g, '\x00');
+    t = t.replace(/\\\*/g, '\x01');
+    t = t.replace(/\\([!-\/:-@[-`{-~])/g, (x, ch) => ch);               // remaining backslash escapes -> the literal char
     // emphasis delimiters: a run that OPENS (not preceded by a letter/number/underscore) and a
     // matching run that CLOSES (not followed by one) is stripped; an INTRAWORD `_` (GFM rule)
     // stays literal because it never satisfies both boundary conditions at once.
     t = t.replace(/(^|[^\p{L}\p{N}_])(_+)(?=\S)([\s\S]*?\S)\2(?![\p{L}\p{N}_])/gu, '$1$3');
     t = t.replace(/(^|[^*])(\*+)(?=\S)([\s\S]*?\S)\2/g, '$1$3');
+    t = t.replace(/\x00/g, '_').replace(/\x01/g, '*');
     return decodeEntities(t);
   }).join('');
 }
@@ -153,10 +182,14 @@ export class Anchorer {
 export function extractHeadings(text) {
   const lines = String(text).split(/\r?\n/);
   const headings = [];
-  let inFence = false;
+  let fence = null;
   for (let i = 0; i < lines.length; i++) {
-    if (FENCE_RE.test(lines[i])) { inFence = !inFence; continue; }
-    if (inFence) continue;
+    if (fence) {
+      if (fenceCloses(lines[i], fence)) fence = null;
+      continue;
+    }
+    const open = fenceOpen(lines[i]);
+    if (open) { fence = open; continue; }
     const m = HEADING_RE.exec(lines[i]);
     if (m) headings.push({ text: m[2], line: i + 1 });
   }
@@ -209,10 +242,14 @@ function parseLinkTarget(raw) {
 export function extractCitations(text) {
   const lines = String(text).split(/\r?\n/);
   const out = [];
-  let inFence = false;
+  let fence = null;
   for (let i = 0; i < lines.length; i++) {
-    if (FENCE_RE.test(lines[i])) { inFence = !inFence; continue; }
-    if (inFence) continue;
+    if (fence) {
+      if (fenceCloses(lines[i], fence)) fence = null;
+      continue;
+    }
+    const open = fenceOpen(lines[i]);
+    if (open) { fence = open; continue; }
     LINK_RE.lastIndex = 0;
     let m;
     while ((m = LINK_RE.exec(lines[i]))) {
@@ -229,16 +266,77 @@ function decodeSafe(s) {
 // r34 MEDIUM 1 -- the SAME shape `scripts/verify.mjs`'s own pointer-drift block builds for
 // `pointer-check.mjs`'s `resolve()` callback: `git ls-files` -> a tracked-file Set, plus a
 // derived tracked-DIRECTORY Set (every prefix of every tracked path), so a citation pointing
-// at a directory (e.g. `platform-configs/hooks/`) resolves too. Returns `null` when git is
-// unavailable or this is not a git repository -- degrades to exists-only checking rather
-// than crashing (no-external-assumption); the CLI entry is the only caller that needs this,
-// so callers testing pure link/anchor logic never have to supply one.
+// at a directory (e.g. `platform-configs/hooks/`) resolves too. The CLI entry is the only
+// caller that needs this, so callers testing pure link/anchor logic never have to supply one.
+//
+// r34 FIXBACK2 LOW-3 -- `-z` (NUL-separated, no C-quoting): plain `git ls-files` quotes any
+// non-ASCII path under the (default-on) `core.quotepath`, so a tracked Thai-named file came
+// back as the literal 8-character string `"\340\271..."`, never matching its own real path --
+// a false "UNTRACKED" FAIL on a file that IS tracked. `-z` disables quoting and NUL-separates
+// entries instead, so a Thai/space/any-byte filename round-trips exactly.
+//
+// r34 FIXBACK2 MEDIUM-B -- a git failure must never read as a clean pass. TWO shapes, two
+// behaviours, the SHAPE reused from `pointer-check.mjs`'s own `classifyCheckIgnoreResult`
+// (CWK-090 fix 1) -- never its exact POLICY, because that gate always assumes a git repo and
+// this one does not (no-external-assumption: git is an OPTIONAL enhancement here, the
+// exists-only check underneath it works without git at all). (1) a SPAWN failure (`git` the
+// BINARY is not on PATH, `e.code === 'ENOENT'`) OR git ran and answered "not a git repository
+// (or any of the parent directories)" (its own stable wording for "I searched upward and
+// found none") -- genuinely no git tracking info exists to consult -- degrades to exists-only,
+// but the degrade is DISCLOSED on stdout EVERY run it fires, never silent. (2) git RAN and
+// the command failed for any OTHER reason (a broken `GIT_DIR` naming its own bad path,
+// `safe.directory` dubious ownership, anything else) -- this tool's only realistic deployment
+// is inside a real checkout (the CI workflow, a contributor's own clone), so a failure here
+// signals something BROKEN, not merely "no git": FAIL LOUD, naming the exit status and git's
+// own first stderr line. The split is NOT "contains the phrase not a git repository" -- a
+// broken `GIT_DIR` says that too, just without the parenthetical, and text-matching the
+// shorter phrase would have wrongly read the GIT_DIR case as case 1 (empirically confirmed,
+// see the return). Before this fix, ANY git failure (`GIT_DIR=/nonexistent`, reproduced live)
+// silently returned `null` and the tracked-check simply never ran, with nothing on stdout or
+// in the exit code to show half the gate was skipped.
+export function classifyTrackedIndexResult(r) {
+  if (r.error) {
+    return { ok: false, degrade: true, message: `git is not available here: ${r.error.message}` };
+  }
+  if (r.status === 0) return { ok: true, stdout: typeof r.stdout === 'string' ? r.stdout : '' };
+  const stderrLine = typeof r.stderr === 'string' ? r.stderr.split('\n')[0].trim() : '';
+  // "not a git repository (or any of the parent directories): .git" is git's own, STABLE
+  // wording for "I searched upward from cwd and found no .git at all" -- the ordinary,
+  // GIT_DIR-unset no-repo case, which stays case 1 (degrade). ANY other non-zero exit reads
+  // as case 2: a BROKEN GIT_DIR names its OWN bad path instead ("not a git repository:
+  // '<path>'", with no "(or any of the parent directories)" clause -- empirically confirmed,
+  // see the return), and safe.directory's dubious-ownership refusal is a different message
+  // again. Both mean git IS answering FOR a specific repo context and something about that
+  // context is broken, not merely absent -- text-matching the bare phrase "not a git
+  // repository" would have wrongly classified the broken-GIT_DIR case as case 1 too, since
+  // that phrase appears in BOTH messages; only the parenthetical distinguishes them.
+  const noRepoFound = /not a git repository \(or any of the parent directories\)/.test(stderrLine);
+  return {
+    ok: false,
+    degrade: noRepoFound,
+    message: noRepoFound
+      ? 'this directory is not a git repository'
+      : `git ls-files exited ${r.status}${stderrLine ? ` -- ${stderrLine}` : ''}`,
+  };
+}
+
 export function buildTrackedIndex(repoRoot) {
-  let out;
+  let r;
   try {
-    out = execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch { return null; }
-  const tracked = new Set(out.trim().split('\n').filter(Boolean));
+    const stdout = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    r = { status: 0, stdout };
+  } catch (e) {
+    r = e.code === 'ENOENT' ? { error: e } : { status: e.status, stderr: e.stderr };
+  }
+  const verdict = classifyTrackedIndexResult(r);
+  if (!verdict.ok) {
+    if (verdict.degrade) {
+      console.log(`link-check: ${verdict.message} -- tracked-check degraded to exists-only`);
+      return null;
+    }
+    return { fatal: verdict.message };
+  }
+  const tracked = new Set(verdict.stdout.split('\0').filter(Boolean));
   const trackedDirs = new Set();
   for (const f of tracked) { const p = f.split('/'); for (let i = 1; i < p.length; i++) trackedDirs.add(p.slice(0, i).join('/')); }
   return { tracked, trackedDirs };
@@ -342,6 +440,11 @@ function main() {
   }
   const repoRoot = process.cwd();
   const trackedIndex = buildTrackedIndex(repoRoot); // r34 MEDIUM 1; null degrades to exists-only
+  if (trackedIndex && trackedIndex.fatal) { // r34 FIXBACK2 MEDIUM-B: a broken git call is never a clean pass
+    console.error(`link-check: ${trackedIndex.fatal}`);
+    process.exitCode = 1;
+    return;
+  }
   const { findings, filesChecked } = checkFiles(files, repoRoot, trackedIndex);
   for (const f of findings) console.log(`${f.file}:${f.line}: ${f.kind} - ${f.target} - ${f.message}`);
   console.log(`${findings.length} finding(s) across ${filesChecked} file(s)`);

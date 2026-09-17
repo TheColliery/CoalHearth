@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { githubSlug, extractHeadings, headingAnchors, extractCitations, checkFile, checkFiles, Anchorer, buildTrackedIndex } from './link-check.mjs';
+import { githubSlug, extractHeadings, headingAnchors, extractCitations, checkFile, checkFiles, Anchorer, buildTrackedIndex, classifyTrackedIndexResult } from './link-check.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const engine = path.join(repo, 'scripts', 'lib', 'link-check.mjs');
@@ -35,6 +35,18 @@ test('githubSlug: leaves underscores inside words alone (no emphasis-stripping h
   assert.equal(githubSlug('a_b_c underscored_word'), 'a_b_c-underscored_word');
 });
 
+test('githubSlug: r34 FIXBACK2 LOW-1 -- an escaped emphasis delimiter survives the emphasis pass, GitHub keeps it literal', () => {
+  // r34-INSPECT evidence, GitHub's own POST /markdown render: pre-fix, `\_` was resolved to
+  // a bare `_` BEFORE the emphasis pass ran, so the escaping itself satisfied the very
+  // regex it was meant to protect against, and both underscores were stripped.
+  assert.equal(githubSlug('a \\_b\\_ c'), 'a-_b_-c');
+  assert.equal(githubSlug('pre \\_mid_ post'), 'pre-_mid_-post');
+  // the escaped-star row is unaffected by this fix either way -- `*` is outside oracleSlug's
+  // own keep-set and is dropped regardless of whether emphasis-stripping ever touched it.
+  // Kept here so a future change to the star sentinel is proven not to regress this row.
+  assert.equal(githubSlug('a \\*b\\* c'), 'a-b-c');
+});
+
 test('headingAnchors: de-duplicates repeated headings the way GitHub does (-1, -2, ...)', () => {
   const anchors = headingAnchors('# Setup\n\n## Setup\n\n### Setup\n');
   assert.deepEqual([...anchors], ['setup', 'setup-1', 'setup-2']);
@@ -43,6 +55,20 @@ test('headingAnchors: de-duplicates repeated headings the way GitHub does (-1, -
 test('extractHeadings: a `#` inside a fenced code block is not a heading', () => {
   const md = '```\n# not a heading\n```\n\n# real heading\n';
   assert.deepEqual(extractHeadings(md), [{ text: 'real heading', line: 5 }]);
+});
+
+test('extractHeadings: r34 FIXBACK2 LOW-2 -- a TILDE fence hides headings too, not backtick-only', () => {
+  const md = '# Before\n~~~\n## inside tilde fence\n~~~\n# After\n';
+  assert.deepEqual(extractHeadings(md).map((h) => h.text), ['Before', 'After']);
+});
+
+test('extractHeadings: r34 FIXBACK2 LOW-2 -- a fence closes ONLY on the same character, at least as long -- not any 3+ backtick line inside it', () => {
+  // r34-INSPECT evidence, GitHub-rendered: a stray 3-backtick line inside a 4-backtick fence
+  // is content, not a close. Pre-fix, ANY 3+-backtick line toggled fence state blindly, so
+  // the stray line closed early (inventing a heading that should stay hidden) and the REAL
+  // closing fence then re-opened fence state (missing the heading that should follow it).
+  const md = '# Before\n````\n```\n## inside four-backtick fence\n````\n# after-four-backtick-fence\n';
+  assert.deepEqual(extractHeadings(md).map((h) => h.text), ['Before', 'after-four-backtick-fence']);
 });
 
 test('extractCitations: a link inside a fenced code block is an example, not a citation', () => {
@@ -148,6 +174,104 @@ test('checkFile: with no trackedIndex supplied, tracked-checking is skipped (exi
   assert.deepEqual(findings, []);
 });
 
+test('buildTrackedIndex: r34 FIXBACK2 LOW-3 -- a Thai-named tracked file resolves via -z, never a false UNTRACKED from core.quotepath C-quoting', (t) => {
+  const tmp = mkTmp(t);
+  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'ไทย.md'), '# Thai\n');
+  fs.writeFileSync(path.join(tmp, 'plain.md'), '# Plain\n');
+  spawnSync('git', ['add', 'ไทย.md', 'plain.md'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'source.md'), '[a](./ไทย.md)\n[b](./plain.md)\n');
+  spawnSync('git', ['add', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+
+  const trackedIndex = buildTrackedIndex(tmp);
+  assert.ok(trackedIndex && !trackedIndex.fatal, 'buildTrackedIndex must succeed inside a real git repo');
+  const findings = checkFile(path.join(tmp, 'source.md'), tmp, trackedIndex);
+  assert.deepEqual(findings, [], `expected both tracked targets to resolve clean, got ${JSON.stringify(findings)}`);
+});
+
+// ---------------------------------------------------------- r34 FIXBACK2 MEDIUM-B: classifyTrackedIndexResult
+// Same testing SHAPE as pointer-check.test.mjs's own classifyCheckIgnoreResult tests (CWK-090
+// fix 1) -- synthetic {status, stdout, stderr, error} objects, no real spawn.
+
+test('classifyTrackedIndexResult: exit 0 is ok', () => {
+  assert.deepEqual(
+    classifyTrackedIndexResult({ status: 0, stdout: 'a.md\0b.md\0' }),
+    { ok: true, stdout: 'a.md\0b.md\0' },
+  );
+});
+
+test('classifyTrackedIndexResult: a spawn error (git not on PATH) DEGRADES, never fails loud -- case 1', () => {
+  const v = classifyTrackedIndexResult({ error: new Error('spawn git ENOENT') });
+  assert.equal(v.ok, false);
+  assert.equal(v.degrade, true);
+  assert.match(v.message, /git is not available/);
+});
+
+test('classifyTrackedIndexResult: git ran and found no repository at all (the parenthetical wording) DEGRADES -- case 1', () => {
+  const v = classifyTrackedIndexResult({ status: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n' });
+  assert.equal(v.ok, false);
+  assert.equal(v.degrade, true);
+  assert.match(v.message, /not a git repository/);
+});
+
+test('classifyTrackedIndexResult: git ran and the command failed for any OTHER reason -- FAIL LOUD, does NOT degrade -- case 2', () => {
+  // The split is NOT "does stderr contain the phrase not a git repository" -- empirically
+  // confirmed (see the return): a broken GIT_DIR ALSO produces that phrase, just WITHOUT the
+  // "(or any of the parent directories)" parenthetical (it names its own explicit bad path
+  // instead). Text-matching the shorter phrase would have wrongly classified the r33
+  // reproduction as case 1 and kept the exact silent degrade this fix removes.
+  const v = classifyTrackedIndexResult({ status: 128, stdout: '', stderr: "fatal: not a git repository: '/nonexistent-r34'\nmore\n" });
+  assert.equal(v.ok, false);
+  assert.equal(v.degrade, false);
+  assert.match(v.message, /exited 128/);
+  assert.match(v.message, /fatal: not a git repository/);
+});
+
+// -- MEDIUM-B, end to end: the real CLI, spawned, wiring proven never neutered ----------
+
+test('CLI: r34 FIXBACK2 E2 -- main() actually wires trackedIndex into checkFiles; a target on disk but UNTRACKED is reported, never silently passed', (t) => {
+  const tmp = mkTmp(t);
+  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'tracked.md'), '# Tracked\n');
+  fs.writeFileSync(path.join(tmp, 'untracked.md'), '# Untracked\n');
+  spawnSync('git', ['add', 'tracked.md'], { cwd: tmp, encoding: 'utf8' }); // NOT untracked.md
+  fs.writeFileSync(path.join(tmp, 'source.md'), '[bad](./untracked.md)\n');
+  spawnSync('git', ['add', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+
+  const r = spawnSync(process.execPath, [engine, 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /UNTRACKED/);
+});
+
+test('CLI: r34 FIXBACK2 MEDIUM-B case 1 -- no git repository at all degrades to exists-only, DISCLOSED on stdout every run', (t) => {
+  const tmp = mkTmp(t); // deliberately no `git init` -- a plain, non-git directory
+  fs.writeFileSync(path.join(tmp, 'target.md'), '# Target\n');
+  fs.writeFileSync(path.join(tmp, 'source.md'), '[ok](./target.md)\n');
+
+  const r = spawnSync(process.execPath, [engine, 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  assert.equal(r.status, 0, `expected exit 0 (exists-only still passes), got ${r.status}:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /tracked-check degraded to exists-only/, 'the degrade must be disclosed on stdout, not silent');
+});
+
+test('CLI: r34 FIXBACK2 MEDIUM-B case 2 -- git present but the command fails (broken GIT_DIR) FAILS LOUD, never a clean pass', (t) => {
+  const tmp = mkTmp(t);
+  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'target.md'), '# Target\n');
+  fs.writeFileSync(path.join(tmp, 'source.md'), '[ok](./target.md)\n');
+  spawnSync('git', ['add', 'target.md', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+
+  // r33's own reproduction (r34-inspect-return.md): GIT_DIR pointed at a path that does not
+  // exist -- git IS on PATH and invocable, but the command itself fails. Pre-fix: silent
+  // `null` degrade, "0 finding(s)", exit 0, no notice of any kind.
+  const r = spawnSync(process.execPath, [engine, 'source.md'], {
+    cwd: tmp, encoding: 'utf8',
+    env: { ...process.env, GIT_DIR: path.join(os.tmpdir(), 'coalhearth-r34-nonexistent-gitdir') },
+  });
+  assert.equal(r.status, 1, `expected exit 1 (FAIL LOUD), got ${r.status}:\n${r.stdout}${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /^0 finding\(s\)/m, 'must never read as a clean pass');
+  assert.match(r.stderr, /git ls-files exited/);
+});
+
 // -- the real CLI, spawned, against the two named fixtures -----------------------------
 
 test('CLI: the planted-defect fixture exits 1 and reports both the broken link and the broken anchor', () => {
@@ -172,24 +296,57 @@ test('CLI: no files given exits 1 without a findings summary line', () => {
 
 // -- checkFiles: filesChecked stays accurate even when every file is clean -------------
 
-// -- r34 MEDIUM 2: the WORKFLOW FILE's own shape, read as TEXT -----------------------------
+// -- r34 MEDIUM 2 / r34 FIXBACK2 MEDIUM-A: the WORKFLOW FILE's own shape, read as TEXT ---
 // The first test in this flock to read a SHIPPED WORKFLOW FILE and assert on its shape --
 // main's own ruling (r34, CW-017 MEDIUM-2): the workflow is shipped bytes and this test
 // asserts a shipped CONTRACT, the same class every other test in this file already is. No
-// YAML library (Phoenix #2, zero-dep) -- plain string/regex matching on the file's own text
-// pins three claims the workflow's own comments already make in prose: (1) the step actually
-// INVOKES the engine, (2) it carries NO `continue-on-error` (a report-only gate is the
-// cry-wolf shape this room exists to ban), (3) the empty-file-list guard exits 1 BEFORE the
-// engine ever runs. A fourth guards r34 MEDIUM 3's own widening from silently regressing: NO
-// `paths:` filter anywhere in the trigger.
-test('workflow: link-check.yml invokes the engine, is never continue-on-error, keeps its empty-list guard, and has no paths: filter', () => {
+// YAML library (Phoenix #2, zero-dep) -- plain string/regex matching on the file's own text.
+//
+// r34 FIXBACK2 MEDIUM-A: the r34 version of this test asserted TEXT PRESENCE only --
+// `assert.match(yml, /node .../)`  passes whenever the call text exists ANYWHERE in the
+// step, whatever follows it -- so INSPECT's own four green mutations (`$files || true`, an
+// appended `exit 0`, a job-level `if: false`, triggers narrowed to `workflow_dispatch`) all
+// left the suite green. This version asserts the SHAPE that makes the engine's own exit code
+// decide the job, not a longer list of forbidden strings: the engine call is the step's LAST
+// command with NOTHING appended (`runStepLines`, below, walks the block-scalar's own 10-space
+// indentation and compares the final trimmed line exactly) -- a stricter structural check
+// that catches the next neutralising shape by construction, not only the ones named here.
+function runStepLines(yml) {
+  const lines = yml.split('\n');
+  const idx = lines.findIndex((l) => /\brun:\s*\|\s*$/.test(l));
+  if (idx === -1) return [];
+  const out = [];
+  for (let i = idx + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.trim() === '') { out.push(l); continue; }
+    if (!/^ {10}/.test(l)) break; // dedent -- the block scalar ended
+    out.push(l);
+  }
+  return out;
+}
+test('workflow: link-check.yml -- the engine call is the step\'s LAST command, no continue-on-error, no job if:, both push and pull_request wired, the empty-list guard present, no paths: filter', () => {
   const yml = fs.readFileSync(workflowPath, 'utf8');
-  assert.match(yml, /node scripts\/lib\/link-check\.mjs/, 'the step must invoke the real engine');
+  const stepLines = runStepLines(yml).map((l) => l.trim()).filter(Boolean);
+  assert.ok(stepLines.length > 0, 'the run: | block must be found and non-empty');
+  assert.equal(
+    stepLines[stepLines.length - 1],
+    'node scripts/lib/link-check.mjs $files',
+    'the engine call must be the step\'s LAST command, with nothing appended (|| true, a trailing exit, ...)',
+  );
   // r34-RED-PROOF found this while mutating: `- continue-on-error: true` (the key as the
   // FIRST field of the step, dash-prefixed -- a completely ordinary YAML step shape) evaded
   // a bare `^\s*continue-on-error` anchor, because the anchor allowed only whitespace before
   // the key and a real step here opens with `- `. Match an optional leading `- ` too.
   assert.doesNotMatch(yml, /^\s*-?\s*continue-on-error\s*:/m, 'this gate is never report-only (a live key, not a comment mentioning the phrase)');
+  // r34 FIXBACK2 MEDIUM-A: no `if:` at job (or step) level anywhere in this file -- a silent
+  // `if: false` skips the whole job while every other check still shows green. The shell's
+  // OWN `if [ -z "$files" ]; then` is unaffected: `if\s*:` requires a colon right after `if`,
+  // and the shell line has `if [`, never `if:`.
+  assert.doesNotMatch(yml, /^\s*if\s*:/m, 'no if: condition anywhere -- a job/step condition could skip the check silently');
+  // r34 FIXBACK2 MEDIUM-A: both triggers wired -- narrowing to workflow_dispatch alone (or
+  // dropping either) stops the gate firing on the events it exists to gate.
+  assert.match(yml, /^\s*push\s*:/m, 'the push: trigger must be present');
+  assert.match(yml, /^\s*pull_request\s*:/m, 'the pull_request: trigger must be present');
   assert.match(yml, /if \[ -z "\$files" \]/, 'the empty-file-list guard must be present');
   assert.match(yml, /exit 1/, 'the guard must actually exit non-zero');
   // r34-RED-PROOF found a second gap the same way: `\n\s*paths:\s*\n` only catches BLOCK-style

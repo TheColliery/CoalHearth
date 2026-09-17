@@ -259,7 +259,13 @@ try {
   try {
     // stderr is SWALLOWED, not inherited: without this, `fatal: not a git repository` prints
     // above the gate's own line and reads as a crash rather than a degrade (INSPECT LOW-2).
-    trackedList = execFileSync('git', ['ls-files'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').filter(Boolean);
+    // r34-FIXBACK2 LOW-3, class-first (scripts/lib/link-check.mjs carried the same defect and
+    // fixed it first, per the reviewer's own instruction to fix this room's twin the same
+    // way): `-z` (NUL-separated, no C-quoting) -- plain `git ls-files` C-quotes a non-ASCII
+    // path under the default-on `core.quotepath`, so a Thai-named tracked file would round-
+    // trip here as the literal 8-character octal-escaped string, never matching its own real
+    // path.
+    trackedList = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean);
   } catch (e) {
     // NAME THE CAUSE THE PROBE ACTUALLY DETERMINED (INSPECT LOW-1). The first wording said
     // "git is unavailable" for both cases; measured in this room's own fixture -- a plain
