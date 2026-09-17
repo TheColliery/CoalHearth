@@ -1,14 +1,17 @@
 name: link-check
 
 on:
+  # NO paths: filter, r34 MEDIUM 3 (main's ruling -- a room decision, not a canon change): 29
+  # of this room's 34 in-scope citations point at a NON-markdown target (bin/*.js, lib/*.js,
+  # platform-configs/*.json, scripts/*.mjs, LICENSE) -- a `paths: '**.md'` filter cannot fire
+  # on the change that breaks most of this gate's own coverage (renaming one of those files
+  # breaks a link and changes no .md). Enumerating the target globs instead would be a roster
+  # that rots the day a doc cites a new directory. The job runs in seconds and is not a
+  # required check, so running it on every push/PR costs nothing a filter would have saved.
   push:
     branches: [main]
-    paths:
-      - '**.md'
   pull_request:
     branches: [main]
-    paths:
-      - '**.md'
 
 permissions:
   contents: read
