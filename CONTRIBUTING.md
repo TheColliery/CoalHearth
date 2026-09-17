@@ -42,6 +42,15 @@ the six non-shipped root docs, because a **shipped** markdown file (`commands/*.
 `plugin/` and must still pass the dist-sync gate. Widening either one to match the other silently
 drops coverage.
 
+A third workflow, `link-check`, is **NOT a required check** — it isn't in the branch ruleset —
+but it still runs on every push and pull request, docs-only or not, and it does real work: it
+walks every tracked `.md` file and fails on a broken internal link or a heading anchor that
+doesn't resolve. There's no `paths:` filter on it (most of this room's citations point at
+non-markdown targets, so a filter scoped to `.md` would miss the change that breaks them), so a
+docs-only push doesn't get a free pass from `link-check` the way it does from CI and CodeQL — a
+broken link in the very doc you're editing goes red on this check, even though it can't block a
+merge on its own.
+
 ---
 
 ## 🖥️ Supported Platforms
