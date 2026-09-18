@@ -1,0 +1,195 @@
+<div align="center">
+
+# 🔥 CoalHearth
+
+> *A hearth keeps the home warm and banks the embers so the next day's fire lights fast.* This one banks a Claude Code session's state so an interrupted session resumes from a handoff instead of a manual rebuild.
+
+**A session warm-resume engine.** A hook journals your session's state every step; if the next session finds the prior one was interrupted, it injects a markdown recovery block so you continue where you left off.
+
+![version](https://img.shields.io/github/v/tag/TheColliery/CoalHearth?label=version&color=blue)
+![license](https://img.shields.io/badge/license-Apache_2.0-blue)
+![status](https://img.shields.io/badge/status-stable-brightgreen)
+
+![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
+![Antigravity: works with](https://img.shields.io/badge/Antigravity-works_with-blue)
+![Gemini CLI: works with](https://img.shields.io/badge/Gemini_CLI-works_with-blue)
+![Copilot CLI: works with](https://img.shields.io/badge/Copilot_CLI-works_with-blue)
+![Devin CLI: works with](https://img.shields.io/badge/Devin_CLI-works_with-blue)
+![Kiro: works with](https://img.shields.io/badge/Kiro-works_with-blue)
+![Augment: works with](https://img.shields.io/badge/Augment-works_with-blue)
+
+[Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
+
+**Part of [TheColliery](https://github.com/TheColliery)** — siblings: **[CoalMine](https://github.com/HetCreep/CoalMine)** (quality canaries) · **[CoalTipple](https://github.com/TheColliery/CoalTipple)** (model/effort routing) · **[CoalBoard](https://github.com/TheColliery/CoalBoard)** (consensus board) · **[CoalFace](https://github.com/TheColliery/CoalFace)** (fan-out discipline) · **[CoalWash](https://github.com/TheColliery/CoalWash)** (memory defrag) · **[CoalLedger](https://github.com/TheColliery/CoalLedger)** (docs health).
+
+</div>
+
+---
+
+## 🔥 What it is
+
+A session limit-hit or a crash loses in-flight work — the plan, the checklist, the list of files you were mid-edit on. CoalHearth **reduces that loss**:
+
+- **The recovery core.** A `PostToolUse` hook builds a best-effort snapshot of the session (goal + checklist from `task.md`, constraints from `AGENTS.md`, modified files accumulated from the file-editing tool calls the hook observes — no `git` spawn, no child processes) and journals it **atomically** every step to `session_handoff.json`.
+- **Warm-resume on boot.** On the next session's `SessionStart`, if the prior session's journal is still marked `in_progress`, CoalHearth injects a markdown **recovery block** — the goal, the checklist, the files it was touching, the planned next steps — so you resume from context instead of reconstructing it by hand.
+- **Subagent-death visibility.** A spawned subagent's tool call resolving (success or failure) is now captured with a status + a short outcome snippet from its own report — the "7 of 11 checks done" a revive-or-defer decision actually needs, not just a name. On Claude Code, an unsurfaced resolution also nudges on your very next prompt — seconds to minutes away, not a session restart.
+
+> [!IMPORTANT]
+> The recovery block never asks you to blind-trust it — it always tells the agent to **verify against `git status` / `git diff`** first, because the journal may be stale or half-applied.
+
+That recovery core is the value.
+
+## 🛡️ What it does (and does NOT) guarantee
+
+CoalHearth **reduces the damage** of a session interruption — it does **not** prevent one, and it guarantees nothing:
+
+- The recovery journal is a **best-effort snapshot**, not a guarantee it's still accurate — code may have moved since the last save, which is exactly why the recovery block tells the agent to verify against git.
+- Work done by **fanned-out workers** that die on a limit is still **unrecoverable in content** — a dead subagent journals nothing of its own. What changed (issue #13): if the subagent's tool call itself RESOLVED (even with a failure status), the parent's journal now records that outcome + a short self-reported snippet — enough to price a revive-or-defer decision. A subagent whose tool call never resolves at all (a true mid-dispatch death) is still invisible until the next `SessionStart`.
+- Claude Code keeps its own session transcript, but **retention is version-dependent, not the guaranteed 30 days its docs suggest** — a transcript can be garbage-collected early, before you `--resume` it. CoalHearth's journal is a separate, local net that doesn't depend on it, and the recovery block flags a transcript that's already gone.
+
+Honest sell: **less lost work on an interruption** — not a limit-proof session.
+
+## 🪝 The hooks
+
+All are Phoenix-13 hooks — **fail-silent** (any error is swallowed, exit 0, never crashes the host), **zero-dependency** (Node builtins only), **no network**, **no child processes**, and they emit only their one sanctioned channel.
+
+- **`SessionStart` → resume** ([`bin/session-start.js`](bin/session-start.js)): reads the journal, and if the prior session was interrupted, prints the recovery block on the sanctioned SessionStart context-injection channel, then marks the journal `resumed` so it isn't re-injected every boot. When a periodic self-update check is due (see `update.*`), it also prints a one-line `/coalhearth:update` nudge on the same channel — the hook only schedules via a local throttle stamp; the online check is the agent's, consent-gated. A headless/cron start is safe by construction — the hook only prints, it never asks anything.
+- **`PostToolUse` → journal** ([`bin/post-tool-use.js`](bin/post-tool-use.js)): builds the state snapshot and saves it atomically under a per-workspace lock (so two concurrent sessions can't lose each other's journal). Journal-only — it emits nothing.
+- **`UserPromptSubmit` → subagent-death nudge** ([`bin/user-prompt-submit.js`](bin/user-prompt-submit.js), **Claude Code only** — issue #13): the common case is one cheap journal read and nothing else. When a spawned subagent's tool call has RESOLVED since the last time this fired, and its status/outcome hasn't been shown yet, it prints one nudge on the sanctioned UserPromptSubmit context-injection channel — description, status, and the self-reported outcome snippet — then marks it shown so the same resolution never repeats. This surfaces on your very next prompt in the SAME session, instead of waiting for a `SessionStart` that may be hours away. Every status is stated with a caveat: it's self-reported by the subagent and has been observed wrong.
+
+On every other platform the resume + journal jobs run through thin adapters — [`bin/ag-pre-invocation.js`](bin/ag-pre-invocation.js) (resume) and [`bin/ag-post-tool-use.js`](bin/ag-post-tool-use.js) (journal) — over one shared core ([`lib/journal-step.js`](lib/journal-step.js) for the journal, [`lib/resume-engine.js`](lib/resume-engine.js) for the recovery block); the Claude Code journal hook is itself a thin adapter over that core, behavior identical. A trailing argument in each platform's config picks the emit shape (Antigravity flat JSON · Gemini nested `hookSpecificOutput` · plain Claude-Code stdout for the CC-shaped file-copy platforms); the parsing/journal logic never forks. **The subagent status/outcome capture and the enriched resume-block rendering reach every platform** via those shared cores — only the mid-session `UserPromptSubmit` nudge itself is Claude-Code-specific this release (no other platform's config wires an equivalent per-prompt event to it; a decoupled `PreInvocation` variant for Antigravity is a named, unbuilt follow-up).
+
+## 🚀 Install
+
+CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever a platform runs hooks **and** has both a session-start-class event and a per-tool event — the pair the product needs (journal without resume is write-only; resume without journal has nothing to read). All platforms run the same shared core through thin adapter entry points.
+
+**Compat matrix** (tier honesty: **validated** = a real end-to-end run has been done on that platform · **works with** = built + hermetically tested against the platform's primary docs, 2026-07-15 fetch — not yet proven there; a claim only becomes **validated** after a real run):
+
+| Platform | Tier | Events (resume + journal) | Wiring |
+|---|---|---|---|
+| Claude Code | **validated** | `SessionStart` + `PostToolUse` + `UserPromptSubmit` ² | plugin (automatic) |
+| Antigravity 2.0 | **works with** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
+| Gemini CLI ¹ | **works with** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
+| GitHub Copilot CLI | **works with** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
+| Devin CLI | **works with** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/devin-cli-hooks.json`](platform-configs/hooks/devin-cli-hooks.json) |
+| Kiro | **works with** | `agentSpawn` + `postToolUse` | [`platform-configs/hooks/kiro-agent-hooks.json`](platform-configs/hooks/kiro-agent-hooks.json) |
+| Augment Code | **works with** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/augment-settings-hooks.json`](platform-configs/hooks/augment-settings-hooks.json) |
+| Junie | not supported | `SessionStart` is its ONLY event — no per-tool event means no journal, so resume would have nothing to read | — |
+| Devin Desktop (Cascade Hooks) | not supported | its snake_case vocabulary (`pre/post_write_code`, `post_cascade_response`, …) has no session-start-class event — no resume anchor; a separate surface from Devin CLI | — |
+
+¹ Gemini CLI audience caveat: individual/AI-Pro/Ultra tiers were cut off 2026-06-18 — it is a business-tier product (Standard/Enterprise) now.
+² `UserPromptSubmit` (the subagent-death nudge, issue #13) is Claude-Code-only this release — see "The hooks" above.
+
+### Claude Code — validated
+
+One command (this also wires the hooks):
+
+```bash
+claude plugin marketplace add TheColliery/CoalHearth
+claude plugin install coalhearth@coalhearth
+```
+
+That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
+
+### Antigravity — works with (no observed fire; three negative tests, two of them headless — see below)
+
+**Documented:** Antigravity 2.0 ships a real hook engine (`hooks.json`; antigravity.google/docs/hooks, corroborated against the docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is **built and hermetically tested** against that documented spec.
+
+**What "empirically confirmed 2026-07-12" actually established:** that date's pilot fired a live `Stop` hook on AG — proving the engine itself can fire — but in a sibling plugin (CoalMine), on a different event. CoalHearth's own `PreInvocation`/`PostToolUse` pair was never part of that fire; it was built and tested against the spec the pilot confirmed, never observed firing itself. This section previously implied otherwise by putting the date next to CoalHearth's own claim — corrected here.
+
+**Tested 2026-08-04, observed:** both hook locations this doc names below (global `~/.gemini/config/hooks.json` and per-project `<workspace>/.agents/hooks.json`) were installed; a fresh AG session ran a real tool call (`list_dir`, confirmed in AG's own transcript log); a plain control command written the identical way FIRED (ruling out a broken command shape). Neither CoalHearth's `PreInvocation` hook nor its `PostToolUse` hook (tested with both a wildcard `*` matcher and the exact tool-name matcher) produced a single log line.
+
+**Reproduced twice since, against the same underlying hook engine (2026-08-22 and 2026-08-23):** two further probes — run headless via `agy -p`, on two separate days, with two different tool-call shapes — fired zero hooks against a pre-existing, schema-valid `hooks.json` at the shared cross-tool location (`~/.gemini/config/hooks.json`), with real tool execution confirmed in each run. Those probes are not CoalHearth-specific; they exercise the same hook engine CoalHearth's `PreInvocation`/`PostToolUse` pair depends on. Across that probe series, every `hooks.json` location reachable from a headless CLI session has now been tried, and all were inert.
+
+**Scope, stated precisely so this is not read as more disproven than it is:** what has been tested is **headless CLI hook firing**. The 2026-08-22/08-23 probes ran under `agy -p`; the 2026-08-04 test's execution channel was not recorded. **The interactive IDE (GUI-driven) path has never been exercised by any of these probes** — it is a genuinely different execution path, and nothing here says whether the same config fires there. Nor is any of this a claim that AG's hook engine is broken in general (a sibling plugin's `Stop` hook did fire on 2026-07-12, above). **works with** here means "built + tested against the documented spec"; it has never meant "confirmed to fire," and no **validated** claim for Antigravity follows until a real fire is observed.
+
+AG has no plugin manager, so the install is a file copy:
+
+```powershell
+git clone https://github.com/TheColliery/CoalHearth.git --depth 1
+# global (all workspaces):
+Copy-Item -Recurse CoalHearth "$env:USERPROFILE\.gemini\config\skills\coalhearth"
+```
+
+Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<workspace>/.agents/hooks.json` (per project) **or** `~/.gemini/config/hooks.json` (global), and replace `__COALHEARTH_DIR__` with the copied directory. Event mapping (AG never fires `SessionStart`): warm-resume rides the **first `PreInvocation`** of a session — a per-session temp marker keeps it once-per-session, since PreInvocation fires per model call — and the journal rides `PostToolUse`.
+
+Known limits on AG: **no fire has ever been observed for this room's hook pair — three independent negative tests (2026-08-04, plus headless `agy -p` probes on 2026-08-22 and 2026-08-23 against the shared `~/.gemini/config/hooks.json`), across different days and tool-call shapes, with real tool execution confirmed in each** — see above for what was ruled out. **No probe in this series has reached the interactive IDE (GUI-driven) path**, so an IDE user's result is unknown rather than negative. Re-test before relying on this platform · delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
+
+### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — works with (config-only ports)
+
+Each of these ships a native session-start-class event, so none needs Antigravity's once-per-session marker workaround — the wiring is a config file pointing both events at the same two adapter entry points (`bin/ag-pre-invocation.js` + `bin/ag-post-tool-use.js`), switched by a trailing argument (`SessionStart` = Gemini's nested `hookSpecificOutput` emit · `FileCopy` = the plain Claude-Code shape the other four model). Clone the repo, copy the platform's template from [`platform-configs/hooks/`](platform-configs/hooks/) into place, and adjust the clone path — per-platform paths, verified-vs-best-guess notes, and the named divergences live in [that directory's README](platform-configs/hooks/README.md). Same honesty as Antigravity: **works with**, not validated — no live session on these platforms has run the wiring yet.
+
+### Other agents — not supported
+
+CoalHearth is hook-only, and it needs the session-start + per-tool event **pair**: a platform with no hook layer has nothing to run; a platform missing half the pair can't carry the product (Junie — session-start only; Devin Desktop's Cascade vocabulary — no session-start; see the matrix). Platforms whose hook surface is plugin CODE rather than a config file (OpenCode, Cline CLI) are a separate future lane. There is no read/analyze mode to load by hand (the way CoalMine or CoalLedger ship one).
+
+## Commands
+
+CoalHearth's core value is its two automatic hooks (above); the two commands below are the only invokable surface — self-update and a read-only stats report.
+
+| Command | What it does |
+|---|---|
+| `/coalhearth:stats` | Journal activity and resume events for this session — read-only. |
+| `/coalhearth:update` | Check for a newer CoalHearth version and offer to apply it, or set how updates are handled. |
+
+## ⚙️ Configure
+
+Everything is tunable in `coalhearth.json` (global `~/.claude/.coalhearth.json` overlaid by a project config — per-group for a nested key, whole-value for a top-level scalar like `language`; the project lookup walks up from the cwd and **stops at your home dir**). Most keys are project-wins, so you can **re-tune a globally-installed CoalHearth per project** — the closest per-project quiet switch is `recovery.autoInjectPrompt: false` (detect + sweep silently, no recovery block; the journal hook still runs — full off = uninstall). Every key is optional.
+
+**Per-project config location — THE READ ORDER IS A RAIL, identical in every room of this series:**
+
+1. `<project>/.<the running agent's OWN dir>/coal/coalhearth.json` — the dir of the agent actually executing (Claude Code = `.claude`, Antigravity = `.agents`, Gemini CLI = `.gemini`).
+2. Other known agent dirs, fixed order: `.claude` → `.agents` → `.gemini` (first **found** wins).
+3. LEGACY: `<project>/.coalhearth.json` at the project root (the pre-2026-08-08 shape) — still read normally, no breakage for an existing config.
+
+Write target = wherever the config was found; nothing found anywhere = the running agent's own dir. **`coalhearth.json` still has no HOOK writer** — the hooks that run every session never write config, only read it; that half of "always hand-edited" stays true. What changed: [`scripts/configure.mjs`](scripts/configure.mjs) is now a USER-INVOKED CLI that edits it for you — `node scripts/configure.mjs --language th` — so "never written by CoalHearth itself" no longer describes the whole picture. Nothing runs it on your behalf; you or your agent runs it explicitly, the same way you'd run any other script in this repo.
+
+The high-impact keys, and the exact CLI flag for each (`node scripts/configure.mjs <flag> <value>`; `--global` targets `~/.claude/.coalhearth.json` instead of the project config; `node scripts/configure.mjs --help` lists all seven):
+
+| Key | Flag | Default | What it does |
+|---|---|---|---|
+| `language` | `--language` | `auto` | Lock the reply language: `auto` / `th` / `en` / `ja` / `zh` / `es`. **Top-level** — not inside a group, unlike every other row here (see below). |
+| `recovery.autoInjectPrompt` | `--recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
+| `recovery.stashUnsavedChanges` | `--recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
+| `update.updateMode` | `--update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+
+Every flag is the dotted key **verbatim** — `--journal.outputDirectory`, `--journal.atomicityRetries`, and `--update.updateCheckDays` follow the same rows below and aren't repeated here; a flat `--outputDirectory` would spell one key two ways, so there is no shorthand form.
+
+`language` sits at the **top level** of `coalhearth.json`, not nested under a group — `{"language": "auto"}`, never `{"recovery": {"language": "auto"}}`. `auto` (the factory default) follows the conversation's own language with an English fallback, no extra config needed. A lock (`th`/`en`/`ja`/`zh`/`es`) translates **prose only** — commands, paths, identifiers, config keys and severity labels stay verbatim regardless of the lock. What actually honors it: the SessionStart hook's own emissions (the recovery block, the journal-dir warning, the self-update nudge) append one directive naming the locked language when it is set to anything other than `auto`; nothing else in this room reads the key today.
+
+**Two exceptions to project-wins:** `update.updateMode` and `recovery.autoInjectPrompt` gate an outward action (a nudge; the whole recovery-block injection), so a project `.coalhearth.json` — untrusted, it arrives with whatever repo you clone — can only QUIETEN either one relative to your global config, never re-enable something you turned off globally. Every other key (caps, paths, `stashUnsavedChanges`) stays plain project-wins.
+
+Full key reference: every key + default lives in [`scripts/lib/config-schema.mjs`](scripts/lib/config-schema.mjs) and the commented template [`platform-configs/.coalhearth.json`](platform-configs/.coalhearth.json).
+
+## Permissions
+
+CoalHearth requests the lightest profile in the series: it reads your project's planning files (`task.md`, `AGENTS.md`) and its own journal, and every write stays contained inside your workspace — never outside it. The exact destination is `journal.outputDirectory` (`.coalhearth.json`), defaulting to its own namespaced `.claude/coalhearth/`; that key is project-configurable, and project config is untrusted (it ships with whatever repo you clone) — a project can redirect it into a real directory like `src/`, contained but no longer confined to CoalHearth's own state. No network, no exec, no subagent spawning, and no deletes outside its own scratch/lock files. Hooks are its only lifecycle capability, capability-keyed to whatever hook engine the platform ships.
+
+Full series matrix + the must-fail set: [Permission Matrix](https://github.com/TheColliery/.github/blob/main/PERMISSION-MATRIX.md)
+
+## 📊 Benchmark
+
+Interruption damage, measured (2026-07-03, v1.0.0): on a 10-file mid-refactor, warm resume and cold restart both finished correctly with a **<1% token delta** — at small scale a strong model rebuilds state from the tree, so CoalHearth's token saving is a **large-session** effect. Its irreducible value is state **fidelity**: the in-flight sub-agent record a cold restart cannot reconstruct. Full table + honest scope: [`TheColliery/.github/benchmarks/CoalHearth`](https://github.com/TheColliery/.github/tree/main/benchmarks/CoalHearth).
+
+## 🧭 Part of TheColliery
+
+CoalHearth is the **session-continuity** member of the mining series, alongside:
+
+- [CoalMine](https://github.com/HetCreep/CoalMine) — quality canaries
+- [CoalTipple](https://github.com/TheColliery/CoalTipple) — model/effort routing
+- [CoalBoard](https://github.com/TheColliery/CoalBoard) — consensus & debate
+- [CoalFace](https://github.com/TheColliery/CoalFace) — fan-out discipline
+- [CoalWash](https://github.com/TheColliery/CoalWash) — memory defrag
+- [CoalLedger](https://github.com/TheColliery/CoalLedger) — docs health
+
+Install one, it stands alone; install all, they compose without conflict.
+
+Shared doctrine: Phoenix-13 hooks (zero-dependency, no network, fail-silent, no child processes, deterministic), single-source-of-truth config schemas, and a strict no-overkill discipline. Series doctrine: [`TheColliery/.github`](https://github.com/TheColliery).
+
+Zero-dependency, offline by default, no API keys — "by default" because the consent-gated self-update check (`/coalhearth:update`) goes online; the hooks never do.
+
+---
+
+## 📄 License
+
+Apache License 2.0. See [LICENSE](LICENSE).

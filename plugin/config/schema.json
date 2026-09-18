@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CoalHearthConfig",
+  "type": "object",
+  "properties": {
+    "language": { "type": "string", "enum": ["auto", "th", "en", "ja", "zh", "es"], "default": "auto" },
+    "journal": {
+      "type": "object",
+      "properties": {
+        "outputDirectory": { "type": "string", "default": ".claude/coalhearth" },
+        "atomicityRetries": { "type": "integer", "minimum": 1, "maximum": 5, "default": 3 }
+      },
+      "additionalProperties": false
+    },
+    "recovery": {
+      "type": "object",
+      "properties": {
+        "autoInjectPrompt": { "type": "boolean", "default": true },
+        "stashUnsavedChanges": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "update": {
+      "type": "object",
+      "properties": {
+        "updateMode": { "type": "string", "enum": ["ask", "auto", "remind", "off"], "default": "ask" },
+        "updateCheckDays": { "type": "integer", "minimum": 1, "maximum": 365, "default": 14 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
