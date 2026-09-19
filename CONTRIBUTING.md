@@ -52,6 +52,16 @@ docs-only push doesn't get a free pass from `link-check` the way it does from CI
 broken link in the very doc you're editing goes red on this check, even though it can't block a
 merge on its own.
 
+A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
+can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
+docs-only or not. Unlike the two required checks it does **not** report "nothing ran": on a
+docs-only push it still runs the **whole test suite** (every `*.test.mjs`, `*.test.cjs` and
+`*.test.js` on disk, under Node's experimental coverage flag) and publishes one line-coverage
+report, which GitHub shows as a coverage comment on a pull request. A red run there is a real
+failure to fix — a test broke — not a gate. Its upload step is `fail-on-error: false`, so a
+refused upload (say, Code Quality isn't switched on for the repository) shows as an `::error::`
+annotation inside a green run, not a red one.
+
 ---
 
 ## 🖥️ Supported Platforms
