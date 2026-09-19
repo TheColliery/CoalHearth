@@ -16,3 +16,7 @@ skills-lock.json
 # Throwaway working notes / probe scripts / oracle records -- transient by design (AGENTS.md
 # DURABLE-DATA tiers), never load-bearing, never shipped
 scratchpad/
+
+# Generated coverage output (UMB-124) — the report-only Coverage workflow writes it; same
+# practice as the generated SkillSpector reports above: generated output is never tracked
+coverage/
