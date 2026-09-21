@@ -33,9 +33,13 @@ function physical(p) {
 // project configured ONLY through the new shape (no `.git`, and — since it migrated —
 // no root `.coalhearth.json` either) would otherwise match NOTHING and fall through to
 // the raw `startDir` fallback, the same per-subdir-scatter class CoalWash's own history
-// already names for its legacy marker. ADDITIVE ONLY: each new entry can only make the
-// walk stop LOWER (nearer to startDir), never widen it — verified with a real fixture
-// (config-load.test.mjs) that a subdir walk still stops at the nearer/narrower root.
+// already names for its legacy marker. ADDITIVE ONLY WITH RESPECT TO AN EXISTING MARKER
+// MATCH: where the previous marker set already matched a directory, a new entry can only
+// make the walk stop there or NEARER (never skip past it to a farther root) — verified with
+// a real fixture (config-load.test.mjs) that a subdir walk still stops at the nearer/narrower
+// root. Where the previous set matched NOTHING, a new marker deliberately anchors HIGHER than
+// the raw `startDir` fallback — that is the point of the entries above, not a violation, and
+// a test for a further marker must not assert otherwise.
 const ROOT_MARKERS = [
   '.git', '.coalhearth.json',
   path.join('.claude', 'coal', 'coalhearth.json'),
@@ -80,11 +84,15 @@ export function findProjectRoot(startDir = process.cwd(), home = os.homedir()) {
 //      prints the notice standalone when the session would otherwise be silent — the
 //      same sanctioned channel either way — never by any other hook (Phoenix #13).
 // WRITE target = where the config was found; absent everywhere, the running agent's
-// own dir. Hooks never perform this move on a READ (Phoenix #5, no side effects) — and
-// CoalHearth has NO project-config WRITER anywhere in this codebase to begin with (no
-// configure.mjs, no consent-persistence call): `.coalhearth.json`, global and project,
-// is hand-edited by the user or another tool, never written by CoalHearth itself. So
-// "move on write" has no code path to hook here — this is the READ side only.
+// own dir. The HOOKS never write config and never perform the legacy -> canonical move on
+// a READ (Phoenix #5, no side effects): nothing under bin/ or lib/ writes a
+// `.coalhearth.json`, global or project, and there is no consent-persistence call. The one
+// WRITER is scripts/configure.mjs, a USER-INVOKED CLI that no hook runs and that imports
+// THIS module for its walk: it writes the project config where it was found (or the global
+// one with --global), and it is what performs "move on write" — a config found at EITHER
+// legacy path is written to the canonical own-dir file and the legacy one removed (UMB-133
+// added the nested legacy to that migration). So this file is the READ side only; the
+// write side lives in configure.mjs.
 //
 // NAMED DIVERGENCE from CoalWash's own version of this comment (which collapses "own
 // dir" onto `.claude`, because CoalWash activates ONLY through Claude Code's hook
