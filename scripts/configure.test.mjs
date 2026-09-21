@@ -203,6 +203,29 @@ test('a config found at the LEGACY root path migrates to the own-dir default on 
   assert.equal(cfg.language, 'zh');
 });
 
+// The announcement is asserted by IDENTITY, not by spelling. configure.mjs names the path its own
+// root walk produced -- findProjectRoot realpaths the start dir, so it is the PHYSICAL spelling --
+// while a test builds its paths from os.tmpdir(), which on macOS is /var/... (a symlink to
+// /private/var/...). Same directory, two spellings: a raw substring compare fails there and
+// only there (CI run 35667279997). Both sides go through ONE resolver, realpath.native
+// (node/runtime.md 4 -- this is an identity question, "are these the same place?"). The file the
+// migration removed no longer exists, so the legacy path is compared by its surviving directory
+// plus its exact basename; the canonical file it wrote is compared whole. Still checks BOTH the
+// source and the destination the user is told about -- stronger than the substring it replaces,
+// which never looked at the destination.
+const sameDir = (a, b) => fs.realpathSync.native(a) === fs.realpathSync.native(b);
+function announcedMigration(stdout) {
+  const m = /^Migrated the project config from (.+?\.coalhearth\.json) to (.+?coalhearth\.json)\.\s*$/m.exec(stdout);
+  return m ? { from: m[1], to: m[2] } : null;
+}
+function assertMigrationAnnounced(stdout, legacyPath, canonicalPath) {
+  const a = announcedMigration(stdout);
+  assert.ok(a, 'the migration is announced (a "Migrated the project config from <legacy> to <canonical>." line): ' + JSON.stringify(stdout));
+  assert.equal(path.basename(a.from), path.basename(legacyPath), 'names the legacy file it read');
+  assert.ok(sameDir(path.dirname(a.from), path.dirname(legacyPath)), 'the legacy path it names is in the same directory, however that is spelled: ' + a.from);
+  assert.ok(sameDir(a.to, canonicalPath), 'the canonical path it names is the file it wrote, however that is spelled: ' + a.to);
+}
+
 // UMB-133: the nested legacy shape is now a READ candidate, so a write that found its config
 // there must migrate exactly like the root legacy does -- write the canonical file, remove the
 // legacy one -- instead of quietly rewriting the deprecated path in place.
@@ -216,5 +239,34 @@ test('UMB-133: a config found at the NESTED legacy path migrates to the own-dir 
   assert.equal(fs.existsSync(nested), false, 'the nested legacy file is removed after a successful migrated write');
   const cfg = JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8'));
   assert.equal(cfg.language, 'zh');
-  assert.ok(r.stdout.includes('Migrated the project config from ' + nested), 'the migration is announced');
+  assertMigrationAnnounced(r.stdout, nested, ownDirConfig(dir));
+});
+
+// The macOS class (CI run 35667279997), reproducible on ANY box: the sandbox is spelled through
+// a directory link (macOS: /var -> /private/var; here a junction/symlink) while configure.mjs
+// announces the path its own root walk produced -- the PHYSICAL one. Capability is PROBED (a
+// link that cannot be created skips visibly), never guessed from process.platform.
+test('UMB-133 (macOS class): the migration announcement holds when the sandbox is spelled through a directory link', (t) => {
+  const real = sandboxProject(t);
+  const link = real + '-link';
+  try {
+    fs.symlinkSync(real, link, 'junction');
+  } catch (e) {
+    t.skip('cannot create a directory link here: ' + e.code);
+    return;
+  }
+  t.after(() => { try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch {} } });
+  const nested = path.join(link, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(nested), { recursive: true });
+  fs.writeFileSync(nested, JSON.stringify({ language: 'auto' }));
+  const r = run(link, ['--language', 'zh']);
+  assert.equal(r.status, 0);
+  assert.equal(fs.existsSync(nested), false, 'the legacy file is removed');
+  const canonical = path.join(link, '.claude', 'coal', 'coalhearth.json');
+  assert.equal(JSON.parse(fs.readFileSync(canonical, 'utf8')).language, 'zh');
+  assertMigrationAnnounced(r.stdout, nested, canonical);
+  // Guard against a vacuous pass: the sandbox really is spelled two ways here, and the
+  // announcement is the physical one. If this ever stops holding the test proves nothing.
+  const a = announcedMigration(r.stdout);
+  assert.notEqual(path.dirname(a.from), path.dirname(nested), 'the announcement is the physical spelling, not the link one');
 });
