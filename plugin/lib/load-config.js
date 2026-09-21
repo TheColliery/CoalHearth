@@ -86,9 +86,10 @@ function findProjectRoot(startDir, home) {
 //   3. LEGACY, in this order (UMB-133 unified the list across the flock): first
 //      <project>/.claude/.coalhearth.json (nested), then <project>/.coalhearth.json at
 //      the project root — both read normally, no breakage for an existing user, both
-//      DEPRECATED. A hit is named on the SessionStart channel ONLY (configNotices, below;
-//      bin/session-start.js appends it to an emission already going out) — never by any
-//      other hook (Phoenix #13).
+//      DEPRECATED. A hit is named on the SessionStart channel ONLY (configNotices, below):
+//      bin/session-start.js rides an emission the hook is already making, or prints the
+//      notice standalone when the session would otherwise be silent — the same
+//      sanctioned channel either way — never by any other hook (Phoenix #13).
 // WRITE target = where the config was found; absent everywhere, the running agent's
 // own dir. Hooks never perform this move on a READ (Phoenix #5, no side effects) — and
 // CoalHearth has NO project-config WRITER anywhere in this codebase to begin with (no
@@ -144,8 +145,9 @@ function projectConfigPath(cwd, home, ownDir) {
   return found || candidates[0]; // nothing found anywhere -- own-dir (or .claude) is the write target
 }
 
-// UMB-133 hole (1) + (2): REPORT, never skip. Lines for a SessionStart hook to append to an
-// emission it is already making; this function itself prints nothing and never throws
+// UMB-133 hole (1) + (2): REPORT, never skip. Lines for a SessionStart hook to emit —
+// appended to an emission it is already making, or on their own when it would otherwise say
+// nothing; this function itself prints nothing and never throws
 // (Phoenix #4 — a probe that fails yields [], not a dead hook).
 //   LEGACY  — the config actually read is one of the two deprecated shapes.
 //   IGNORED — a file named like ours sits at a path that is NOT a candidate.

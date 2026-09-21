@@ -75,9 +75,10 @@ export function findProjectRoot(startDir = process.cwd(), home = os.homedir()) {
 //   3. LEGACY, in this order (UMB-133 unified the list across the flock): first
 //      <project>/.claude/.coalhearth.json (nested), then <project>/.coalhearth.json at
 //      the project root — both read normally, no breakage for an existing user, both
-//      DEPRECATED. A hit is named on the SessionStart channel ONLY (configNotices, below;
-//      the shipped bin/session-start.js appends it to an emission already going out) —
-//      never by any other hook (Phoenix #13).
+//      DEPRECATED. A hit is named on the SessionStart channel ONLY (configNotices, below):
+//      the shipped bin/session-start.js rides an emission the hook is already making, or
+//      prints the notice standalone when the session would otherwise be silent — the
+//      same sanctioned channel either way — never by any other hook (Phoenix #13).
 // WRITE target = where the config was found; absent everywhere, the running agent's
 // own dir. Hooks never perform this move on a READ (Phoenix #5, no side effects) — and
 // CoalHearth has NO project-config WRITER anywhere in this codebase to begin with (no
