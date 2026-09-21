@@ -77,12 +77,16 @@ function main() {
   // SessionStart is the ONLY entry point that reports (post-tool-use, user-prompt-submit and
   // the two AG adapters read the same config and stay silent: PostToolUse printing anything
   // would breach Phoenix #13, and none of the other three has a line it already prints every
-  // session to ride on). The lines are APPENDED to an emission that is already going out —
-  // exactly how the AL-2 language directive rides — never printed standalone: a session with
-  // nothing else to say says nothing, and the first emission of the session carries the
-  // notice once (a one-shot, so recovery + self-update together do not repeat it). configNotices
-  // never throws; the catch is the second belt (Phoenix #4 — a failed probe never costs the
-  // hook its real job).
+  // session to ride on). TWO PATHS, ONE notice source, never twice: when the hook is already
+  // speaking, the lines are APPENDED to the first emission (a one-shot via tail(), so recovery
+  // + self-update together do not repeat it); when it would otherwise say nothing, they go out
+  // as one standalone line at the end of main() on the SAME sanctioned SessionStart channel
+  // (head's fixback ruling: hole (1) says "never silently skipped", and a report that fires
+  // only when something else happens to be speaking is not that; hooks-safety.md 13 already
+  // sanctions this channel, so this changes WHEN it speaks, never WHERE). The trigger is
+  // narrow by construction — configNotices() is empty for a clean canonical config or none at
+  // all, and then nothing is printed. configNotices never throws; the catch is the second
+  // belt (Phoenix #4 — a failed probe never costs the hook its real job).
   let pendingNotice = '';
   try {
     const lines = configNotices();
@@ -148,6 +152,15 @@ function main() {
   // same sanctioned SessionStart context-injection channel.
   if (updateDue(config)) {
     console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.' + tail());
+  }
+
+  // Nothing above spoke (tail() would have consumed the notice) but a stranded or legacy config
+  // exists on this user's disk: say so on its own, carrying the language lock like every other
+  // emission. Never reached with an empty notice, so the quiet case stays byte-silent.
+  if (pendingNotice) {
+    const standalone = pendingNotice.slice(1) + languageDirective(config);
+    pendingNotice = '';
+    console.log(standalone); // sanctioned SessionStart context-injection channel (Phoenix #13)
   }
 }
 
