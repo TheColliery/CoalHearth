@@ -2,6 +2,24 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.5.0] - 2026-09-22
+
+**MINOR** — UMB-133 hole (3): the project-config walk now reads every shape this room ever documented, names the one that is canonical, and deprecates the two legacy ones. A new backward-compatible capability (a config at `.claude/.coalhearth.json` is now honoured, and a stranded config is now reported) — see scripts-quality.md §3's decisive test.
+
+### Added
+
+- **The nested legacy config `<project>/.claude/.coalhearth.json` is now read.** The loader previously walked only the three canonical `<agent dir>/coal/coalhearth.json` paths and the root `<project>/.coalhearth.json`, so a config written at the nested path was silently ignored. It is now a candidate in `lib/load-config.js` (the shipped hooks) and its twin `scripts/lib/config-load.mjs`, after every canonical path and before the root legacy one. The consent clamp is unchanged: a config found there still cannot re-enable `update.updateMode` or `recovery.autoInjectPrompt` against a stricter global. — test: `lib/load-config.test.js`, `scripts/lib/config-load.test.mjs` (12 on-disk fixtures run through both twins, asserting identical candidate order, path chosen, notices and merged config)
+- **A stranded config is now reported, once per session, on the sanctioned SessionStart channel.** `bin/session-start.js` appends one line per finding to what it already emits — `[CoalHearth] LEGACY: <path> is deprecated but still read; canonical = .claude/coal/coalhearth.json` when a legacy file is the one being read, `[CoalHearth] IGNORED: <path> is not a config path; canonical = …` when a config-named file sits at a path the loader does not read — and prints the same lines on their own when the session would otherwise say nothing. No new channel: it is the emission the recovery block and the `language` directive already use, and it carries the `language` lock like they do. The probe is a closed set (the project root and the three agent dirs, directly or under `coal/`, under the two config names); nothing else is crawled. A clean canonical config, or no config at all, prints nothing. Only SessionStart reports: `post-tool-use.js`, `user-prompt-submit.js` and the two Antigravity adapters read the same walk and stay silent. — test: `bin/session-start.test.js` (`UMB-133` cases, including the two SILENCE tests), `lib/load-config.test.js`
+
+### Changed
+
+- **If you hold both legacy files, the nested one now wins.** Before this release `<project>/.claude/.coalhearth.json` was never read, so a user holding it *and* `<project>/.coalhearth.json` was running on the root file; the nested file is now read first. That is the correct fix — the walk now honours the file the user wrote — but it is a resolution change: **your effective config can differ after upgrading without you having edited anything.** Keep the file you mean (or migrate it to `.claude/coal/coalhearth.json`) and remove the other.
+- **`scripts/configure.mjs` migrates on write from both legacy shapes.** A config found at the nested legacy path is now written to the canonical file and the legacy one removed, the same as the root legacy shape already was; a read never moves a file. — test: `scripts/configure.test.mjs`
+
+### Deprecated
+
+- **Both legacy project-config paths — `<project>/.claude/.coalhearth.json` and `<project>/.coalhearth.json` — are deprecated in favour of `<agent dir>/coal/coalhearth.json` (for Claude Code, `.claude/coal/coalhearth.json`).** Still read, so nothing breaks; deprecated at this MINOR and removable no earlier than the next MAJOR. To migrate, move the file to the canonical path, or set any value with `node scripts/configure.mjs`, which writes the canonical file and removes the legacy one. While a legacy file is the one being read, SessionStart repeats a one-line migration notice every session; it stops when you migrate. This room owns the migration; the announcement is this entry and the README's Configure section (ship-text only — the per-session notice above is a migration nudge on a channel the room already holds, not a second announcement channel). — test: `lib/load-config.test.js`, `bin/session-start.test.js`
+
 ## [2.4.0] - 2026-09-09
 
 **MINOR** — AL-2 + AL-6 (owner-signed 2026-09-05), one release: a new user-settable config key, and a ship-text fix to what it reads.
