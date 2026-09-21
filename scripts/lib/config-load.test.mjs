@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { findProjectRoot, projectConfigPath, loadMergedConfig } from './config-load.mjs';
+import * as twin from './config-load.mjs'; // UMB-133: namespace import so a missing export fails PER TEST, not at link time
+import { createRequire } from 'node:module';
 
 function mkSandboxHome() {
   // realpath the sandbox: findProjectRoot compares PHYSICAL paths (macOS tmpdir is a
@@ -314,4 +316,192 @@ test('namespace campaign: the consent-cascade clamp is unchanged regardless of W
   fs.writeFileSync(path.join(root, '.gemini', 'coal', 'coalhearth.json'), JSON.stringify({ update: { updateMode: 'auto' } }));
   const merged = loadMergedConfig({ cwd: root, home, ownDir: '.gemini' });
   assert.equal(merged.update.updateMode, 'off', 'a project value found at a NEW-shape candidate is clamped exactly like the legacy shape was');
+});
+
+// ---------------------------------------------------------------------------------------
+// UMB-133 (config-path unification) -- mirrors lib/load-config.test.js case-for-case, plus
+// the TWIN-AGREEMENT table at the bottom (the two loaders are hand-mirrored; nothing else
+// keeps them honest about each other). Each temp dir is registered for cleanup on the line
+// after it is allocated (scripts-quality.md 2).
+// ---------------------------------------------------------------------------------------
+const { configNotices, projectConfigCandidates } = twin;
+const requireCjs = createRequire(import.meta.url);
+const cjs = requireCjs('../../lib/load-config.js');
+
+function mkT(t) {
+  const d = mkSandboxHome();
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  return d;
+}
+function put(dir, rel, obj) {
+  const f = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(obj));
+  return f;
+}
+function project(t) {
+  const root = mkT(t);
+  fs.mkdirSync(path.join(root, '.git'));
+  const sub = path.join(root, 'src', 'deep');
+  fs.mkdirSync(sub, { recursive: true });
+  return { root, sub };
+}
+const NESTED = path.join('.claude', '.coalhearth.json');
+const CANON_TAIL = 'canonical = .claude/coal/coalhearth.json';
+
+test('UMB-133 proof 1: <root>/.claude/.coalhearth.json (nested legacy) is FOUND', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(root, NESTED, { journal: { atomicityRetries: 7 } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 7);
+});
+
+test('UMB-133 proof 2: <root>/.coalhearth.json (root legacy) is still found', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(root, '.coalhearth.json', { journal: { atomicityRetries: 8 } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 8);
+});
+
+test('UMB-133 proof 3: canonical wins over BOTH legacies, and nested legacy wins over root legacy', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const canon = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 1 } });
+  const nested = put(root, NESTED, { journal: { atomicityRetries: 2 } });
+  put(root, '.coalhearth.json', { journal: { atomicityRetries: 3 } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 1, 'canonical first');
+  fs.rmSync(canon);
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 2, 'nested legacy before root legacy');
+  fs.rmSync(nested);
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 3, 'root legacy last');
+});
+
+test('UMB-133 proof 4: a config at a NON-candidate path is REPORTED, never silently walked past', (t) => {
+  const shapes = [
+    path.join('.agents', '.coalhearth.json'),
+    path.join('.gemini', '.coalhearth.json'),
+    path.join('.claude', 'coalhearth.json'),
+    path.join('.claude', 'coal', '.coalhearth.json'),
+    path.join('.agents', 'coalhearth.json'),
+    'coalhearth.json',
+    path.join('coal', 'coalhearth.json'),
+  ];
+  for (const rel of shapes) {
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    const f = put(root, rel, { journal: { atomicityRetries: 9 } });
+    assert.deepEqual(
+      configNotices({ cwd: sub, home }),
+      ['IGNORED: ' + f + ' is not a config path; ' + CANON_TAIL],
+      rel + ' must be reported exactly once'
+    );
+    assert.equal(loadMergedConfig({ cwd: sub, home }).journal, undefined, rel + ' is still NOT read (report, never adopt)');
+  }
+});
+
+test('UMB-133 proof 4b: the probe is a CLOSED set at the walk\'s own root, not a filesystem crawl', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  // (a stray `coalhearth.json` -- NOT `.coalhearth.json`, which below the root would itself BE the root)
+  put(sub, 'coalhearth.json', {});
+  put(root, path.join('other', '.coalhearth.json'), {});
+  put(root, path.join('.claude', 'deep', 'coalhearth.json'), {});
+  assert.deepEqual(configNotices({ cwd: sub, home }), []);
+});
+
+test('UMB-133 proof 5: a legacy hit emits ONE line naming the canonical path (both legacy shapes)', (t) => {
+  for (const rel of [NESTED, '.coalhearth.json']) {
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    const f = put(root, rel, { journal: { atomicityRetries: 5 } });
+    const lines = configNotices({ cwd: sub, home });
+    assert.equal(lines.length, 1, rel + ': exactly one line');
+    assert.ok(lines[0].includes(f), 'names the legacy file it read');
+    assert.ok(lines[0].includes(CANON_TAIL), 'names the canonical path');
+    assert.ok(!lines[0].includes('\n'), 'one line');
+  }
+});
+
+test('UMB-133: a canonical config, or none at all, emits no notice', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  assert.deepEqual(configNotices({ cwd: sub, home }), []);
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 1 } });
+  assert.deepEqual(configNotices({ cwd: sub, home }), []);
+});
+
+test('UMB-133: configNotices never throws (a cwd that does not exist)', (t) => {
+  const home = mkT(t);
+  assert.doesNotThrow(() => configNotices({ cwd: path.join(home, 'no', 'such', 'dir'), home }));
+});
+
+test('UMB-133 clamp: a config found at the NESTED legacy path is still clamped safer-value-wins', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { update: { updateMode: 'off' }, recovery: { autoInjectPrompt: false } });
+  put(root, NESTED, { update: { updateMode: 'auto' }, recovery: { autoInjectPrompt: true } });
+  const cfg = loadMergedConfig({ cwd: sub, home });
+  assert.equal(cfg.update.updateMode, 'off', 'a project may not re-escalate a user-silenced nudge');
+  assert.equal(cfg.recovery.autoInjectPrompt, false, 'a project may not re-enable a user-silenced injection');
+});
+
+test('UMB-133 clamp: R2 factory-default still applies to a nested-legacy project with NO global', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(root, NESTED, { update: { updateMode: 'auto' } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).update.updateMode, 'ask');
+});
+
+test('UMB-133 ROOT_MARKERS ruling: the global config never anchors a root or reads as a project legacy', (t) => {
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { atomicityRetries: 4 } });
+  const proj = path.join(home, 'proj', 'src');
+  fs.mkdirSync(proj, { recursive: true });
+  assert.equal(findProjectRoot(proj, home), proj, 'no marker of ours between here and home -> startDir, not home');
+  assert.deepEqual(configNotices({ cwd: proj, home }), []);
+  assert.deepEqual(configNotices({ cwd: home, home }), []);
+  assert.equal(loadMergedConfig({ cwd: home, home }).journal.atomicityRetries, 4);
+});
+
+// TWIN AGREEMENT. lib/load-config.js (CJS, ships) and scripts/lib/config-load.mjs (ESM,
+// tooling) are hand-mirrored -- the AL-2 scalar-merge bug lived in BOTH. This table runs one
+// set of on-disk fixtures through both and asserts they agree on every observable: the
+// candidate order, the path chosen, the notices, and the merged config. A change made to
+// one twin only turns a row red here.
+const NEST_CANON = path.join('.claude', 'coal', 'coalhearth.json');
+const TWIN_FIXTURES = [
+  { name: 'nothing anywhere', files: {} },
+  { name: 'canonical only', files: { [NEST_CANON]: { journal: { atomicityRetries: 1 } } } },
+  { name: 'nested legacy only', files: { [NESTED]: { journal: { atomicityRetries: 2 } } } },
+  { name: 'root legacy only', files: { '.coalhearth.json': { journal: { atomicityRetries: 3 } } } },
+  { name: 'all three', files: { [NEST_CANON]: { journal: { atomicityRetries: 1 } }, [NESTED]: { journal: { atomicityRetries: 2 } }, '.coalhearth.json': { journal: { atomicityRetries: 3 } } } },
+  { name: 'nested beats root', files: { [NESTED]: { journal: { atomicityRetries: 2 } }, '.coalhearth.json': { journal: { atomicityRetries: 3 } } } },
+  { name: 'ownDir .agents hoisted', ownDir: '.agents', files: { [NEST_CANON]: { journal: { atomicityRetries: 1 } }, [path.join('.agents', 'coal', 'coalhearth.json')]: { journal: { atomicityRetries: 6 } } } },
+  { name: 'ownDir .gemini, legacy fallback', ownDir: '.gemini', files: { [NESTED]: { journal: { atomicityRetries: 2 } } } },
+  { name: 'misplaced shapes', files: { [path.join('.agents', '.coalhearth.json')]: {}, [path.join('.claude', 'coalhearth.json')]: {}, 'coalhearth.json': {}, [path.join('.claude', 'coal', '.coalhearth.json')]: {} } },
+  { name: 'misplaced + legacy hit', files: { [NESTED]: { update: { updateMode: 'auto' } }, [path.join('.gemini', 'coalhearth.json')]: {} } },
+  { name: 'unrecognised ownDir falls back to .claude-first', ownDir: '.nope', files: { [NEST_CANON]: { journal: { atomicityRetries: 1 } } } },
+];
+
+for (const fx of TWIN_FIXTURES) {
+  test('UMB-133 twin agreement: ' + fx.name, (t) => {
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    put(home, path.join('.claude', '.coalhearth.json'), { update: { updateMode: 'ask' } });
+    for (const [rel, obj] of Object.entries(fx.files)) put(root, rel, obj);
+    const opts = { cwd: sub, home, ownDir: fx.ownDir };
+    assert.deepEqual(cjs.projectConfigCandidates(sub, home, fx.ownDir), projectConfigCandidates(sub, home, fx.ownDir), 'candidate order');
+    assert.equal(cjs.projectConfigPath(sub, home, fx.ownDir), projectConfigPath(sub, home, fx.ownDir), 'path chosen');
+    assert.deepEqual(cjs.configNotices(opts), configNotices(opts), 'notices');
+    assert.deepEqual(cjs.loadConfig(opts), loadMergedConfig(opts), 'merged config');
+  });
+}
+
+test('UMB-133 twin agreement: cwd AT home (the global-collision guard) agrees too', (t) => {
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { atomicityRetries: 4 } });
+  assert.deepEqual(cjs.projectConfigCandidates(home, home), projectConfigCandidates(home, home));
+  assert.equal(cjs.projectConfigPath(home, home), projectConfigPath(home, home));
+  assert.deepEqual(cjs.configNotices({ cwd: home, home }), configNotices({ cwd: home, home }));
+  assert.deepEqual(cjs.loadConfig({ cwd: home, home }), loadMergedConfig({ cwd: home, home }));
 });

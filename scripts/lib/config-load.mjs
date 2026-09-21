@@ -42,6 +42,12 @@ const ROOT_MARKERS = [
   path.join('.agents', 'coal', 'coalhearth.json'),
   path.join('.gemini', 'coal', 'coalhearth.json'),
 ];
+// UMB-133 RULING (mirrors lib/load-config.js 1:1 — see its comment for the full reasoning):
+// `.claude/.coalhearth.json` (the nested LEGACY shape) is deliberately NOT a root marker,
+// because at home that exact path IS the global config (globalConfigPath) and marker checks
+// run before the stop-at-home test. Cost accepted: a no-`.git` project anchored ONLY by a
+// nested-legacy file, run from a SUBDIR, resolves to that subdir and misses it.
+// Pinned by the ROOT_MARKERS-ruling test in config-load.test.mjs.
 
 // Walk up from startDir looking for a root marker (see ROOT_MARKERS); NEVER walk above
 // `home` — stop there and fall back to startDir. Compare PHYSICAL paths on both sides;
@@ -66,8 +72,12 @@ export function findProjectRoot(startDir = process.cwd(), home = os.homedir()) {
 //      agent actually executing.
 //   2. Other known agent dirs, fixed order: `.claude` -> `.agents` -> `.gemini` (first
 //      FOUND wins).
-//   3. LEGACY: <project>/.coalhearth.json at the project root (today's shape) — read
-//      normally, no breakage for an existing user.
+//   3. LEGACY, in this order (UMB-133 unified the list across the flock): first
+//      <project>/.claude/.coalhearth.json (nested), then <project>/.coalhearth.json at
+//      the project root — both read normally, no breakage for an existing user, both
+//      DEPRECATED. A hit is named on the SessionStart channel ONLY (configNotices, below;
+//      the shipped bin/session-start.js appends it to an emission already going out) —
+//      never by any other hook (Phoenix #13).
 // WRITE target = where the config was found; absent everywhere, the running agent's
 // own dir. Hooks never perform this move on a READ (Phoenix #5, no side effects) — and
 // CoalHearth has NO project-config WRITER anywhere in this codebase to begin with (no
@@ -88,13 +98,59 @@ export function projectConfigCandidates(cwd = process.cwd(), home = os.homedir()
     ? [ownDir, ...AGENT_DIR_ORDER.filter((d) => d !== ownDir)]
     : AGENT_DIR_ORDER;
   const candidates = order.map((d) => path.join(root, d, 'coal', 'coalhearth.json'));
-  candidates.push(path.join(root, '.coalhearth.json')); // LEGACY, always last
+  candidates.push(path.join(root, '.claude', '.coalhearth.json')); // LEGACY (nested) — UMB-133
+  candidates.push(path.join(root, '.coalhearth.json')); // LEGACY (root), always last
   return candidates;
 }
-export function projectConfigPath(cwd = process.cwd(), home = os.homedir(), ownDir) {
+// `<home>/.claude/.coalhearth.json` IS the global config — never let it pass for a project
+// one (mirrors lib/load-config.js; see its comment). Identity compare by realpath.native.
+function isGlobalConfig(file, home) {
+  try { return fs.realpathSync.native(file) === fs.realpathSync.native(globalConfigPath(home)); } catch { return false; }
+}
+function resolveProjectConfig(cwd, home, ownDir) {
   const candidates = projectConfigCandidates(cwd, home, ownDir);
-  for (const c of candidates) if (fs.existsSync(c)) return c;
-  return candidates[0]; // nothing found anywhere -- own-dir (or .claude) is the write target
+  const found = candidates.find((c) => fs.existsSync(c) && !isGlobalConfig(c, home)) || null;
+  return { candidates, found };
+}
+export function projectConfigPath(cwd = process.cwd(), home = os.homedir(), ownDir) {
+  const { candidates, found } = resolveProjectConfig(cwd, home, ownDir);
+  return found || candidates[0]; // nothing found anywhere -- own-dir (or .claude) is the write target
+}
+
+// UMB-133 holes (1)+(2): the LEGACY / IGNORED lines — mirrors lib/load-config.js's
+// configNotices 1:1 (its comment carries the closed-set reasoning and what is deliberately
+// not probed). Prints nothing, never throws. The shipped hook is the only caller; this twin
+// exists so the tooling side answers the same walk identically, and so the agreement test in
+// config-load.test.mjs can hold the two to one behaviour.
+const CONFIG_NAMES = ['coalhearth.json', '.coalhearth.json'];
+function isFile(p) {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+export function configNotices(opts) {
+  try {
+    const cwd = (opts && opts.cwd) || process.cwd();
+    const home = (opts && opts.home) || os.homedir();
+    const ownDir = opts && opts.ownDir;
+    const root = findProjectRoot(cwd, home);
+    const { candidates, found } = resolveProjectConfig(cwd, home, ownDir);
+    const canonical = path.relative(root, candidates[0]).split(path.sep).join('/');
+    const lines = [];
+    if (found && candidates.slice(-2).includes(found)) {
+      lines.push('LEGACY: ' + found + ' is deprecated but still read; canonical = ' + canonical);
+    }
+    const known = new Set(candidates.map((c) => path.resolve(c)));
+    for (const d of ['', ...AGENT_DIR_ORDER]) {
+      for (const sub of ['', 'coal']) {
+        for (const name of CONFIG_NAMES) {
+          const p = path.join(root, d, sub, name);
+          if (!known.has(path.resolve(p)) && isFile(p)) lines.push('IGNORED: ' + p + ' is not a config path; canonical = ' + canonical);
+        }
+      }
+    }
+    return lines;
+  } catch {
+    return [];
+  }
 }
 
 function readJsonc(file) {

@@ -202,3 +202,19 @@ test('a config found at the LEGACY root path migrates to the own-dir default on 
   const cfg = JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8'));
   assert.equal(cfg.language, 'zh');
 });
+
+// UMB-133: the nested legacy shape is now a READ candidate, so a write that found its config
+// there must migrate exactly like the root legacy does -- write the canonical file, remove the
+// legacy one -- instead of quietly rewriting the deprecated path in place.
+test('UMB-133: a config found at the NESTED legacy path migrates to the own-dir default on write', (t) => {
+  const dir = sandboxProject(t);
+  const nested = path.join(dir, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(nested), { recursive: true });
+  fs.writeFileSync(nested, JSON.stringify({ language: 'auto' }));
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0);
+  assert.equal(fs.existsSync(nested), false, 'the nested legacy file is removed after a successful migrated write');
+  const cfg = JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8'));
+  assert.equal(cfg.language, 'zh');
+  assert.ok(r.stdout.includes('Migrated the project config from ' + nested), 'the migration is announced');
+});

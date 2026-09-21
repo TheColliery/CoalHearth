@@ -166,9 +166,11 @@ function main() {
   // (loadMergedConfig's safer-value-wins clamp on updateMode/autoInjectPrompt).
   //
   // READ follows projectConfigPath's own rail (own-dir -> other known agent dirs ->
-  // LEGACY root dotfile — see config-load.mjs's header for the full precedence).
-  // WRITE goes back to wherever the config was found, EXCEPT a config found at the
-  // LEGACY location migrates on THIS write to the own-dir-or-first-agent-dir default
+  // LEGACY nested .claude/.coalhearth.json -> LEGACY root dotfile — see config-load.mjs's
+  // header for the full precedence).
+  // WRITE goes back to wherever the config was found, EXCEPT a config found at EITHER
+  // LEGACY location (UMB-133 added the nested one) migrates on THIS write to the
+  // own-dir-or-first-agent-dir default
   // (`projectConfigCandidates(...)[0]`) — never a bare `.claude`, so a project that
   // only uses `.agents`/`.gemini` does not get a foreign `.claude/` planted into it.
   // Move-on-CONFIG-WRITE-only (Phoenix #5): a hook never performs this move on a mere
@@ -177,11 +179,12 @@ function main() {
   const isGlobal = globalIdx !== -1;
   if (isGlobal) args.splice(globalIdx, 1);
   const projectRoot = findProjectRoot(process.cwd());
-  const legacyPath = path.join(projectRoot, '.coalhearth.json');
+  const legacyPaths = [path.join(projectRoot, '.claude', '.coalhearth.json'), path.join(projectRoot, '.coalhearth.json')];
   const readPath = isGlobal ? globalConfigPath() : projectConfigPath(process.cwd());
+  const readIsLegacy = !isGlobal && legacyPaths.includes(readPath);
   const writePath = isGlobal
     ? readPath
-    : (readPath === legacyPath ? projectConfigCandidates(process.cwd())[0] : readPath);
+    : (readIsLegacy ? projectConfigCandidates(process.cwd())[0] : readPath);
 
   let cfg = {};
   let hadComments = false;
@@ -254,14 +257,14 @@ function main() {
   try {
     fs.mkdirSync(path.dirname(writePath), { recursive: true });
     fs.writeFileSync(writePath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-    // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy root file is
+    // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy file is
     // removed only AFTER the new-home write above succeeded, and only when this write
     // actually migrated it. Best-effort -- a failed delete here still leaves a
     // correctly-written new config; the stray legacy file is simply not cleaned up
     // this run.
-    if (readPath === legacyPath && writePath !== legacyPath) {
-      try { fs.rmSync(legacyPath, { force: true }); } catch {}
-      console.log(`Migrated the project config from ${legacyPath} to ${writePath}.`);
+    if (readIsLegacy && writePath !== readPath) {
+      try { fs.rmSync(readPath, { force: true }); } catch {}
+      console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
     }
     if (hadComments) {
       console.warn('Note: inline comments were stripped (this tool writes plain JSON). Every key stays documented in platform-configs/.coalhearth.json.');
