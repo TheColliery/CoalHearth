@@ -742,3 +742,76 @@ test('CWK-135 (a): the global path is DERIVED from the loader -- CLAUDE_CONFIG_D
     assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'malformed JSON', g)], name);
   }
 });
+
+// CWK-120 findings #2 + #3 (CodeRabbit, Major x2), verified at the live tree in BOTH twins: the merge loop resolves a
+// MIXED tier (one side a group, the other side a present non-group) as ONE ATOM, so merged.update / merged.recovery can
+// be a primitive; the post-clamp then assigned `merged.update.updateMode = ...` onto it -- a TypeError under strict mode
+// (CJS 'use strict' and ESM alike). loadConfig()/loadMergedConfig() are called with no try/catch from bin/session-start.js
+// and bin/ag-pre-invocation.js, so the throw escaped main() and killed the hook: a cloned repo could turn OFF journaling
+// and recovery with one wrong-typed key (Phoenix #4: fail-silent). TRIGGER: global {"update":{"updateMode":"off"}} plus
+// project {"update":5}.
+//
+// The bot's own fix (gate the clamp on a real group, keep the atom) stops the THROW but, taken alone, leaves the CLAMP's
+// purpose undone: the project's scalar atom REPLACES the user's global group, erasing their quiet "off" -> the consumer
+// reads no updateMode, ranks it as the schema default "ask", and the nudge the user silenced fires again. A project may
+// only QUIETEN. So for the two consent groups a present-but-non-group project value contributes NOTHING and the global
+// group stands (safer-value-wins: a malformed value cannot be quieter than a real one); the group gate is kept as a second belt.
+const BAD_TIER_VALUES = [5, 'oops', true, [1, 2], null];
+
+test('CWK-120 #2/#3: a non-object PROJECT value for a clamped group never throws (both twins), and the global consent stands', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { update: { updateMode: 'off' }, recovery: { autoInjectPrompt: false } });
+  for (const bad of BAD_TIER_VALUES) {
+    put(root, path.join('.claude', 'coal', 'coalhearth.json'), { update: bad, recovery: bad });
+    for (const [name, api] of CJS_ESM) {
+      const load = api === twin ? api.loadMergedConfig : api.loadConfig;
+      let merged;
+      assert.doesNotThrow(() => { merged = load({ cwd: sub, home }); }, name + ' ' + JSON.stringify(bad));
+      assert.equal(merged.update.updateMode, 'off', name + ' ' + JSON.stringify(bad) + ': the user global "off" survives a wrong-typed project group');
+      assert.equal(merged.recovery.autoInjectPrompt, false, name + ' ' + JSON.stringify(bad) + ': the user global autoInjectPrompt=false survives too');
+    }
+  }
+});
+
+test('CWK-120 #2/#3: a non-object GLOBAL value for a clamped group never throws either, and a real project group is still clamped', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { update: 'oops', recovery: 7 });
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { update: { updateMode: 'auto' }, recovery: { autoInjectPrompt: true } });
+  for (const [name, api] of CJS_ESM) {
+    const load = api === twin ? api.loadMergedConfig : api.loadConfig;
+    let merged;
+    assert.doesNotThrow(() => { merged = load({ cwd: sub, home }); }, name);
+    assert.equal(merged.update.updateMode, 'ask', name + ': a non-group global ranks as the schema default, so a project "auto" is clamped to it (R2)');
+    assert.equal(merged.recovery.autoInjectPrompt, true, name);
+  }
+});
+
+test('CWK-120 #2/#3: with NO global at all a wrong-typed project group is kept as-is and never throws', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { update: 5, recovery: 'no' });
+  for (const [name, api] of CJS_ESM) {
+    const load = api === twin ? api.loadMergedConfig : api.loadConfig;
+    let merged;
+    assert.doesNotThrow(() => { merged = load({ cwd: sub, home }); }, name);
+    assert.equal(merged.update, 5, name);
+    assert.equal(merged.recovery, 'no', name);
+  }
+});
+
+test('CWK-120 #2/#3: only the two CONSENT groups get this rule -- another group keeps the r29 one-atom project-wins (unchanged)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { atomicityRetries: 4 } });
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: 9 });
+  for (const [name, api] of CJS_ESM) {
+    const load = api === twin ? api.loadMergedConfig : api.loadConfig;
+    assert.equal(load({ cwd: sub, home }).journal, 9, name);
+  }
+});
