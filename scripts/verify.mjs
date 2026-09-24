@@ -221,6 +221,11 @@ try {
   const { projectConfigCandidates } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'config-load.mjs')).href);
   const { execFileSync, spawnSync } = await import('node:child_process');
   const os = await import('node:os');
+  // CWK-133: this gate runs under .githooks/pre-commit, i.e. as a git-hook child, where a linked
+  // worktree exports an absolute GIT_DIR that overrides cwd. Both git spawns below take a CLEAN env
+  // (whole GIT_* family stripped, ceiling at the repo's parent) -- never process.env.
+  const { gitEnv } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env.mjs')).href);
+  const REPO_GIT_ENV = gitEnv(path.dirname(repo));
 
   // io PRIMITIVES for collectSurfaces() -- plain fs/path, no scripts/lib import, so these
   // are safe as ordinary functions rather than needing the dynamic-import treatment
@@ -265,7 +270,7 @@ try {
     // path under the default-on `core.quotepath`, so a Thai-named tracked file would round-
     // trip here as the literal 8-character octal-escaped string, never matching its own real
     // path.
-    trackedList = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean);
+    trackedList = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: REPO_GIT_ENV }).split('\0').filter(Boolean);
   } catch (e) {
     // NAME THE CAUSE THE PROBE ACTUALLY DETERMINED (INSPECT LOW-1). The first wording said
     // "git is unavailable" for both cases; measured in this room's own fixture -- a plain
@@ -325,7 +330,7 @@ try {
   const PROBE_SUFFIX = '/.pointer-check-probe';
   applyCheckIgnoreProbe({
     toProbe, PROBE_SUFFIX, ignoredRoots, fail,
-    runCheckIgnore: (input) => spawnSync('git', ['check-ignore', '--stdin'], { cwd: repo, encoding: 'utf8', input }),
+    runCheckIgnore: (input) => spawnSync('git', ['check-ignore', '--stdin'], { cwd: repo, encoding: 'utf8', input, env: REPO_GIT_ENV }),
   });
 
   // CHANGELOG.md NOW CARRIES `historyOnly: true` (DEFAULT_SURFACE_PLAN, CWK-090 fix 3) --

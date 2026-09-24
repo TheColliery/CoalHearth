@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from './lib/git-env.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -39,8 +40,8 @@ function seed(tmp) {
   for (const f of COPY_FILES) fs.cpSync(path.join(repo, f), path.join(tmp, f));
 }
 
-function run(tmp) {
-  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8' });
+function run(tmp, env) {
+  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8', ...(env ? { env } : {}) });
 }
 
 test('verify.mjs negative path: an over-cap .claude-plugin/plugin.json description FAILs the gate', () => {
@@ -92,7 +93,10 @@ test('verify.mjs negative path: a truthy non-string plugin.json description FAIL
 // the comments/hash-comments rows out of collectSurfaces) are the ones proven to redden them --
 // see the coder's own return for the mutation log, not restated here.
 function gitInit(tmp) {
-  const opts = { cwd: tmp, encoding: 'utf8' };
+  // CWK-133: the whole GIT_* family stripped and a ceiling at the sandbox's parent, so a hook
+  // that exported an absolute GIT_DIR (a linked worktree's) can never redirect this fixture onto
+  // the real enclosing repo.
+  const opts = { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) };
   spawnSync('git', ['init', '-q', '.'], opts);
   // Local, throwaway identity -- never touches the operator's own global git config.
   spawnSync('git', ['config', 'user.email', 'ci@coalhearth.invalid'], opts);
@@ -164,7 +168,7 @@ test('verify.mjs pointer-drift block FAILs loud when git check-ignore cannot run
     // bypasses a PATH-prepended .cmd/shebang git shim and resolves straight to the real
     // binary regardless of PATH order (r31 BUILD1) -- core.bare sidesteps that dead end
     // entirely by making the REAL git binary itself the one that refuses.
-    spawnSync('git', ['config', 'core.bare', 'true'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['config', 'core.bare', 'true'], { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) });
 
     const r = run(tmp);
     assert.equal(r.status, 1,
@@ -178,4 +182,61 @@ test('verify.mjs pointer-drift block FAILs loud when git check-ignore cannot run
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// CWK-133 -- the git fixtures and the gate's own git children must not follow an ambient
+// absolute GIT_DIR. Inside a LINKED worktree a git hook exports one, and it overrides both cwd and
+// GIT_CEILING_DIRECTORIES: a fixture's `git init` then re-initialises the REAL enclosing repo and
+// its `git config` writes there (CoalFace measured core.bare=true on its own repo, 2026-09-23).
+// The sandbox stands in for that enclosing repo. The redirect is universal; the core.bare FLIP is
+// platform-conditional (CoalTipple f0b95b9), so this asserts the universal leg only and never
+// depends on the flip.
+// `bare` marks the enclosing repo core.bare=true AFTER its index is built: git ls-files still answers from
+// the index, while git check-ignore refuses outright ("must be run in a work tree"), so a check-ignore
+// spawn that follows the ambient GIT_DIR instead of THIS fixture fails loud -- the second git child the
+// gate spawns is pinned by the same test as the first.
+function mkSandboxRepo(t, { bare = false } = {}) {
+  const sandbox = mkTmp();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const g = (args) => spawnSync('git', args, { cwd: sandbox, encoding: 'utf8', env: gitEnv(path.dirname(sandbox)) });
+  assert.equal(g(['init', '-q', '.']).status, 0, 'setup: the sandbox repo must init cleanly');
+  fs.writeFileSync(path.join(sandbox, 'unrelated.txt'), 'not ours\n');
+  assert.equal(g(['add', 'unrelated.txt']).status, 0, 'setup: the sandbox repo tracks one unrelated file');
+  if (bare) assert.equal(g(['config', 'core.bare', 'true']).status, 0, 'setup: the sandbox repo is marked bare');
+  return { sandbox, gitDir: path.join(sandbox, '.git'), configOf: () => fs.readFileSync(path.join(sandbox, '.git', 'config')) };
+}
+
+function plantGitDir(t, gitDir) {
+  const saved = process.env.GIT_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; });
+  process.env.GIT_DIR = gitDir;
+}
+
+test('CWK-133: the git fixture never touches another repo when an absolute GIT_DIR is ambient -- it gets its own .git, the other repo config is byte-unchanged', (t) => {
+  const { gitDir, configOf } = mkSandboxRepo(t);
+  const before = configOf();
+  const fixture = mkTmp();
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  plantGitDir(t, gitDir);
+
+  gitInit(fixture);
+
+  assert.ok(before.equals(configOf()), 'the enclosing repo config must be byte-unchanged (a redirected fixture writes user.email/user.name into it)');
+  assert.ok(fs.existsSync(path.join(fixture, '.git')), 'the fixture must get the .git its caller asked for, not be redirected onto the enclosing repo');
+});
+
+test('CWK-133: verify.mjs asks git about ITS OWN repo when an absolute GIT_DIR is ambient -- the gate is a git-hook child and must not follow it (ls-files AND check-ignore)', (t) => {
+  const { gitDir } = mkSandboxRepo(t, { bare: true });
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  gitInit(tmp);
+
+  const clean = run(tmp);
+  assert.equal(clean.status, 0, `setup: a pristine committed fixture must PASS, got:\n${clean.stdout}${clean.stderr}`);
+
+  const poisoned = run(tmp, { ...process.env, GIT_DIR: gitDir });
+  assert.equal(poisoned.status, 0,
+    `an ambient GIT_DIR must not change the verdict -- the tracked list must come from THIS fixture, not the enclosing repo:\n${poisoned.stdout}${poisoned.stderr}`);
+  assert.doesNotMatch(poisoned.stdout, /UNTRACKED|NOT CHECKED/);
 });

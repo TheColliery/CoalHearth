@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from './git-env.mjs';
 import { githubSlug, renderInline, extractHeadings, headingAnchors, extractCitations, checkFile, checkFiles, Anchorer, buildTrackedIndex, classifyTrackedIndexResult } from './link-check.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -116,6 +117,11 @@ test('extractCitations: external targets (scheme URIs) are extracted but resolve
 
 // -- checkFile/checkFiles, against a small in-memory-shaped sandbox --------------------
 
+// One place every fixture git spawn goes through (CWK-133 -- the whole GIT_* family is handled here).
+function git(cwd, args) {
+  return spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv(path.dirname(cwd)) });
+}
+
 function mkTmp(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-link-check-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -163,12 +169,12 @@ test('checkFile: a root-relative (leading /) target resolves against the repo ro
 // identity to commit with.
 test('checkFile: a target that exists on disk but is UNTRACKED is a broken-link finding, never a clean pass', (t) => {
   const tmp = mkTmp(t);
-  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['init', '-q', '.']);
   fs.writeFileSync(path.join(tmp, 'tracked.md'), '# Tracked\n');
   fs.writeFileSync(path.join(tmp, 'untracked.md'), '# Untracked\n');
-  spawnSync('git', ['add', 'tracked.md'], { cwd: tmp, encoding: 'utf8' }); // NOT untracked.md
+  git(tmp, ['add', 'tracked.md']); // NOT untracked.md
   fs.writeFileSync(path.join(tmp, 'source.md'), '[ok](./tracked.md)\n[bad](./untracked.md)\n');
-  spawnSync('git', ['add', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['add', 'source.md']);
 
   const trackedIndex = buildTrackedIndex(tmp);
   assert.ok(trackedIndex, 'buildTrackedIndex must succeed inside a real git repo');
@@ -189,12 +195,12 @@ test('checkFile: with no trackedIndex supplied, tracked-checking is skipped (exi
 
 test('buildTrackedIndex: r34 FIXBACK2 LOW-3 -- a Thai-named tracked file resolves via -z, never a false UNTRACKED from core.quotepath C-quoting', (t) => {
   const tmp = mkTmp(t);
-  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['init', '-q', '.']);
   fs.writeFileSync(path.join(tmp, 'ไทย.md'), '# Thai\n');
   fs.writeFileSync(path.join(tmp, 'plain.md'), '# Plain\n');
-  spawnSync('git', ['add', 'ไทย.md', 'plain.md'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['add', 'ไทย.md', 'plain.md']);
   fs.writeFileSync(path.join(tmp, 'source.md'), '[a](./ไทย.md)\n[b](./plain.md)\n');
-  spawnSync('git', ['add', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['add', 'source.md']);
 
   const trackedIndex = buildTrackedIndex(tmp);
   assert.ok(trackedIndex && !trackedIndex.fatal, 'buildTrackedIndex must succeed inside a real git repo');
@@ -244,12 +250,12 @@ test('classifyTrackedIndexResult: git ran and the command failed for any OTHER r
 
 test('CLI: r34 FIXBACK2 E2 -- main() actually wires trackedIndex into checkFiles; a target on disk but UNTRACKED is reported, never silently passed', (t) => {
   const tmp = mkTmp(t);
-  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['init', '-q', '.']);
   fs.writeFileSync(path.join(tmp, 'tracked.md'), '# Tracked\n');
   fs.writeFileSync(path.join(tmp, 'untracked.md'), '# Untracked\n');
-  spawnSync('git', ['add', 'tracked.md'], { cwd: tmp, encoding: 'utf8' }); // NOT untracked.md
+  git(tmp, ['add', 'tracked.md']); // NOT untracked.md
   fs.writeFileSync(path.join(tmp, 'source.md'), '[bad](./untracked.md)\n');
-  spawnSync('git', ['add', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['add', 'source.md']);
 
   const r = spawnSync(process.execPath, [engine, 'source.md'], { cwd: tmp, encoding: 'utf8' });
   assert.equal(r.status, 1, `expected exit 1, got ${r.status}:\n${r.stdout}${r.stderr}`);
@@ -266,20 +272,22 @@ test('CLI: r34 FIXBACK2 MEDIUM-B case 1 -- no git repository at all degrades to 
   assert.match(r.stdout, /tracked-check degraded to exists-only/, 'the degrade must be disclosed on stdout, not silent');
 });
 
-test('CLI: r34 FIXBACK2 MEDIUM-B case 2 -- git present but the command fails (broken GIT_DIR) FAILS LOUD, never a clean pass', (t) => {
+test('CLI: r34 FIXBACK2 MEDIUM-B case 2 -- git present but the command fails (corrupt index) FAILS LOUD, never a clean pass', (t) => {
   const tmp = mkTmp(t);
-  spawnSync('git', ['init', '-q', '.'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['init', '-q', '.']);
   fs.writeFileSync(path.join(tmp, 'target.md'), '# Target\n');
   fs.writeFileSync(path.join(tmp, 'source.md'), '[ok](./target.md)\n');
-  spawnSync('git', ['add', 'target.md', 'source.md'], { cwd: tmp, encoding: 'utf8' });
+  git(tmp, ['add', 'target.md', 'source.md']);
 
-  // r33's own reproduction (r34-inspect-return.md): GIT_DIR pointed at a path that does not
-  // exist -- git IS on PATH and invocable, but the command itself fails. Pre-fix: silent
-  // `null` degrade, "0 finding(s)", exit 0, no notice of any kind.
-  const r = spawnSync(process.execPath, [engine, 'source.md'], {
-    cwd: tmp, encoding: 'utf8',
-    env: { ...process.env, GIT_DIR: path.join(os.tmpdir(), 'coalhearth-r34-nonexistent-gitdir') },
-  });
+  // r33's reproduction was a GIT_DIR aimed at a path that does not exist: git IS on PATH and
+  // invocable, but the command itself fails. Pre-fix that was a silent `null` degrade, "0
+  // finding(s)", exit 0. CWK-133 made the engine STRIP every ambient GIT_* key from its git child
+  // (a hook-exported GIT_DIR must never redirect it), so a hostile GIT_DIR is no longer a lever
+  // against the engine -- the SAME class (git ran and failed for a reason other than "no
+  // repository") is reached instead by corrupting the index, which the engine cannot strip.
+  // Measured: `git ls-files -z` exits 128, "fatal: .git/index: index file smaller than expected".
+  fs.writeFileSync(path.join(tmp, '.git', 'index'), 'garbage-not-an-index');
+  const r = spawnSync(process.execPath, [engine, 'source.md'], { cwd: tmp, encoding: 'utf8' });
   assert.equal(r.status, 1, `expected exit 1 (FAIL LOUD), got ${r.status}:\n${r.stdout}${r.stderr}`);
   assert.doesNotMatch(r.stdout, /^0 finding\(s\)/m, 'must never read as a clean pass');
   assert.match(r.stderr, /git ls-files exited/);
@@ -650,4 +658,50 @@ test('CWK-098 slug oracle: duplicate-heading history rows, replayed in document 
     a.anchor(githubSlug('Duplicate Heading'));
     assert.equal(a.anchor(githubSlug('Duplicate Heading 1')), 'duplicate-heading-1-1');
   });
+});
+
+// -- CWK-133: the read-only tracked-index spawn and every fixture spawn ignore an ambient GIT_DIR ----
+// Inside a LINKED worktree a git hook exports an absolute GIT_DIR, which overrides cwd. The
+// sandbox repo stands in for that enclosing repo: it tracks one UNRELATED file. The redirect is
+// universal; the core.bare flip is platform-conditional (CoalTipple f0b95b9), so only the universal
+// leg is asserted.
+function mkSandboxRepo(t) {
+  const sandbox = mkTmp(t);
+  git(sandbox, ['init', '-q', '.']);
+  fs.writeFileSync(path.join(sandbox, 'unrelated.txt'), 'not ours\n');
+  git(sandbox, ['add', 'unrelated.txt']);
+  return { gitDir: path.join(sandbox, '.git'), configOf: () => fs.readFileSync(path.join(sandbox, '.git', 'config')) };
+}
+
+function plantGitDir(t, gitDir) {
+  const saved = process.env.GIT_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; });
+  process.env.GIT_DIR = gitDir;
+}
+
+test('CWK-133: buildTrackedIndex lists THIS repo\'s tracked files when an absolute GIT_DIR is ambient, never the enclosing repo\'s', (t) => {
+  const { gitDir } = mkSandboxRepo(t);
+  const tmp = mkTmp(t);
+  git(tmp, ['init', '-q', '.']);
+  fs.writeFileSync(path.join(tmp, 'target.md'), '# Target\n');
+  git(tmp, ['add', 'target.md']);
+  plantGitDir(t, gitDir);
+
+  const idx = buildTrackedIndex(tmp);
+  assert.ok(idx && !idx.fatal, `buildTrackedIndex must succeed, got ${JSON.stringify(idx)}`);
+  assert.ok(idx.tracked.has('target.md'), 'the index must be THIS fixture\'s, which tracks target.md');
+  assert.ok(!idx.tracked.has('unrelated.txt'), 'the enclosing repo\'s tracked file must never leak into the index');
+});
+
+test('CWK-133: the link-check fixture git() helper never touches another repo when an absolute GIT_DIR is ambient', (t) => {
+  const { gitDir, configOf } = mkSandboxRepo(t);
+  const before = configOf();
+  const tmp = mkTmp(t);
+  plantGitDir(t, gitDir);
+
+  git(tmp, ['init', '-q', '.']);
+  git(tmp, ['config', 'user.email', 'ci@coalhearth.invalid']);
+
+  assert.ok(before.equals(configOf()), 'the enclosing repo config must be byte-unchanged');
+  assert.ok(fs.existsSync(path.join(tmp, '.git')), 'the fixture must get its own .git, not be redirected onto the enclosing repo');
 });
