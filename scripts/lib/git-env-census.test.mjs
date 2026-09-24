@@ -313,3 +313,27 @@ test('L-1: fewer spawns than the exemption counts is stale, exactly as none is',
   assert.equal(r.unusedExemptions[0].matched, 1);
   assert.equal(r.unusedExemptions[0].want, 2);
 });
+
+// -- R8 FIXBACK 3: every rule that reads PAST the first argument must survive the ordinary formatting of a call --------
+// The first argument was located by `1 + first.length`, but `first` is trimmed, so a space after the paren or a newline
+// (the normal multi-line format) shifted every later read: the shell:true argument scan and the `sh -c '...'` string
+// scan read 0 findings. Each shape below is run tight, with a spaced paren, multi-line, and CRLF multi-line.
+const FORMATS = { tight: ['', ''], 'spaced paren': [' ', ' '], multiline: ['\n  ', '\n  '], 'CRLF multiline': ['\r\n  ', '\r\n  '] };
+const READS_PAST_FIRST = [
+  ['git only in shell:true arguments', (p, s) => `${SP}(${p}'echo',${s}['x', '&&', 'git', 'init'],${s}{ shell: true });`, 1],
+  ['sh -c with git in its command string', (p, s) => `${SP}(${p}'sh',${s}['-c', 'git init'],${s}{ cwd: d });`, 1],
+  ['bash -lc chained git', (p, s) => `${SP}(${p}'bash',${s}['-lc', 'cd x && git init'],${s}{ cwd: d });`, 1],
+  ['shell:true on a git binary', (p, s) => `${SP}(${p}'git.exe',${s}['init'],${s}{ shell: true });`, 1],
+  ['a plain git with no env', (p, s) => `${SP}(${p}'git',${s}['init'],${s}{ cwd: d });`, 1],
+  ['a plain git taking env from gitEnv() alone', (p, s) => `${SP}(${p}'git',${s}['init'],${s}{ env: gitEnv(d) });`, 0],
+  ['sh -c that runs no git (control)', (p, s) => `${SP}(${p}'sh',${s}['-c', 'echo hi'],${s}{ cwd: d });`, 0],
+  ['git as data with no shell (control)', (p, s) => `${SP}(${p}'echo',${s}['git', 'init'],${s}{ cwd: d });`, 0],
+  ['git as data with shell: false (control)', (p, s) => `${SP}(${p}'echo',${s}['git'],${s}{ shell: false });`, 0],
+];
+for (const [name, build, want] of READS_PAST_FIRST) {
+  test('F3: ' + name + ' reads the same however the call is formatted', () => {
+    for (const [fmt, [p, s]] of Object.entries(FORMATS)) {
+      assert.equal(raw(`${BINDINGS}${build(p, s)}\n`).findings.length, want, `${name} / ${fmt}`);
+    }
+  });
+}

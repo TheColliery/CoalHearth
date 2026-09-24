@@ -225,7 +225,11 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
         continue;
       }
       const callText = text.slice(openIdx, closeIdx + 1);
-      const first = readExpr(callText, 1, callText.length).trim();
+      // rawFirst is the argument WITH its surrounding whitespace, so `end` is where it really stops: a space after
+      // the paren or a newline (the normal multi-line format) must not shift every read past it (R8 FIXBACK 3).
+      const rawFirst = readExpr(callText, 1, callText.length);
+      const first = rawFirst.trim();
+      const end = 1 + rawFirst.length;
       if (first === 'process.execPath') { nodeChildren++; continue; }
       const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(first);
       if (!lit) {
@@ -233,13 +237,13 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
         continue;
       }
       const cmd = lit[2];
-      const rest = callText.slice(1 + first.length);
+      const rest = callText.slice(end);
       const base = cmd.split(/[\\/]/).pop();
       let isGit = false;
       if (SHELL_STRING_FNS.has(fn) || /\bshell\s*:(?!\s*false\b)/.test(rest)) { // (?!\s*false) not \s*(?!false): the latter backtracks off the space and reads `shell: false` as a shell
         // A command STRING run by a shell. With `shell:` set Node JOINS the arguments array into that
         // command line, so git named only in the arguments is git too (an array literal; a variable is named open).
-        const second = readExpr(callText, 2 + first.length, callText.length).trim();
+        const second = readExpr(callText, end + 1, callText.length).trim();
         const argStrings = second.startsWith('[') ? (second.match(STRING_RE) || []) : [];
         isGit = shellMentionsGit(cmd) || argStrings.some((s) => shellMentionsGit(s.slice(1, -1)));
       } else if (GIT_BASENAME.test(base)) isGit = true; // git, however the binary is spelled
