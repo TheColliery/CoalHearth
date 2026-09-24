@@ -83,6 +83,23 @@ export function checkDist(distRoot = dist) {
       if (!fs.existsSync(path.join(repo, rel))) out.push(`orphan in plugin/ (no source): ${rel}`);
     }
   }
+  // CWK-120 #9: a FILE-shaped DIST_ITEM (.claude-plugin/plugin.json) accounts for ITS OWN path only. Its parent directory
+  // is allowed as a top-level entry below, so without this an extra file beside it in the dist matched no DIST_ITEM,
+  // appeared in neither loop above, and passed. Its parent must hold exactly the declared names and nothing else.
+  const allowedByDir = new Map();
+  for (const rel of DIST_ITEMS) {
+    const dir = path.dirname(rel);
+    if (dir === '.') continue;
+    if (!allowedByDir.has(dir)) allowedByDir.set(dir, new Set());
+    allowedByDir.get(dir).add(path.basename(rel));
+  }
+  for (const [dir, allowed] of allowedByDir) {
+    const abs = path.join(distRoot, dir);
+    if (!fs.existsSync(abs)) continue;
+    for (const name of fs.readdirSync(abs)) {
+      if (!allowed.has(name)) out.push(`orphan in plugin/ (no DIST_ITEM): ${path.join(dir, name)}`);
+    }
+  }
   const allowedTops = new Set(DIST_ITEMS.map((rel) => rel.split(path.sep)[0]));
   if (fs.existsSync(distRoot)) {
     for (const name of fs.readdirSync(distRoot)) {
