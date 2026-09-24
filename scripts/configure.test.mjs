@@ -302,3 +302,48 @@ test('CWK-120 (a): the same guard on the GLOBAL layer (--global)', (t) => {
   assert.equal(fs.readFileSync(g + '.bak', 'utf8'), '[1,2,3]');
   assert.deepEqual(JSON.parse(fs.readFileSync(g, 'utf8')), { language: 'th' });
 });
+
+// R8 FIXBACK L4 (the head's ruling on pending decision 2): keep backup-and-rebuild for a malformed or non-object body,
+// but NEVER write when the backup did not land. The branch was pre-existing for malformed bodies (warn "Overwriting"
+// and write anyway); the R8 belt made it reachable for a new body class and the CHANGELOG promised "always backed up".
+// INSPECT's shape: a [1,2] config beside a .bak that is a DIRECTORY -- the backup copy throws.
+for (const [what, body] of [['a non-object body', '[1,2]'], ['a malformed body', '{ this is not json'], ['a JSON string body', '"str"']]) {
+  test('L4: ' + what + ' whose .bak cannot be written is REFUSED -- nothing written, the original byte-exact, exit 1, a message that says why and what to do', (t) => {
+    const dir = sandboxProject(t);
+    const p = ownDirConfig(dir);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+    fs.mkdirSync(p + '.bak'); // the backup target is a directory: copyFileSync throws
+    const r = run(dir, ['--language', 'th']);
+    assert.equal(r.status, 1, 'exit 1: ' + r.stdout + r.stderr);
+    assert.equal(fs.readFileSync(p, 'utf8'), body, 'the ORIGINAL is byte-exact -- nothing was written');
+    assert.ok(fs.statSync(p + '.bak').isDirectory(), 'the .bak path was left alone');
+    assert.doesNotMatch(r.stdout, /Successfully updated/, 'no success line for a write that did not happen');
+    assert.match(r.stderr, /not written|nothing was written/i, 'says what happened');
+    assert.match(r.stderr, /\.bak/, 'names the backup path');
+    assert.match(r.stderr, /remove|rename|free|permission/i, 'says what to do next (Standard System 4)');
+  });
+}
+
+test('L4: the same refusal on the GLOBAL layer (--global)', (t) => {
+  const dir = sandboxProject(t);
+  const home = sandboxHome(t);
+  const g = path.join(home, '.coalhearth.json');
+  fs.writeFileSync(g, '[1,2,3]');
+  fs.mkdirSync(g + '.bak');
+  const r = run(dir, ['--global', '--language', 'th'], { CLAUDE_CONFIG_DIR: home });
+  assert.equal(r.status, 1);
+  assert.equal(fs.readFileSync(g, 'utf8'), '[1,2,3]');
+  assert.doesNotMatch(r.stdout, /Successfully updated/);
+});
+
+test('L4: a backup that DOES land is unchanged behaviour -- .bak holds the original, the file is rebuilt, exit 1', (t) => {
+  const dir = sandboxProject(t);
+  const p = ownDirConfig(dir);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, '[1,2]');
+  const r = run(dir, ['--language', 'th']);
+  assert.equal(r.status, 1);
+  assert.equal(fs.readFileSync(p + '.bak', 'utf8'), '[1,2]');
+  assert.deepEqual(JSON.parse(fs.readFileSync(p, 'utf8')), { language: 'th' });
+});

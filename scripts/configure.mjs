@@ -213,13 +213,18 @@ function main() {
     } catch (e) {
       // Fail loud (scripts-quality.md 1): a malformed config we silently overwrite is a
       // partial failure the user must notice -- flag the non-zero exit even though the
-      // run continues from defaults (the old config is backed up where possible).
+      // run continues from defaults.
       process.exitCode = 1;
+      const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
       try {
         fs.copyFileSync(readPath, readPath + '.bak');
-        console.warn(`Warning: existing config ${notObject ? 'is valid JSON but not a JSON object' : 'is malformed'} — backed it up to ${readPath}.bak and rebuilding.`);
-      } catch {
-        console.warn(`Warning: existing config ${notObject ? 'is valid JSON but not a JSON object' : 'is malformed'}. Overwriting.`);
+        console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
+      } catch (bakErr) {
+        // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
+        // file the user wrote. Refuse: nothing written, the original stays byte-exact, exit 1, and the message says what
+        // happened and what to do next (Standard System 4). Keyed on the errno CODE, never its message (node/runtime.md 7).
+        console.error(`Error: existing config ${why}, and it could not be backed up to ${readPath}.bak (${(bakErr && bakErr.code) || 'error'}) \u2014 nothing was written and ${readPath} is untouched. Remove or rename ${readPath}.bak (it may be a directory), or free the space/permission it needs, then run again.`);
+        return;
       }
     }
   }
