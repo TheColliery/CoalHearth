@@ -8,6 +8,12 @@ import * as twin from './config-load.mjs'; // UMB-133: namespace import so a mis
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
+// CWK-120 finding #6 (CodeRabbit, Minor), verified at the live tree: the global config path honours
+// CLAUDE_CONFIG_DIR BEFORE the `home` argument, and nothing here cleared it -- on a machine (or CI image) that sets it,
+// the "global" tier resolved OUTSIDE the sandbox home and 25 cases read a foreign .coalhearth.json and failed.
+// Cleared once per file: each node --test file runs in its own process, so this cannot leak into another suite.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 function mkSandboxHome() {
   // realpath the sandbox: findProjectRoot compares PHYSICAL paths (macOS tmpdir is a
   // /var -> /private/var symlink), so the test's dirs must be physical to agree on every OS.
