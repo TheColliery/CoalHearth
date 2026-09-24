@@ -270,3 +270,35 @@ test('UMB-133 (macOS class): the migration announcement holds when the sandbox i
   const a = announcedMigration(r.stdout);
   assert.notEqual(path.dirname(a.from), path.dirname(nested), 'the announcement is the physical spelling, not the link one');
 });
+
+// CWK-120 ride-along (a): a parsed body that is not a plain object is NEVER accepted as the config. configure.mjs is
+// a WRITER, so the old `parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}` was worse than a
+// silent read: a config file holding `[]`, `"str"`, `42`, `null` or `true` was treated as an EMPTY config, exit 0,
+// and OVERWRITTEN with no backup and no notice -- a user's file replaced without a word. It now takes the same
+// recovery a malformed body takes (back up to .bak, rebuild from defaults, exit 1), with a message that says WHAT
+// was wrong. The conductor's own parse (lib/load-config.js readConfigFile) already refuses a non-object and REPORTS it
+// as the UMB-174 (b) reason "not a JSON object" (UNREADABLE line); it never merges one either.
+for (const body of ['[]', '["a","b"]', '"str"', '42', 'null', 'true']) {
+  test('CWK-120 (a): a config file holding ' + body + ' is backed up + rebuilt, never accepted or merged into (exit 1)', (t) => {
+    const dir = sandboxProject(t);
+    const p = ownDirConfig(dir);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+    const r = run(dir, ['--language', 'en']);
+    assert.equal(r.status, 1, 'a non-object body reports the non-zero it found, like a malformed one: ' + r.stdout + r.stderr);
+    assert.equal(fs.readFileSync(p + '.bak', 'utf8'), body, 'the ORIGINAL file is preserved byte-for-byte in .bak, not silently lost');
+    assert.match(r.stderr, /not a JSON object/, 'the warning names what was wrong');
+    assert.deepEqual(JSON.parse(fs.readFileSync(p, 'utf8')), { language: 'en' }, 'rebuilt from defaults + the requested flag only -- no array element or scalar merged in');
+  });
+}
+
+test('CWK-120 (a): the same guard on the GLOBAL layer (--global)', (t) => {
+  const dir = sandboxProject(t);
+  const home = sandboxHome(t);
+  const g = path.join(home, '.coalhearth.json');
+  fs.writeFileSync(g, '[1,2,3]');
+  const r = run(dir, ['--global', '--language', 'th'], { CLAUDE_CONFIG_DIR: home });
+  assert.equal(r.status, 1);
+  assert.equal(fs.readFileSync(g + '.bak', 'utf8'), '[1,2,3]');
+  assert.deepEqual(JSON.parse(fs.readFileSync(g, 'utf8')), { language: 'th' });
+});

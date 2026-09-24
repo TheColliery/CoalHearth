@@ -200,10 +200,16 @@ function main() {
     rawConfig = content;
   } catch {}
   if (rawConfig !== null) {
+    let notObject = false;
     try {
       hadComments = rawConfig.includes('//');
       const parsed = parseJsonc(rawConfig); // proto-pollution-guarded parse (jsonc.mjs)
-      cfg = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      // CWK-120 ride-along (a): valid JSON that is not a plain object ([], "str", 42, null, true) is NEVER
+      // accepted as the config -- and this is a WRITER: the old `... ? parsed : {}` fallback treated it as
+      // an empty config and OVERWROTE the file with no backup and no notice. It takes the malformed
+      // recovery below instead (back up, rebuild from defaults, exit 1), with an accurate message.
+      if (!(parsed && typeof parsed === 'object' && !Array.isArray(parsed))) { notObject = true; throw new Error('not a JSON object'); }
+      cfg = parsed;
     } catch (e) {
       // Fail loud (scripts-quality.md 1): a malformed config we silently overwrite is a
       // partial failure the user must notice -- flag the non-zero exit even though the
@@ -211,9 +217,9 @@ function main() {
       process.exitCode = 1;
       try {
         fs.copyFileSync(readPath, readPath + '.bak');
-        console.warn(`Warning: existing config is malformed — backed it up to ${readPath}.bak and rebuilding.`);
+        console.warn(`Warning: existing config ${notObject ? 'is valid JSON but not a JSON object' : 'is malformed'} — backed it up to ${readPath}.bak and rebuilding.`);
       } catch {
-        console.warn('Warning: existing config is malformed. Overwriting.');
+        console.warn(`Warning: existing config ${notObject ? 'is valid JSON but not a JSON object' : 'is malformed'}. Overwriting.`);
       }
     }
   }
