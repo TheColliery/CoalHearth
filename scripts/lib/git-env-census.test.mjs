@@ -282,3 +282,34 @@ test('M-1: no new false positive -- a path or word that merely CONTAINS git is n
     assert.deepEqual(raw(`${BINDINGS}${ES}('${cmd}', { cwd: d });\n`).findings, [], cmd);
   }
 });
+
+// -- R8 FIXBACK 2 LOW-1: an exemption carries an EXPECTED COUNT, so a second matching spawn in the same file fails ------------
+const TWICE = HAZARD + `const git2 = (cwd, args, env) => ${SP}('git', ['init'], { cwd, env: env || gitEnv(root) });\n`;
+
+test('L-1: a SECOND spawn with the exempted expression in the same file is a finding, not a silent widening', () => {
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE }], { exemptions: EXEMPT });
+  assert.equal(r.gitSpawns.length, 2);
+  assert.equal(r.exempt.length, 1, 'the exemption covers exactly the one spawn it counts');
+  assert.equal(r.findings.length, 1, 'the extra spawn FAILs');
+  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:\d+ /);
+  assert.match(r.findings[0], /allows 1 spawn/);
+});
+
+test('L-1: an exemption that states count 2 covers two spawns, and a third fails', () => {
+  const two = [{ ...EXEMPT[0], count: 2 }];
+  const ok2 = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE }], { exemptions: two });
+  assert.deepEqual(ok2.findings, []);
+  assert.equal(ok2.exempt.length, 2);
+  assert.deepEqual(ok2.unusedExemptions, []);
+  const three = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE + `const git3 = () => ${SP}('git', [], { env: env || gitEnv(root) });\n` }], { exemptions: two });
+  assert.equal(three.findings.length, 1);
+});
+
+test('L-1: fewer spawns than the exemption counts is stale, exactly as none is', () => {
+  const two = [{ ...EXEMPT[0], count: 2 }];
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: two });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.unusedExemptions.length, 1);
+  assert.equal(r.unusedExemptions[0].matched, 1);
+  assert.equal(r.unusedExemptions[0].want, 2);
+});

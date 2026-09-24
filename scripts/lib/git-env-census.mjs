@@ -20,8 +20,9 @@
 // EXEMPTIONS are explicit, exact, COUNTED and PRINTED -- never a silent pass. GIT_ENV_EXEMPTIONS
 // (below) names a file, the exact env expression, and the reason. The one entry is the hazard proof
 // in git-env.test.mjs, which feeds a deliberately poisoned GIT_DIR to reproduce the incident inside a
-// sandbox. An exemption that no longer matches a spawn is reported as UNUSED, and the gate fails on
-// it, so an entry cannot outlive its spawn and rot into a blanket pass.
+// sandbox. Each entry carries the COUNT of spawns it covers: an exemption that matches fewer (none at all
+// included) is reported as UNUSED and the gate fails on it, and a spawn beyond the count is a finding, so an
+// entry can neither outlive its spawn nor widen to cover a new one (R8 FIXBACK 2 LOW-1).
 //
 // It is TEXTUAL, not a parser. What it sees:
 //   - calls to the child_process functions a file binds: a destructured import or require (with `as`
@@ -52,12 +53,14 @@
 // The enumeration is NOT walked here -- scripts/verify.mjs feeds it the same surfaces the pointer
 // gate walks (see the wiring there).
 
-// The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised). The
-// reason is printed by the gate: keep it free of parentheses.
+// The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
+// COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
+// stale. The reason is printed by the gate: keep it free of parentheses.
 export const GIT_ENV_EXEMPTIONS = [
   {
     label: 'scripts/lib/git-env.test.mjs',
     expr: 'env || gitEnv(root)',
+    count: 1,
     reason: 'the hazard proof feeds a deliberately poisoned GIT_DIR into a sandbox to reproduce the incident',
   },
 ];
@@ -202,7 +205,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
   const findings = [];
   const gitSpawns = [];
   const exempt = [];
-  const used = new Set();
+  const matched = new Map(); // exemption -> how many spawns it has been spent on
   let nodeChildren = 0;
   for (const { label, text } of files) {
     if (text === null || text === undefined) {
@@ -248,14 +251,25 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       if (!v) continue;
       const ex = exemptions.find((e) => e.label === label && v.expr !== null && normalise(e.expr) === normalise(v.expr));
       if (ex) {
-        entry.exempt = true;
-        exempt.push({ label, line, expr: normalise(v.expr), reason: ex.reason });
-        used.add(ex);
+        const want = ex.count ?? 1;
+        const n = (matched.get(ex) || 0) + 1;
+        matched.set(ex, n);
+        if (n <= want) {
+          entry.exempt = true;
+          exempt.push({ label, line, expr: normalise(v.expr), reason: ex.reason });
+        } else {
+          // R8 FIXBACK 2 LOW-1: the exemption is keyed to an EXPECTED COUNT, so a further spawn with the same
+          // expression in the same file is a finding, not a silent widening of the exemption.
+          findings.push(`${label}:${line} ${fn}(git) env: ${v.expr} matches the exemption for ${ex.label}, which allows ${want} spawn(s) -- this is spawn ${n}; a new spawn needs its own exemption or gitEnv(...) alone (CWK-136)`);
+        }
         continue;
       }
       findings.push(`${label}:${line} ${fn}(git) ${v.why}`);
     }
   }
-  const unusedExemptions = exemptions.filter((e) => !used.has(e));
+  // Stale: fewer spawns than the entry counts (none at all included). More than it counts is already a finding.
+  const unusedExemptions = exemptions
+    .map((e) => ({ label: e.label, expr: e.expr, want: e.count ?? 1, matched: matched.get(e) || 0 }))
+    .filter((e) => e.matched < e.want);
   return { findings, gitSpawns, exempt, unusedExemptions, nodeChildren };
 }

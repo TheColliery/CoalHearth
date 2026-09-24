@@ -392,7 +392,7 @@ try {
     const { findings, gitSpawns, exempt, unusedExemptions, nodeChildren } = censusGitSpawns(files);
     for (const msg of findings) fail(msg);
     // An exemption whose spawn is gone is a blanket pass waiting to happen: it FAILs the gate (R8 FIXBACK M1).
-    for (const e of unusedExemptions) fail(`git-spawn census exemption for ${e.label} (env: ${e.expr}) no longer matches a spawn -- remove it, or restore the spawn it names`);
+    for (const e of unusedExemptions) fail(`git-spawn census exemption for ${e.label} (env: ${e.expr}) no longer matches ${e.want} spawn(s), only ${e.matched} -- remove it or lower its count, or restore the spawn it names`);
     if (!findings.length && !unusedExemptions.length) {
       // The line states what the instrument PRODUCED: how many spawns take env from gitEnv() alone, and the
       // named, counted exemptions -- never a blanket "every one" (R8 FIXBACK M1, the r29 class).

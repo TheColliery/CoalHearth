@@ -343,3 +343,20 @@ test('M1: an exemption whose spawn is gone FAILs the gate as stale', (t) => {
   assert.equal(r.status, 1, 'a stale exemption must FAIL, got:\n' + r.stdout);
   assert.match(r.stdout, /FAIL .*exemption.*no longer matches/i);
 });
+
+// R8 FIXBACK 2 LOW-1: the exemption is keyed to a COUNT, so a second spawn with the exempted expression in the
+// same file FAILs the gate as surely as a stale exemption does (INSPECT's X2: it used to PASS and print "2 exempt").
+test('L1: a second spawn with the exempted expression in the same file FAILs the gate', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const f = path.join(tmp, 'scripts', 'lib', 'git-env.test.mjs');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = "  const git = (cwd, args, env) => " + PLANT_FN + "('git', args, { cwd, encoding: 'utf8', env: env || gitEnv(root) });";
+  assert.ok(src.includes(anchor), 'setup: the exempted spawn is where the test expects it');
+  const second = "\n  const git2 = (cwd, args, env) => " + PLANT_FN + "('git', ['init'], { cwd, env: env || gitEnv(root) });";
+  fs.writeFileSync(f, src.replace(anchor, anchor + second));
+  const r = run(tmp);
+  assert.equal(r.status, 1, 'the widened exemption must FAIL, got:\n' + r.stdout);
+  assert.match(r.stdout, /FAIL .*git-env\.test\.mjs:\d+ .*allows 1 spawn/);
+});
