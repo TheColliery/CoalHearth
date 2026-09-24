@@ -821,3 +821,64 @@ test('CWK-120 #2/#3: only the two CONSENT groups get this rule -- another group 
     assert.equal(load({ cwd: sub, home }).journal, 9, name);
   }
 });
+
+// -- R8 FIXBACK L1: two reasons were not pinned on every OS ------------------------------------------------
+// (1) BOTH errnos of `unreadable`. The real-denial test above proves whichever errno THIS platform's denial
+// surfaces (EPERM through an NTFS ACL here); dropping EACCES from the map survived. The errno is INJECTED at
+// fs.readFileSync (the way the lock test injects its errnos), so EACCES and EPERM are each pinned on every OS,
+// in both twins.
+function injectReadError(file, code) {
+  const real = fs.readFileSync;
+  fs.readFileSync = function (p, ...rest) {
+    if (typeof p === 'string' && path.resolve(p) === path.resolve(file)) {
+      const err = new Error(code + ': injected, open');
+      err.code = code;
+      throw err;
+    }
+    return real.call(this, p, ...rest);
+  };
+  return () => { fs.readFileSync = real; };
+}
+
+for (const code of ['EACCES', 'EPERM']) {
+  test('UMB-174 (b) reason "unreadable": an injected ' + code + ' on the read is REPORTED (pinned on every OS, both twins)', (t) => {
+    hermetic(t);
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    const canon = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 5 } });
+    const restore = injectReadError(canon, code);
+    try {
+      for (const [name, api] of CJS_ESM) {
+        assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(canon, 'unreadable')], name + ' ' + code);
+      }
+    } finally {
+      restore();
+    }
+  });
+}
+
+test('UMB-174 (b): an injected error code that is NOT one of the four reasons stays SILENT (never a fifth reason)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const canon = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 5 } });
+  const restore = injectReadError(canon, 'EBUSY');
+  try {
+    for (const [name, api] of CJS_ESM) assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [], name);
+  } finally {
+    restore();
+  }
+});
+
+// (2) `a directory`, at the GLOBAL path -- the only place readConfigFile still meets a directory after CWK-127
+// (the project selector never picks one). It names the global file's own path (CWK-135 a).
+test('UMB-174 (b) reason "a directory": a DIRECTORY at the GLOBAL path is reported, naming the global file (both twins)', (t) => {
+  hermetic(t);
+  const { sub } = project(t);
+  const home = mkT(t);
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(g, { recursive: true });
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'a directory', g)], name);
+  }
+});
