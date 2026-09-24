@@ -337,3 +337,30 @@ for (const [name, build, want] of READS_PAST_FIRST) {
     }
   });
 }
+
+// -- R8 ALERT #19: a bound local name reaches new RegExp(...), so it must be escaped in FULL, not for `$` alone -------------
+// `\{([^}]*)\}` captures whatever a destructuring list holds, comments included, so a local name can carry a regex
+// metacharacter. Before the fix an unbalanced `(` in one made the alternation an unterminated group and the census THREW
+// (verify.mjs then reports "census crashed"); a `[` or `.*` was silently a pattern, not the literal name.
+test('A19: a destructured local whose text carries a regex metacharacter does not crash the census, and the real spawn is still seen', () => {
+  for (const junk of ['/* x( */', '/* x) */', '/* [ */', '/* a.b* */', '/* $^+?|\\ */']) {
+    const text = `import { ${SP}, ${ES}: run ${junk} } from '${MOD}';\n${SP}('git', ['status'], { cwd: d });\n`;
+    let r;
+    assert.doesNotThrow(() => { r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text }], { exemptions: [] }); }, junk);
+    assert.equal(r.findings.length, 1, 'the plain git spawn beside it is still a finding: ' + junk);
+  }
+});
+
+test('A19: a whole-module name and a plain local with $ still match literally after the full escape', () => {
+  const ns = census(`${CP}.${SP}('git', ['init'], { cwd: d });\n`);
+  assert.equal(ns.findings.length, 1);
+  const dollar = 'ru' + '$n';
+  const d$ = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: `import { ${SP} as ${dollar} } from '${MOD}';\n${dollar}('git', ['init'], { cwd: d });\n` }], { exemptions: [] });
+  assert.equal(d$.findings.length, 1);
+});
+
+test('A19: an env alias whose name carries $ is declared and matched literally (the identifier class allows $, nothing else needs escaping)', () => {
+  const E = '$' + 'env';
+  const ok = census(`const ${E} = gitEnv(d);\n${SP}('git', ['init'], { env: ${E} });\n`);
+  assert.deepEqual(ok.findings, []);
+});

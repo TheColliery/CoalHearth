@@ -73,7 +73,9 @@ const CP_MOD = String.raw`['"](?:node:)?child_process['"]`;
 const DESTRUCTURED_RE = new RegExp(String.raw`\{([^}]*)\}\s*(?:=\s*(?:await\s+import|require)\(\s*|from\s*)` + CP_MOD, 'g');
 const NS_IMPORT_RE = new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([\w$]+)\s+from\s*` + CP_MOD, 'g');
 const NS_REQUIRE_RE = new RegExp(String.raw`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:await\s+import|require)\(\s*` + CP_MOD, 'g');
-const escapeDollar = (x) => x.replace(/\$/g, '\\$');
+// A name that reaches new RegExp(...) is escaped in FULL (every metacharacter and the backslash), not for `$` alone: a
+// bound local is whatever a destructuring list holds, comments included (R8 ALERT #19, CodeQL js/incomplete-sanitization).
+const escapeRegex = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Split one destructuring/import list into [canonical function, local name] pairs.
 function bindingPairs(list) {
@@ -96,7 +98,7 @@ function bindingsOf(text) {
   for (const m of text.matchAll(NS_IMPORT_RE)) spaces.add(m[1]);
   for (const m of text.matchAll(NS_REQUIRE_RE)) spaces.add(m[1]);
   if (spaces.size) {
-    const ns = [...spaces].map(escapeDollar).join('|');
+    const ns = [...spaces].map(escapeRegex).join('|');
     // const { spawnSync: run } = cp;
     for (const m of text.matchAll(new RegExp(String.raw`\{([^}]*)\}\s*=\s*(?:${ns})\s*(?:;|\n|$)`, 'g'))) {
       for (const [canon, local] of bindingPairs(m[1])) locals.set(local, canon);
@@ -111,8 +113,8 @@ function bindingsOf(text) {
     }
   }
   const alts = [];
-  if (spaces.size) alts.push(`(?<ns>${[...spaces].map(escapeDollar).join('|')})\\.(?:default\\.)?(?<qfn>${FNS.join('|')})`);
-  if (locals.size) alts.push(`(?<loc>${[...locals.keys()].map(escapeDollar).join('|')})`);
+  if (spaces.size) alts.push(`(?<ns>${[...spaces].map(escapeRegex).join('|')})\\.(?:default\\.)?(?<qfn>${FNS.join('|')})`);
+  if (locals.size) alts.push(`(?<loc>${[...locals.keys()].map(escapeRegex).join('|')})`);
   alts.push(`(?:require\\(\\s*${CP_MOD}\\s*\\)|\\(\\s*await\\s+import\\(\\s*${CP_MOD}\\s*\\)\\s*\\))\\.(?:default\\.)?(?<ifn>${FNS.join('|')})`);
   return { locals, re: new RegExp('(?<![.\\w$])(?:' + alts.join('|') + ')\\(', 'g') };
 }
@@ -169,12 +171,12 @@ function isWholeGitEnvCall(expr) {
 // `const NAME = gitEnv(...)` in this file: is NAME exactly that call, and is it left alone afterwards?
 // Returns null when the alias is sound, or the reason it is not.
 function aliasVerdict(name, fileText) {
-  const decl = new RegExp(String.raw`\bconst\s+${escapeDollar(name)}\s*=\s*gitEnv\(`).exec(fileText);
+  const decl = new RegExp(String.raw`\bconst\s+${escapeRegex(name)}\s*=\s*gitEnv\(`).exec(fileText);
   if (!decl) return 'is not declared `const ' + name + ' = gitEnv(...)` in this file';
   const open = decl.index + decl[0].length - 1;
   const close = findMatchingClose(fileText, open);
   if (close === -1 || !/^\s*(?:;|\n|,|$)/.test(fileText.slice(close + 1))) return 'is assigned from more than the bare gitEnv(...) call';
-  const n = escapeDollar(name);
+  const n = escapeRegex(name);
   const mutation = new RegExp([
     String.raw`\b${n}\s*\.\s*[\w$]+\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
     String.raw`\b${n}\s*\[[^\]\n]*\]\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
