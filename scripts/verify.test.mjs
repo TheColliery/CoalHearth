@@ -298,3 +298,21 @@ test('CWK-136: a git spawn planted with env: gitEnv(...) passes the census', (t)
   const r = run(tmp);
   assert.equal(r.status, 0, `the safe shape must PASS, got:\n${r.stdout}${r.stderr}`);
 });
+
+// CWK-120 finding #11 (CodeRabbit, Trivial), verified at the live tree: the required-files list named
+// bin/session-start.js and bin/post-tool-use.js but not bin/user-prompt-submit.js, the third Claude Code hook entry.
+// hooks.json is only checked for the path as TEXT, the libs check never imports a hook entry, and checkDist derives
+// its parity from the files that EXIST -- so deleting the entry point from source AND plugin/ produced no finding
+// while hooks.json kept pointing at it. (The two ag-*.js entries are held by the pointer gate, which the CodeRabbit
+// note itself observed: platform-configs/hooks/README.md cites both paths.)
+test('CWK-120 #11: deleting bin/user-prompt-submit.js from source AND plugin/ FAILs the gate by name', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  assert.equal(run(tmp).status, 0, 'setup: a pristine copy passes');
+  fs.rmSync(path.join(tmp, 'bin', 'user-prompt-submit.js'));
+  fs.rmSync(path.join(tmp, 'plugin', 'bin', 'user-prompt-submit.js'));
+  const r = run(tmp);
+  assert.equal(r.status, 1, 'a missing hook entry point must FAIL, got:\n' + r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL bin\/user-prompt-submit\.js missing/);
+});

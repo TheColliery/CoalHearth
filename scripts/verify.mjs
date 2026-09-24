@@ -41,6 +41,7 @@ console.log('files:');
 for (const [label, p] of [
   ['bin/session-start.js', path.join(repo, 'bin', 'session-start.js')],
   ['bin/post-tool-use.js', path.join(repo, 'bin', 'post-tool-use.js')],
+  ['bin/user-prompt-submit.js', path.join(repo, 'bin', 'user-prompt-submit.js')], // CWK-120 #11: the third CC hook entry
   ['lib/handoff-journal.js', path.join(repo, 'lib', 'handoff-journal.js')],
   ['lib/resume-engine.js', path.join(repo, 'lib', 'resume-engine.js')],
   ['config/schema.json', path.join(repo, 'config', 'schema.json')],
