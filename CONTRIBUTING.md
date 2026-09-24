@@ -18,13 +18,14 @@ CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm in
 
 ```bash
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
-node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, dist-sync, version pins
+node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, git-spawn census, dist-sync, version pins
 node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list)
 ```
 
 ### Development Rules
 * **Rebuild the dist after a source change:** edit `bin/`, `lib/`, `config/`, `hooks/`, `commands/`, or the manifest, then `node scripts/build-plugin.mjs` to re-sync `plugin/` (verify fails on a stale dist).
 * **`scripts/lib/config-schema.mjs` is the single source of truth** for every `.coalhearth.json` key — `verify.mjs` validates the factory config against it; the runtime `config/schema.json` mirrors it.
+* **A git child takes its environment from `gitEnv()` alone** (`scripts/lib/git-env.mjs`): a git hook exports an absolute `GIT_DIR`, and a gate or test fixture that inherits it acts on the wrong repository. The census in `verify.mjs` fails a git spawn that has no `env:`, that mentions `process.env`, or that does not take it from `gitEnv()`.
 * **Keep the hooks Phoenix-pure:** zero dependencies, fail-silent (wrap in try/catch, exit 0, never `process.exit()`), no network, silent except the sanctioned channels.
 * **Add tests:** every lib change gets a unit test; every hook-behavior change gets a **hermetic spawn test** (spawn the real hook, sandbox TEMP + HOME). Register a new test *file* in `scripts/test.mjs` (the runner fails on an unlisted orphan).
 * **Language & tone:** shipped source and docs stay in English.
