@@ -37,7 +37,8 @@ test('HandoffJournal.save writes atomically (no .tmp left) and returns true', ()
     const written = JSON.parse(fs.readFileSync(path.join(dir, 'session_handoff.json'), 'utf8'));
     assert.strictEqual(written.status, 'in_progress');
     assert.ok(written.timestamp, 'save stamps a timestamp');
-    assert.strictEqual(fs.existsSync(path.join(dir, 'session_handoff.json.tmp')), false, 'tmp renamed away');
+    // CWK-120 #8: the per-pid temp is `session_handoff.json.<pid>.tmp`; a literal `.json.tmp` check never sees it.
+    assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no *.tmp left behind (tmp renamed away)');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
