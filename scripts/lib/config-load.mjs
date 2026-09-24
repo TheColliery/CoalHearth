@@ -53,6 +53,17 @@ const ROOT_MARKERS = [
 // nested-legacy file, run from a SUBDIR, resolves to that subdir and misses it.
 // Pinned by the ROOT_MARKERS-ruling test in config-load.test.mjs.
 
+// CWK-127 (INSPECT L2): a config path counts only if it is a FILE. The walk used to select on
+// existsSync while the IGNORED probe (below) used isFile, so a DIRECTORY named like a config won
+// the walk, read as {}, and shadowed the real config beneath it -- and the LEGACY notice then
+// claimed the directory was "still read". Every site that asks "is there a config here" now asks
+// isFile: the marker test in findProjectRoot and the selector in resolveProjectConfig. `.git` is
+// the one exception on purpose -- a worktree's .git is a FILE and a normal repo's a directory,
+// and either anchors the root. Exemplar for the class: CoalLedger 0998432.
+function isMarker(dir, marker) {
+  const p = path.join(dir, marker);
+  return marker === '.git' ? fs.existsSync(p) : isFile(p);
+}
 // Walk up from startDir looking for a root marker (see ROOT_MARKERS); NEVER walk above
 // `home` — stop there and fall back to startDir. Compare PHYSICAL paths on both sides;
 // the walk stays lexical after that (dirname of a physical path).
@@ -60,7 +71,7 @@ export function findProjectRoot(startDir = process.cwd(), home = os.homedir()) {
   let dir = physical(startDir);
   const homeAbs = physical(home);
   while (true) {
-    if (ROOT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)))) return dir;
+    if (ROOT_MARKERS.some((m) => isMarker(dir, m))) return dir;
     if (dir === homeAbs) return startDir;
     const parent = path.dirname(dir);
     if (parent === dir) return startDir; // filesystem root reached
@@ -118,7 +129,7 @@ function isGlobalConfig(file, home) {
 }
 function resolveProjectConfig(cwd, home, ownDir) {
   const candidates = projectConfigCandidates(cwd, home, ownDir);
-  const found = candidates.find((c) => fs.existsSync(c) && !isGlobalConfig(c, home)) || null;
+  const found = candidates.find((c) => isFile(c) && !isGlobalConfig(c, home)) || null; // CWK-127: a file, never a directory
   return { candidates, found };
 }
 export function projectConfigPath(cwd = process.cwd(), home = os.homedir(), ownDir) {

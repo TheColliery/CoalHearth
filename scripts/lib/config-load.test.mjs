@@ -481,6 +481,8 @@ const TWIN_FIXTURES = [
   { name: 'misplaced shapes', files: { [path.join('.agents', '.coalhearth.json')]: {}, [path.join('.claude', 'coalhearth.json')]: {}, 'coalhearth.json': {}, [path.join('.claude', 'coal', '.coalhearth.json')]: {} } },
   { name: 'misplaced + legacy hit', files: { [NESTED]: { update: { updateMode: 'auto' } }, [path.join('.gemini', 'coalhearth.json')]: {} } },
   { name: 'unrecognised ownDir falls back to .claude-first', ownDir: '.nope', files: { [NEST_CANON]: { journal: { atomicityRetries: 1 } } } },
+  { name: 'CWK-127 a directory at the nested legacy path', dirs: [NESTED], files: { '.coalhearth.json': { journal: { atomicityRetries: 3 } } } },
+  { name: 'CWK-127 a directory at the canonical path', dirs: [NEST_CANON], files: { [NESTED]: { journal: { atomicityRetries: 2 } } } },
 ];
 
 for (const fx of TWIN_FIXTURES) {
@@ -488,6 +490,7 @@ for (const fx of TWIN_FIXTURES) {
     const { root, sub } = project(t);
     const home = mkT(t);
     put(home, path.join('.claude', '.coalhearth.json'), { update: { updateMode: 'ask' } });
+    for (const d of fx.dirs || []) fs.mkdirSync(path.join(root, d), { recursive: true });
     for (const [rel, obj] of Object.entries(fx.files)) put(root, rel, obj);
     const opts = { cwd: sub, home, ownDir: fx.ownDir };
     assert.deepEqual(cjs.projectConfigCandidates(sub, home, fx.ownDir), projectConfigCandidates(sub, home, fx.ownDir), 'candidate order');
@@ -504,4 +507,42 @@ test('UMB-133 twin agreement: cwd AT home (the global-collision guard) agrees to
   assert.equal(cjs.projectConfigPath(home, home), projectConfigPath(home, home));
   assert.deepEqual(cjs.configNotices({ cwd: home, home }), configNotices({ cwd: home, home }));
   assert.deepEqual(cjs.loadConfig({ cwd: home, home }), loadMergedConfig({ cwd: home, home }));
+});
+
+// CWK-127 (INSPECT L2, deferred at UMB-133): the walk SELECTED a candidate on existsSync while the
+// IGNORED probe used isFile, so a DIRECTORY at a candidate path won the walk, read as {}, and
+// SHADOWED the real config beneath it -- and the LEGACY line then claimed the directory was
+// "still read". isFile now guards every config-path site; a directory is not a config. `.git` is
+// the one deliberate exception (a worktree's .git is a FILE, a normal one a directory -- either
+// anchors). Exemplar for the class: CoalLedger 0998432.
+test('CWK-127: a DIRECTORY at the nested-legacy path never shadows the real root-legacy config', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  fs.mkdirSync(path.join(root, NESTED), { recursive: true }); // a directory named like a config file
+  const real = put(root, '.coalhearth.json', { journal: { atomicityRetries: 7 } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 7, 'the real config is READ, not shadowed by the directory');
+  assert.equal(projectConfigPath(sub, home), real);
+  const lines = configNotices({ cwd: sub, home });
+  assert.ok(lines.some((l) => l.startsWith('LEGACY: ' + real)), 'the LEGACY line names the file actually read: ' + JSON.stringify(lines));
+  assert.ok(!lines.some((l) => l.startsWith('LEGACY: ' + path.join(root, NESTED))), 'and never claims the directory is "still read"');
+});
+
+test('CWK-127: a DIRECTORY at a CANONICAL path never shadows a real legacy config either', (t) => {
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  fs.mkdirSync(path.join(root, '.claude', 'coal', 'coalhearth.json'), { recursive: true });
+  const real = put(root, NESTED, { journal: { atomicityRetries: 8 } });
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 8);
+  assert.equal(projectConfigPath(sub, home), real);
+});
+
+test('CWK-127: a directory named like a config MARKER does not anchor the walk (a marker must be a file)', (t) => {
+  const home = mkT(t);
+  const proj = path.join(home, 'proj');
+  fs.mkdirSync(path.join(proj, '.coalhearth.json'), { recursive: true }); // a directory, not a config
+  const sub = path.join(proj, 'src');
+  fs.mkdirSync(sub, { recursive: true });
+  assert.equal(findProjectRoot(sub, home), sub, 'no real marker between here and home -> startDir');
+  fs.mkdirSync(path.join(proj, '.git')); // .git is the exception: a directory anchors
+  assert.equal(findProjectRoot(sub, home), proj);
 });
