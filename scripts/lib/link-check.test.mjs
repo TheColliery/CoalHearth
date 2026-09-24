@@ -351,8 +351,8 @@ test('workflow: link-check.yml -- the engine call is the step\'s LAST command, n
   assert.ok(stepLines.length > 0, 'the run: | block must be found and non-empty');
   assert.equal(
     stepLines[stepLines.length - 1],
-    'node scripts/lib/link-check.mjs $files',
-    'the engine call must be the step\'s LAST command, with nothing appended (|| true, a trailing exit, ...)',
+    'node scripts/lib/link-check.mjs "${files[@]}"',
+    'the engine call must be the step\'s LAST command, with nothing appended (|| true, a trailing exit, ...), and take the file list as a quoted ARRAY (CWK-120 #5)',
   );
   // r34-RED-PROOF found this while mutating: `- continue-on-error: true` (the key as the
   // FIRST field of the step, dash-prefixed -- a completely ordinary YAML step shape) evaded
@@ -368,7 +368,7 @@ test('workflow: link-check.yml -- the engine call is the step\'s LAST command, n
   // dropping either) stops the gate firing on the events it exists to gate.
   assert.match(yml, /^\s*push\s*:/m, 'the push: trigger must be present');
   assert.match(yml, /^\s*pull_request\s*:/m, 'the pull_request: trigger must be present');
-  assert.match(yml, /if \[ -z "\$files" \]/, 'the empty-file-list guard must be present');
+  assert.match(yml, /if \[ \$\{#files\[@\]\} -eq 0 \]/, 'the empty-file-list guard must be present (array-length form, CWK-120 #5)');
   assert.match(yml, /exit 1/, 'the guard must actually exit non-zero');
   // r34-RED-PROOF found a second gap the same way: `\n\s*paths:\s*\n` only catches BLOCK-style
   // `paths:` (a bare key, list on following lines) and misses FLOW-style `paths: ['**.md']`
@@ -705,3 +705,53 @@ test('CWK-133: the link-check fixture git() helper never touches another repo wh
   assert.ok(before.equals(configOf()), 'the enclosing repo config must be byte-unchanged');
   assert.ok(fs.existsSync(path.join(tmp, '.git')), 'the fixture must get its own .git, not be redirected onto the enclosing repo');
 });
+
+// CWK-120 finding #5 (CodeRabbit, Minor), verified at the live tree: `files=$(git ls-files ...)` + an unquoted `$files`
+// re-splits the list on whitespace and glob-expands it, so a TRACKED path such as `docs/User Guide.md` became two argv
+// entries and a false link-check failure. The list is now a NUL-delimited bash ARRAY (`git ls-files -z` + `grep -z` +
+// `mapfile -d ''`), passed as a quoted "${files[@]}": every path is exactly one argument whatever its bytes. Shape
+// ported from CoalTipple PR24 #6 (its own note measured that a planted "with space.md" lands as ONE array element and
+// that mapfile reads from a process substitution, so `set -e` cannot abort before the empty-list guard).
+test('workflow: link-check.yml builds the file list as a NUL-delimited array, never a word-split string (CWK-120 #5)', () => {
+  const yml = fs.readFileSync(workflowPath, 'utf8');
+  const stepText = runStepLines(yml).join('\n');
+  assert.match(stepText, /mapfile -d '' -t files < <\(git ls-files -z /, 'NUL-delimited read into an array');
+  assert.match(stepText, /grep -zv/, 'the scope filters are NUL-aware too (grep -z)');
+  assert.doesNotMatch(stepText, /files=\$\(/, 'no scalar files=$(...) assignment to word-split later');
+  assert.doesNotMatch(stepText, /\$files\b/, 'no unquoted $files expansion anywhere in the step');
+});
+
+// CWK-120 finding #4 (CodeRabbit, Minor, "Analyzed with Security Review"), verified at the live tree: actions/checkout
+// persists the job token in .git/config by default, and these jobs then EXECUTE repository code (verify/test/the link
+// engine) from the pull-request checkout -- so pull-request code could read the live read-scoped credential. No step
+// here pushes (contents: read), so the token has no use after the checkout: persist-credentials: false on every
+// checkout of the two workflows the finding names. (CoalTipple PR24 #5 made the same call for its link-check.yml.)
+function checkoutStepsOf(yml) {
+  const lines = yml.split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)- uses: actions\/checkout@/.exec(lines[i]);
+    if (!m) continue;
+    const indent = m[1].length;
+    const block = [lines[i]];
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j];
+      if (l.trim() === '' || /^\s*#/.test(l)) { block.push(l); continue; }
+      const ind = l.length - l.trimStart().length;
+      if (ind <= indent) break; // the next step (or a dedent) -- this step's keys are indented deeper than its dash
+      block.push(l);
+    }
+    out.push({ line: i + 1, text: block.join('\n') });
+  }
+  return out;
+}
+for (const wf of ['ci.yml', 'link-check.yml']) {
+  test('workflow: every actions/checkout in ' + wf + ' sets persist-credentials: false (CWK-120 #4)', () => {
+    const yml = fs.readFileSync(path.join(repo, '.github', 'workflows', wf), 'utf8');
+    const steps = checkoutStepsOf(yml);
+    assert.ok(steps.length >= 1, wf + ' must have at least one checkout to check (an empty match proves nothing)');
+    for (const s of steps) {
+      assert.match(s.text, /^\s+persist-credentials:\s*false\s*$/m, wf + ':' + s.line + ' checkout must not persist the token');
+    }
+  });
+}

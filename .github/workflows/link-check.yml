@@ -30,7 +30,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # CWK-120 #4 -- persist-credentials: false. This job never pushes (`contents: read` above), so the
+      # checkout token has no use once the checkout completes, and leaving it in .git/config would let the
+      # repository code this job runs read it (CoalTipple PR24 #5 made the same call).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -63,10 +68,17 @@ jobs:
       # return): the real committed tree exits 0; a forced-empty file list exits 1 without
       # reaching the engine at all; scripts/fixtures/defects-links.md alone exits 1 with both
       # planted findings named.
+      #
+      # CWK-120 #5 -- NUL-DELIMITED ARRAY, not a bare `$files` word-split. `files=$(git ls-files ...)` plus an
+      # unquoted `$files` re-split the list on whitespace and glob-expanded it, so a TRACKED path with a space
+      # (`docs/User Guide.md`) became two argv entries and a false failure. `git ls-files -z` + `grep -z` +
+      # `mapfile -d ''` carries every path through as ONE array element whatever its bytes. mapfile reads from a
+      # PROCESS SUBSTITUTION, whose exit status `set -e` does not inspect, so the empty-array guard below is
+      # reachable natively (a no-match grep does not abort the script first).
       - run: |
-          files=$(git ls-files '*.md' | grep -v '^plugin/' | grep -v '^scripts/fixtures/')
-          if [ -z "$files" ]; then
+          mapfile -d '' -t files < <(git ls-files -z '*.md' | grep -zv '^plugin/' | grep -zv '^scripts/fixtures/')
+          if [ ${#files[@]} -eq 0 ]; then
             echo "::error::link-check found NO markdown files to scan -- the scope filter is broken, not the tree"
             exit 1
           fi
-          node scripts/lib/link-check.mjs $files
+          node scripts/lib/link-check.mjs "${files[@]}"
