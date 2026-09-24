@@ -215,6 +215,35 @@ try {
 // drifted-list class CWK-075's own INSPECT LOW-3 was written against: config keys are not a
 // question script comments or published history can meaningfully answer, so the two gates'
 // sets diverging on THOSE rows is not the silent-drift failure that invariant guards against.
+// The fs primitives below are shared by TWO gates -- the pointer-drift gate (next) and the git-spawn
+// census (CWK-136, after it). They sit at module scope, plain fs/path with no scripts/lib import, so
+// both walk the tree with the SAME code rather than the census growing a second, divergent walk.
+// io PRIMITIVES for collectSurfaces() -- plain fs/path, no scripts/lib import, so these
+// are safe as ordinary functions rather than needing the dynamic-import treatment
+// node/runtime.md 1 reserves for local libs.
+const walkMd = (dir, out = []) => {
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkMd(p, out);
+    else if (e.name.endsWith('.md')) out.push(p);
+  }
+  return out;
+};
+const walkSrc = (dir, keep, out = []) => {
+  if (!fs.existsSync(dir)) return out;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkSrc(p, keep, out);
+    else if (keep(e.name)) out.push(p);
+  }
+  return out;
+};
+const relToRepo = (p) => path.relative(repo, p).split(path.sep).join('/');
+const commentLines = (src) => src.split('\n').filter((l) => /^\s*(\/\/|\*)/.test(l)).join('\n');
+const hashComments = (src) => src.split('\n').filter((l) => /^\s*#/.test(l)).join('\n');
+const readOrNull = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+
 console.log('pointer drift:');
 try {
   const { checkPointers, deriveCandidateRoots, applyCheckIgnoreProbe, collectSurfaces, DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
@@ -226,32 +255,6 @@ try {
   // (whole GIT_* family stripped, ceiling at the repo's parent) -- never process.env.
   const { gitEnv } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env.mjs')).href);
   const REPO_GIT_ENV = gitEnv(path.dirname(repo));
-
-  // io PRIMITIVES for collectSurfaces() -- plain fs/path, no scripts/lib import, so these
-  // are safe as ordinary functions rather than needing the dynamic-import treatment
-  // node/runtime.md 1 reserves for local libs.
-  const walkMd = (dir, out = []) => {
-    if (!fs.existsSync(dir)) return out;
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walkMd(p, out);
-      else if (e.name.endsWith('.md')) out.push(p);
-    }
-    return out;
-  };
-  const walkSrc = (dir, keep, out = []) => {
-    if (!fs.existsSync(dir)) return out;
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walkSrc(p, keep, out);
-      else if (keep(e.name)) out.push(p);
-    }
-    return out;
-  };
-  const relToRepo = (p) => path.relative(repo, p).split(path.sep).join('/');
-  const commentLines = (src) => src.split('\n').filter((l) => /^\s*(\/\/|\*)/.test(l)).join('\n');
-  const hashComments = (src) => src.split('\n').filter((l) => /^\s*#/.test(l)).join('\n');
-  const readOrNull = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
 
   // GIT IS AN OPTIONAL ENHANCEMENT, NEVER A RUNTIME REQUIREMENT (no-external-assumption).
   // This gate's whole question is "reachable from a CLONE", which only git can answer, so
@@ -363,8 +366,36 @@ try {
   }
 } catch (e) { fail(`pointer drift check crashed: ${e.message}`); }
 
+// git-spawn census (CWK-136): every git child this room ships or tests must take its environment
+// from gitEnv() and only from it. Presence of an env: key is not safety -- env: process.env has one,
+// and hands a linked-worktree hook's absolute GIT_DIR straight to the child (CWK-133).
+//
+// ENUMERATION, reused rather than re-walked: the ROOTS are the pointer gate's own DEFAULT_SURFACE_PLAN
+// `comments` rows (scripts, bin, lib -- so a code root added to that plan is censused the day it
+// lands), collected by the SAME collectSurfaces() with the SAME walkSrc primitive above. What differs
+// is deliberate and stated: the plan's ext filter skips *.test.* files (a test file's comments quote
+// fake fixtures), but the census is about SPAWNS, and the fixtures are where the class lives -- so it
+// takes every .mjs/.cjs/.js under those roots, tests included, as raw text.
+console.log('git-spawn census:');
+try {
+  const { censusGitSpawns } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env-census.mjs')).href);
+  const { collectSurfaces, DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
+  const roots = DEFAULT_SURFACE_PLAN.filter((row) => row.kind === 'comments').map((row) => row.root);
+  const censusPlan = roots.map((root) => ({ kind: 'raw', root, dir: true, ext: /\.(mjs|cjs|js)$/,
+    why: 'the pointer gate\'s own code roots, widened to test files: the fixtures are where a bare git spawn lives' }));
+  const files = collectSurfaces(repo, censusPlan, {
+    join: path.join, walkMd, walkSrc, read: readOrNull, rel: relToRepo, commentLines, hashComments,
+  });
+  if (!roots.length || !files.length) fail(`census walked ${files.length} file(s) from ${roots.length} root(s) -- an empty walk proves nothing`);
+  else {
+    const { findings, gitSpawns, nodeChildren } = censusGitSpawns(files);
+    for (const msg of findings) fail(msg);
+    if (!findings.length) ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): every one takes env from gitEnv() alone`);
+  }
+} catch (e) { fail(`git-spawn census crashed: ${e.message}`); }
+
 console.log('libs (import check):');
-for (const lib of ['config-schema.mjs', 'config-load.mjs', 'jsonc.mjs']) {
+for (const lib of ['config-schema.mjs', 'config-load.mjs', 'jsonc.mjs', 'git-env.mjs', 'git-env-census.mjs']) {
   try { await import(pathToFileURL(path.join(repo, 'scripts', 'lib', lib)).href); ok(`${lib} imports`); }
   catch (e) { fail(`${lib}: ${e.message}`); }
 }

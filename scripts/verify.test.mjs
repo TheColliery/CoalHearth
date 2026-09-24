@@ -96,13 +96,15 @@ function gitInit(tmp) {
   // CWK-133: the whole GIT_* family stripped and a ceiling at the sandbox's parent, so a hook
   // that exported an absolute GIT_DIR (a linked worktree's) can never redirect this fixture onto
   // the real enclosing repo.
-  const opts = { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) };
-  spawnSync('git', ['init', '-q', '.'], opts);
+  // One spawn site with an explicit env: (the census, CWK-136, reads it -- a shared `opts` object
+  // would hide the env from it).
+  const g = (args) => spawnSync('git', args, { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) });
+  g(['init', '-q', '.']);
   // Local, throwaway identity -- never touches the operator's own global git config.
-  spawnSync('git', ['config', 'user.email', 'ci@coalhearth.invalid'], opts);
-  spawnSync('git', ['config', 'user.name', 'coalhearth-verify-test'], opts);
-  spawnSync('git', ['add', '-A'], opts);
-  spawnSync('git', ['commit', '-q', '-m', 'fixture'], opts);
+  g(['config', 'user.email', 'ci@coalhearth.invalid']);
+  g(['config', 'user.name', 'coalhearth-verify-test']);
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'fixture']);
 }
 
 // INDEPENDENT of collectSurfaces() and of DEFAULT_SURFACE_PLAN's own code -- a mutation to
@@ -239,4 +241,60 @@ test('CWK-133: verify.mjs asks git about ITS OWN repo when an absolute GIT_DIR i
   assert.equal(poisoned.status, 0,
     `an ambient GIT_DIR must not change the verdict -- the tracked list must come from THIS fixture, not the enclosing repo:\n${poisoned.stdout}${poisoned.stderr}`);
   assert.doesNotMatch(poisoned.stdout, /UNTRACKED|NOT CHECKED/);
+});
+
+// CWK-136 -- the census in verify.mjs proves SAFETY, not presence. Presence alone passes
+// `env: process.env`, which hands a linked-worktree hook's absolute GIT_DIR straight to the child.
+// Each test plants a git spawn in a scratch copy of the tree and runs the REAL gate over it.
+// The planted source is assembled from name parts so this file's own text never contains a literal
+// spawn the census would read as real (verify.mjs walks scripts/**, tests included).
+const PLANT_FN = 'spawn' + 'Sync';
+function plantSpawn(tmp, envText) {
+  const call = PLANT_FN + "('git', ['status'], { cwd: '.'" + (envText ? ', env: ' + envText : '') + ' });';
+  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, ''].join('\n');
+  fs.writeFileSync(path.join(tmp, 'scripts', 'zz-planted.test.mjs'), body);
+}
+
+test('CWK-136: the pristine tree passes the git-spawn census, and the gate PRINTS what it walked', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const r = run(tmp);
+  assert.equal(r.status, 0, `a pristine copy must PASS, got:\n${r.stdout}${r.stderr}`);
+  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\)/);
+  assert.ok(m, `the census must print its counts, got:\n${r.stdout}`);
+  // 8 call SITES today (2 in verify.mjs, 1 in link-check.mjs, and the fixture helpers), down from the
+  // 20 literal spawns CWK-133 found -- the fixtures were folded into one helper each. A floor, not an equality.
+  assert.ok(Number(m[1]) >= 8, 'the census must see this room\'s git spawns, not walk an empty set');
+  assert.ok(Number(m[2]) >= 20, 'the census must walk the scripts/, lib/ and bin/ trees');
+});
+
+test('CWK-136: a git spawn planted with env: process.env FAILs the gate, naming file:line', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, 'process.env');
+  const r = run(tmp);
+  assert.equal(r.status, 1, `presence of an env: key is not safety -- must FAIL, got:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /VERIFY: FAIL/);
+  assert.match(r.stdout, /FAIL scripts\/zz-planted\.test\.mjs:3 .*process\.env/);
+});
+
+test('CWK-136: a git spawn planted with NO env: key FAILs the gate, naming file:line', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, '');
+  const r = run(tmp);
+  assert.equal(r.status, 1, `a bare git spawn must FAIL, got:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /FAIL scripts\/zz-planted\.test\.mjs:3 .*no 'env:'/);
+});
+
+test('CWK-136: a git spawn planted with env: gitEnv(...) passes the census', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, 'gitEnv(dir)');
+  const r = run(tmp);
+  assert.equal(r.status, 0, `the safe shape must PASS, got:\n${r.stdout}${r.stderr}`);
 });
