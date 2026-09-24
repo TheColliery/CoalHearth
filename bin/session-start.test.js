@@ -643,3 +643,36 @@ test('UMB-133 ruling: ONLY bin/session-start.js reads configNotices; PostToolUse
   assert.strictEqual(r.stdout, '');
   assert.strictEqual(r.stderr, '');
 });
+
+// UMB-174 (b): a config that EXISTS where the walk reads but cannot be used is REPORTED on the SAME
+// sanctioned SessionStart channel, never skipped in silence. One standalone line when nothing else is
+// speaking (the same rule as LEGACY/IGNORED above); the reasons themselves are proven per-reason,
+// through both twins, in scripts/lib/config-load.test.mjs. RED-PROOF: with configNotices' UNREADABLE
+// loop removed this hook prints nothing here (stdout === '').
+test('UMB-174 (b): a MALFORMED canonical project config is reported as ONE standalone [CoalHearth] UNREADABLE line', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  const canon = path.join(cwd, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(canon), { recursive: true });
+  fs.writeFileSync(canon, '{ not json', 'utf8');
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.strictEqual(
+    r.stdout.trim(),
+    '[CoalHearth] UNREADABLE: ' + canon + ' exists but is not a readable config (malformed JSON); it was skipped \u2014 canonical = .claude/coal/coalhearth.json',
+  );
+});
+
+test('UMB-174 (b): a NON-OBJECT global config (a JSON array) is reported, and the hook still exits 0', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(g), { recursive: true });
+  fs.writeFileSync(g, '[]', 'utf8');
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(countOf(r.stdout, 'UNREADABLE:'), 1);
+  assert.ok(r.stdout.includes('(not a JSON object)'), r.stdout);
+});

@@ -146,6 +146,9 @@ const CONFIG_NAMES = ['coalhearth.json', '.coalhearth.json'];
 function isFile(p) {
   try { return fs.statSync(p).isFile(); } catch { return false; }
 }
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
 export function configNotices(opts) {
   try {
     const cwd = (opts && opts.cwd) || process.cwd();
@@ -155,7 +158,16 @@ export function configNotices(opts) {
     const { candidates, found } = resolveProjectConfig(cwd, home, ownDir);
     const canonical = path.relative(root, candidates[0]).split(path.sep).join('/');
     const lines = [];
-    if (found && candidates.slice(-2).includes(found)) {
+    const unreadable = (p, reason) => 'UNREADABLE: ' + p + ' exists but is not a readable config (' + reason + '); it was skipped \u2014 canonical = ' + canonical;
+    const globalPath = globalConfigPath(home);
+    const globalRead = readConfigFile(globalPath);
+    if (globalRead.reason) lines.push(unreadable(globalPath, globalRead.reason));
+    let foundReason = null;
+    for (const c of candidates) {
+      if (c === found) { foundReason = readConfigFile(c).reason; if (foundReason) lines.push(unreadable(c, foundReason)); break; }
+      if (isDirectory(c)) lines.push(unreadable(c, 'a directory')); // the walk stepped over it (CWK-127)
+    }
+    if (found && !foundReason && candidates.slice(-2).includes(found)) {
       lines.push('LEGACY: ' + found + ' is deprecated but still read; canonical = ' + canonical);
     }
     const known = new Set(candidates.map((c) => path.resolve(c)));
@@ -173,15 +185,40 @@ export function configNotices(opts) {
   }
 }
 
-function readJsonc(file) {
+// UMB-174 (b): read + classify ONE config file -> { cfg, reason }. `reason` is null when the
+// file is absent (the normal, silent case) or read fine; otherwise it is the flock's reason a
+// PRESENT config could not be used: 'malformed JSON' | 'a directory' | 'unreadable' (BOTH EACCES
+// and EPERM -- a Windows ACL denial surfaces as EPERM, and a room that maps EACCES alone stays
+// silent there) | 'not a JSON object' (valid JSON that is not a plain object: an array, a
+// string, a number, null). Branches on the fs error's CODE, never its message (node/runtime.md
+// 7). Any OTHER fs error stays silent (a race, an exotic code) -- never a fifth reason invented
+// for it. `cfg` is {} in every failure case: the SELECTION is unchanged, an unreadable candidate
+// still wins the walk and contributes nothing, exactly as before this report existed. A leading
+// U+FEFF is STRIPPED before the parse (RFC 8259 s8.1 lets a parser ignore a BOM; Windows
+// PowerShell 5.1 writes one whenever asked for UTF-8), so a BOM-prefixed VALID object is read
+// and never reported as malformed. Exemplar: CoalFace v0.12.0 / CoalTipple.
+function readConfigFile(file) {
+  let content;
   try {
-    let content = fs.readFileSync(file, 'utf8');
-    if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
-    const parsed = parseJsonc(content); // proto-pollution-guarded parse (drops __proto__/constructor/prototype)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
+    content = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'EISDIR') return { cfg: {}, reason: 'a directory' };
+    if (code === 'EACCES' || code === 'EPERM') return { cfg: {}, reason: 'unreadable' };
+    return { cfg: {}, reason: null };
   }
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+  let parsed;
+  try {
+    parsed = parseJsonc(content); // proto-pollution-guarded parse (drops __proto__/constructor/prototype)
+  } catch {
+    return { cfg: {}, reason: 'malformed JSON' };
+  }
+  if (!(parsed && typeof parsed === 'object' && !Array.isArray(parsed))) return { cfg: {}, reason: 'not a JSON object' };
+  return { cfg: parsed, reason: null };
+}
+function readJsonc(file) {
+  return readConfigFile(file).cfg;
 }
 
 // Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27, amended R2) — mirrors

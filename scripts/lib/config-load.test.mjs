@@ -6,6 +6,7 @@ import path from 'node:path';
 import { findProjectRoot, projectConfigPath, loadMergedConfig } from './config-load.mjs';
 import * as twin from './config-load.mjs'; // UMB-133: namespace import so a missing export fails PER TEST, not at link time
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 
 function mkSandboxHome() {
   // realpath the sandbox: findProjectRoot compares PHYSICAL paths (macOS tmpdir is a
@@ -545,4 +546,158 @@ test('CWK-127: a directory named like a config MARKER does not anchor the walk (
   assert.equal(findProjectRoot(sub, home), sub, 'no real marker between here and home -> startDir');
   fs.mkdirSync(path.join(proj, '.git')); // .git is the exception: a directory anchors
   assert.equal(findProjectRoot(sub, home), proj);
+});
+
+// -- UMB-174 (b): the ONE flock string for a config that is PRESENT but UNREADABLE --------------
+// A config that exists at a path the walk reads but cannot be turned into a config used to be
+// skipped in SILENCE -- the same "silence reads as honoured" class UMB-133 closed for the wrong
+// PATH. Now, on SessionStart only (configNotices; never a crawl, only paths the walk already
+// stats), each is named with its reason:
+//   UNREADABLE: <path> exists but is not a readable config (<reason>); it was skipped \u2014 canonical = <canonical>
+// <reason> is one of: malformed JSON | a directory | unreadable (BOTH EACCES and EPERM -- a Windows
+// ACL denial surfaces as EPERM) | not a JSON object (valid JSON that is not a plain object). The
+// SELECTION is unchanged (an unreadable candidate still wins the walk and contributes {}); only the
+// silence goes. Exemplar: CoalFace v0.12.0; the fourth reason is main's C-5 ruling, CoalTipple's.
+// Every case runs BOTH twins (the CJS hook copy that ships and the ESM tooling copy).
+const CJS_ESM = [['esm', twin], ['cjs', cjs]];
+const unreadableLine = (p, reason, canon = CANON_REL) => 'UNREADABLE: ' + p + ' exists but is not a readable config (' + reason + '); it was skipped \u2014 canonical = ' + canon;
+const CANON_REL = '.claude/coal/coalhearth.json';
+function hermetic(t) { // the global path honours CLAUDE_CONFIG_DIR before the sandbox home
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved; });
+}
+const unreadableOf = (api, opts) => api.configNotices(opts).filter((l) => l.startsWith('UNREADABLE:'));
+
+test('UMB-174 (b) reason "malformed JSON": a canonical project config that does not parse is REPORTED, and still wins the walk', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const canon = path.join(root, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(canon), { recursive: true });
+  fs.writeFileSync(canon, '{ this is not json');
+  put(root, '.coalhearth.json', { journal: { atomicityRetries: 9 } }); // a real config BELOW it
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(canon, 'malformed JSON')], name);
+  }
+  // SELECTION unchanged: the unreadable candidate still wins and contributes {}, exactly as before.
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal, undefined, 'the unreadable canonical still shadows the legacy one beneath it');
+});
+
+test('UMB-174 (b) reason "a directory": a directory the walk stepped over is REPORTED', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const dir = path.join(root, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(dir, { recursive: true });
+  put(root, NESTED, { journal: { atomicityRetries: 8 } });
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(dir, 'a directory')], name);
+  }
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 8, 'selection: the real file beneath is read (CWK-127)');
+});
+
+test('UMB-174 (b) reason "a directory": nothing found anywhere -> every directory the walk passed is named', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const dir = path.join(root, '.coalhearth.json');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(dir, 'a directory')], name);
+  }
+});
+
+// Denying a read is platform-specific: POSIX mode bits, or on NTFS an ACL (libuv reports it as EPERM,
+// not EACCES). Capability-PROBED, never process.platform (node/runtime.md 4): chmod first, icacls only
+// when the read still succeeds. ONE skippable leg per test: the probe is the only conditional.
+function denyRead(file) {
+  try { fs.chmodSync(file, 0); if (readDenied(file)) return () => { try { fs.chmodSync(file, 0o600); } catch {} }; } catch {}
+  try { fs.chmodSync(file, 0o600); } catch {}
+  const me = os.userInfo().username;
+  const r = spawnSync('icacls', [file, '/deny', me + ':(R)'], { encoding: 'utf8' });
+  if (!r.error && r.status === 0 && readDenied(file)) return () => { try { spawnSync('icacls', [file, '/reset'], { encoding: 'utf8' }); } catch {} };
+  try { spawnSync('icacls', [file, '/reset'], { encoding: 'utf8' }); } catch {}
+  return null;
+}
+function readDenied(file) {
+  try { fs.readFileSync(file); return false; } catch (e) { return !!(e && (e.code === 'EACCES' || e.code === 'EPERM')); }
+}
+
+test('UMB-174 (b) reason "unreadable": a config whose read is DENIED (EACCES or EPERM) is REPORTED', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const canon = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 5 } });
+  const restore = denyRead(canon);
+  if (!restore) {
+    t.skip('this volume/OS does not enforce a read denial for the owning process via chmod OR icacls -- cannot exercise EACCES/EPERM (' + process.platform + ')');
+    return; // t.skip does not stop the body
+  }
+  try {
+    for (const [name, api] of CJS_ESM) {
+      assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(canon, 'unreadable')], name);
+    }
+  } finally {
+    restore(); // in-body, not t.after: mkT's own cleanup is registered first and would run BEFORE it and hit the denied file
+  }
+});
+
+test('UMB-174 (b) reason "not a JSON object": valid JSON that is not a plain object is REPORTED, and contributes nothing', (t) => {
+  hermetic(t);
+  const home = mkT(t);
+  for (const body of ['[]', '"str"', '42', 'null', 'true']) {
+    const { root, sub } = project(t);
+    const canon = path.join(root, '.claude', 'coal', 'coalhearth.json');
+    fs.mkdirSync(path.dirname(canon), { recursive: true });
+    fs.writeFileSync(canon, body);
+    for (const [name, api] of CJS_ESM) {
+      assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(canon, 'not a JSON object')], name + ' ' + body);
+    }
+    assert.deepEqual(loadMergedConfig({ cwd: sub, home }), {}, body + ' is never accepted as the config');
+  }
+});
+
+test('UMB-174 (b): a leading U+FEFF is STRIPPED before the parse -- a BOM-prefixed valid object is READ and not reported', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const canon = path.join(root, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(canon), { recursive: true });
+  fs.writeFileSync(canon, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"journal":{"atomicityRetries":6}}')]));
+  assert.equal(loadMergedConfig({ cwd: sub, home }).journal.atomicityRetries, 6);
+  for (const [name, api] of CJS_ESM) assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [], name);
+});
+
+test('UMB-174 (b): the GLOBAL config is reported too, when it is present but unreadable', (t) => {
+  hermetic(t);
+  const { sub } = project(t);
+  const home = mkT(t);
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(g), { recursive: true });
+  fs.writeFileSync(g, 'nope');
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'malformed JSON')], name);
+  }
+});
+
+test('UMB-174 (b): an ABSENT config, and a readable one, emit no UNREADABLE line', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  for (const [name, api] of CJS_ESM) assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [], name + ' absent');
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 2 } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [], name + ' readable');
+});
+
+test('UMB-174 (b): an unreadable LEGACY file is reported as UNREADABLE, never also claimed to be "still read" (LEGACY)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const legacy = path.join(root, '.coalhearth.json');
+  fs.writeFileSync(legacy, '{');
+  for (const [name, api] of CJS_ESM) {
+    const lines = api.configNotices({ cwd: sub, home });
+    assert.deepEqual(lines, [unreadableLine(legacy, 'malformed JSON')], name);
+  }
 });
