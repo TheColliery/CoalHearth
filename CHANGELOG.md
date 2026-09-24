@@ -2,7 +2,7 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
-## [Unreleased]
+## [2.6.0] - 2026-09-24
 
 A config that cannot be read is now reported, and a directory at a config path no longer shadows a real one.
 
