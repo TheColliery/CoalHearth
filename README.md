@@ -20,7 +20,7 @@
 
 [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [Releases](https://github.com/TheColliery/CoalHearth/releases)
 
-**Part of [TheColliery](https://github.com/TheColliery)** — siblings: **[CoalMine](https://github.com/HetCreep/CoalMine)** (quality canaries) · **[CoalTipple](https://github.com/TheColliery/CoalTipple)** (model/effort routing) · **[CoalBoard](https://github.com/TheColliery/CoalBoard)** (consensus board) · **[CoalFace](https://github.com/TheColliery/CoalFace)** (fan-out discipline) · **[CoalWash](https://github.com/TheColliery/CoalWash)** (memory defrag) · **[CoalLedger](https://github.com/TheColliery/CoalLedger)** (docs health).
+**Part of [TheColliery](https://github.com/TheColliery)** — siblings: **[CoalMine](https://github.com/TheColliery/CoalMine)** (quality canaries) · **[CoalTipple](https://github.com/TheColliery/CoalTipple)** (model/effort routing) · **[CoalBoard](https://github.com/TheColliery/CoalBoard)** (consensus board) · **[CoalFace](https://github.com/TheColliery/CoalFace)** (fan-out discipline) · **[CoalWash](https://github.com/TheColliery/CoalWash)** (memory defrag) · **[CoalLedger](https://github.com/TheColliery/CoalLedger)** (docs health) · **[CoalGob](https://github.com/TheColliery/CoalGob)** (OS-trash delete guard, PUBLIC BETA v0.1.0-beta.1).
 
 </div>
 
@@ -184,12 +184,13 @@ Interruption damage, measured (2026-07-03, v1.0.0): on a 10-file mid-refactor, w
 
 CoalHearth is the **session-continuity** member of the mining series, alongside:
 
-- [CoalMine](https://github.com/HetCreep/CoalMine) — quality canaries
+- [CoalMine](https://github.com/TheColliery/CoalMine) — quality canaries
 - [CoalTipple](https://github.com/TheColliery/CoalTipple) — model/effort routing
 - [CoalBoard](https://github.com/TheColliery/CoalBoard) — consensus & debate
 - [CoalFace](https://github.com/TheColliery/CoalFace) — fan-out discipline
 - [CoalWash](https://github.com/TheColliery/CoalWash) — memory defrag
 - [CoalLedger](https://github.com/TheColliery/CoalLedger) — docs health
+- [CoalGob](https://github.com/TheColliery/CoalGob) — OS-trash delete guard (PUBLIC BETA v0.1.0-beta.1; engine + tests ship, no skill/hook surface yet)
 
 Install one, it stands alone; install all, they compose without conflict.
 
