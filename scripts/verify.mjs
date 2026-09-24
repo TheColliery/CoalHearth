@@ -389,9 +389,17 @@ try {
   });
   if (!roots.length || !files.length) fail(`census walked ${files.length} file(s) from ${roots.length} root(s) -- an empty walk proves nothing`);
   else {
-    const { findings, gitSpawns, nodeChildren } = censusGitSpawns(files);
+    const { findings, gitSpawns, exempt, unusedExemptions, nodeChildren } = censusGitSpawns(files);
     for (const msg of findings) fail(msg);
-    if (!findings.length) ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): every one takes env from gitEnv() alone`);
+    // An exemption whose spawn is gone is a blanket pass waiting to happen: it FAILs the gate (R8 FIXBACK M1).
+    for (const e of unusedExemptions) fail(`git-spawn census exemption for ${e.label} (env: ${e.expr}) no longer matches a spawn -- remove it, or restore the spawn it names`);
+    if (!findings.length && !unusedExemptions.length) {
+      // The line states what the instrument PRODUCED: how many spawns take env from gitEnv() alone, and the
+      // named, counted exemptions -- never a blanket "every one" (R8 FIXBACK M1, the r29 class).
+      const alone = gitSpawns.length - exempt.length;
+      const named = exempt.length ? `, ${exempt.length} exempt by name (${exempt.map((e) => `${e.label}: ${e.reason}`).join('; ')})` : '';
+      ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): ${alone} take env from gitEnv() alone${named}`);
+    }
   }
 } catch (e) { fail(`git-spawn census crashed: ${e.message}`); }
 

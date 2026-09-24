@@ -56,7 +56,7 @@ test('census: a spread of process.env is refused, including when gitEnv() is ALS
 test('census: an env that is not produced by gitEnv() is refused; an alias assigned from gitEnv() in the same file is accepted', () => {
   const bad = census(`${SP}('git', [], { env: someEnv });\n`);
   assert.equal(bad.findings.length, 1);
-  assert.match(bad.findings[0], /not produced by gitEnv/);
+  assert.match(bad.findings[0], /someEnv is not declared/);
   const bareLiteral = census(`${SP}('git', [], { env: { PATH: '/x' } });\n`);
   assert.equal(bareLiteral.findings.length, 1);
   const alias = census(`const GIT_ENV = gitEnv(root);\n${SP}('git', [], { env: GIT_ENV });\n`);
@@ -152,4 +152,104 @@ test('census: a dynamic-import destructure and a require destructure are read li
   assert.equal(censusGitSpawns([{ label: 'bin/r.js', text: req }]).findings.length, 1);
   const ns = `const ${CP} = require('${MOD}');\n${CP}.${SP}('git', [], { cwd: d });\n`;
   assert.equal(censusGitSpawns([{ label: 'bin/n.js', text: ns }]).findings.length, 1);
+});
+
+// -- R8 FIXBACK M1: the census accepted any env: that merely CONTAINED gitEnv(), and printed a verdict
+// ("every one takes env from gitEnv() alone") that its own instrument did not produce. INSPECT's evasion
+// shapes, each one a real hand-off of an un-stripped environment to a git child. A finding here = CLOSED.
+const raw = (text, label = 'scripts/x.test.mjs') => censusGitSpawns([{ label, text }], { exemptions: [] });
+const PE = 'process' + '.env';
+
+test('M1: the WHOLE env expression must be gitEnv(...) -- a spread of an alias of process.env beside it is refused (E6)', () => {
+  const r = raw(`${BINDINGS}const e = ${PE};\n${SP}('git', [], { env: { ...gitEnv(x), ...e } });\n`);
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0], /not produced by gitEnv\(\) alone/);
+});
+
+test('M1: Object.assign(gitEnv(x), process[env]) is refused (E6c)', () => {
+  const r = raw(`${BINDINGS}${SP}('git', [], { env: Object.assign(gitEnv(x), process['env']) });\n`);
+  assert.equal(r.findings.length, 1);
+});
+
+test('M1: env: env || gitEnv(root) -- a caller-supplied env with a fallback -- is refused unless named (E6b)', () => {
+  const r = raw(`${BINDINGS}const git = (cwd, args, env) => ${SP}('git', args, { cwd, env: env || gitEnv(root) });\n`);
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0], /env \|\| gitEnv\(root\)/);
+});
+
+test('M1: a whole call gitEnv(...) is accepted, nested parens and whitespace included', () => {
+  assert.deepEqual(raw(`${BINDINGS}${SP}('git', [], { env: gitEnv(path.dirname(path.join(a, b))) });\n`).findings, []);
+  assert.deepEqual(raw(`${BINDINGS}${SP}('git', [], { env:   gitEnv()   });\n`).findings, []);
+});
+
+test('M1: an identifier assigned from exactly gitEnv(...) is accepted -- and refused once it is MUTATED afterwards (E5)', () => {
+  const ok = raw(`${BINDINGS}const G = gitEnv(r);\n${SP}('git', [], { env: G });\n`);
+  assert.deepEqual(ok.findings, []);
+  for (const mutation of ['G.GIT_DIR = hookDir;', "G['GIT_DIR'] = hookDir;", 'Object.assign(G, ambient);', 'delete G.GIT_CEILING_DIRECTORIES;', 'G.X ||= 1;']) {
+    const r = raw(`${BINDINGS}const G = gitEnv(r);\n${mutation}\n${SP}('git', [], { env: G });\n`);
+    assert.equal(r.findings.length, 1, mutation);
+    assert.match(r.findings[0], /mutated/, mutation);
+  }
+  // an alias assigned from anything OTHER than exactly the call is refused
+  const wrapped = raw(`${BINDINGS}const G = gitEnv(r) || fallback;\n${SP}('git', [], { env: G });\n`);
+  assert.equal(wrapped.findings.length, 1);
+  const notConst = raw(`${BINDINGS}let G = gitEnv(r);\n${SP}('git', [], { env: G });\n`);
+  assert.equal(notConst.findings.length, 1, 'let/var can be reassigned: only const counts');
+});
+
+test('M1: a git binary not spelled git -- an absolute path, git.cmd, git.exe under a directory -- is still git (E7, E7b)', () => {
+  assert.equal(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('git.cmd', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.deepEqual(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { env: gitEnv(x) });\n`).findings, []);
+  assert.deepEqual(raw(`${BINDINGS}${SP}('/usr/bin/gitk', ['x'], { cwd: d });\n`).findings, [], 'gitk is not git');
+});
+
+test('M1: git through a SHELL -- sh -c, a command string, shell: true -- is a git spawn and needs the same env (E8, E8b, E13)', () => {
+  assert.equal(raw(`${BINDINGS}${SP}('sh', ['-c', 'git init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('bash', ['-lc', 'cd x && git init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${ES}('cd x && git init', { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${EFS}('git init', { shell: true, cwd: d });\n`).findings.length, 1);
+  assert.deepEqual(raw(`${BINDINGS}${ES}('cd x && git init', { env: gitEnv(d) });\n`).findings, []);
+  // controls: a shell running something that is not git is not this census's business
+  assert.deepEqual(raw(`${BINDINGS}${SP}('sh', ['-c', 'echo hi'], { cwd: d });\n`).findings, []);
+  assert.deepEqual(raw(`${BINDINGS}${ES}('echo digit', { cwd: d });\n`).findings, [], 'a word merely containing git is not git');
+});
+
+test('M1: a callee reached by alias assignment, an inline require, or cp.default is still seen (E1, E9, E10)', () => {
+  const alias = 'ru' + 'n';
+  assert.equal(raw(`import { ${SP} } from '${MOD}';\nconst ${alias} = ${SP};\n${alias}('git', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`require('${MOD}').${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`(await import('${MOD}')).${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`import ${CP} from '${MOD}';\n${CP}.default.${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
+  assert.deepEqual(raw(`require('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
+});
+
+// -- the deliberate hazard fixture: an EXPLICIT, COUNTED, PRINTED exemption, never a silent pass ------------
+const EXEMPT = [{ label: 'scripts/x.test.mjs', expr: 'env || gitEnv(root)', reason: 'the hazard proof feeds a poisoned GIT_DIR on purpose' }];
+const HAZARD = `${BINDINGS}const git = (cwd, args, env) => ${SP}('git', args, { cwd, env: env || gitEnv(root) });\n`;
+
+test('M1: a NAMED exemption (file + exact expression) is counted, carries its reason, and is no finding', () => {
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.gitSpawns.length, 1);
+  assert.equal(r.exempt.length, 1);
+  assert.equal(r.exempt[0].label, 'scripts/x.test.mjs');
+  assert.match(r.exempt[0].reason, /poisoned GIT_DIR/);
+  assert.deepEqual(r.unusedExemptions, []);
+});
+
+test('M1: an exemption is exact -- another spawn in the same file, or the same expression in another file, is still checked', () => {
+  const more = HAZARD + `${SP}('git', ['status'], { cwd: d, env: process.env });\n`;
+  const a = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: more }], { exemptions: EXEMPT });
+  assert.equal(a.findings.length, 1, 'the second spawn is not covered by the first one\'s exemption');
+  const b = censusGitSpawns([{ label: 'scripts/other.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
+  assert.equal(b.findings.length, 1, 'the exemption is keyed to its file');
+});
+
+test('M1: an exemption that no longer matches anything is reported as UNUSED, so it cannot rot into a blanket pass', () => {
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: BINDINGS + SP + "('git', [], { env: gitEnv(x) });\n" }], { exemptions: EXEMPT });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.unusedExemptions.length, 1);
+  assert.equal(r.unusedExemptions[0].label, 'scripts/x.test.mjs');
 });

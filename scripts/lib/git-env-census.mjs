@@ -6,31 +6,64 @@
 // linked worktree a git hook exports an absolute GIT_DIR, and a child that inherits it acts on the
 // enclosing repository. Here a git spawn is refused when
 //   (a) it carries no `env:` key at all, or
-//   (b) its `env:` text mentions process.env AT ALL -- a spread, a bare pass-through, or a helper
-//       call beside it (`{ ...gitEnv(), ...process.env }` re-adds every GIT_* key by ordering), or
-//   (c) its `env:` is not produced by gitEnv(): a call to it, or an identifier assigned from it in
-//       the same file (`const NAME = gitEnv(...)`).
-// (b) is stricter than "process.env without the helper" on purpose; the helper is the ONLY place
-// process.env is read for a git child.
+//   (b) its `env:` text mentions process.env AT ALL (a spread, a bare pass-through, a helper call
+//       beside it), or
+//   (c) its `env:` is anything but gitEnv(...) ALONE: the WHOLE expression is a call to it, or a
+//       bare identifier declared `const NAME = gitEnv(...)` in the same file, exactly that call
+//       and not mutated afterwards. An expression that merely CONTAINS `gitEnv(` -- a spread beside
+//       an alias of process.env, Object.assign(gitEnv(), ...), `env || gitEnv(root)` -- is refused:
+//       the helper's presence is not the property, the absence of everything else is.
+// (R8 FIXBACK M1: rule (c) used to test only that `gitEnv(` appeared somewhere in the expression, so
+// the gate printed "every one takes env from gitEnv() alone" while its own instrument did not
+// produce that claim.)
 //
-// It is TEXTUAL, not a parser, and its bounds are named rather than hidden:
-//   - it reads WHICH names a file binds from child_process (a destructured import or require, an
-//     `as` alias, or a whole-module binding used as `cp.spawnSync(`) and considers only calls to
-//     THOSE names. A file that never binds child_process is skipped whole, so prose such as a
-//     parenthesised plural in a message string can never read as a call. A call form it cannot see
-//     is not covered: a wrapper function around git, or a callee fetched some other way. It DOES
-//     refuse the common unsafe unknown: a spawn whose first argument is neither a string literal
-//     nor process.execPath, since it cannot be proven not to be git.
-//   - a `//` comment or a `*` block-comment line is skipped; a call inside a multi-line block
-//     comment that does not start its lines with `*`, or inside a string, would be misread.
+// EXEMPTIONS are explicit, exact, COUNTED and PRINTED -- never a silent pass. GIT_ENV_EXEMPTIONS
+// (below) names a file, the exact env expression, and the reason. The one entry is the hazard proof
+// in git-env.test.mjs, which feeds a deliberately poisoned GIT_DIR to reproduce the incident inside a
+// sandbox. An exemption that no longer matches a spawn is reported as UNUSED, and the gate fails on
+// it, so an entry cannot outlive its spawn and rot into a blanket pass.
+//
+// It is TEXTUAL, not a parser. What it sees:
+//   - calls to the child_process functions a file binds: a destructured import or require (with `as`
+//     / `:` renames), an alias by assignment (`const run = spawnSync`), a whole-module binding used
+//     as `cp.spawnSync(` or `cp.default.spawnSync(`, and the inline `require('child_process').fn(`
+//     and `(await import('child_process')).fn(` forms.
+//   - a git spawn however the binary is spelled (`git`, `git.exe`, `git.cmd`, an absolute path to
+//     one), and git through a shell: `sh -c '... git ...'`, an `execSync`/`exec` command string, or
+//     any call with `shell:` set.
+//   - a spawn whose command is neither a string literal nor process.execPath is REFUSED: it cannot
+//     be proven not to be git.
+//   - a `//` comment or a `*` block-comment line is skipped.
+// What it does NOT see -- named-open, on purpose, not closed:
+//   - a callee obtained any other way: returned from a function, a property of another object,
+//     Reflect.apply, or a WRAPPER around git defined elsewhere and called by its own name (the
+//     wrapper's own spawn is seen only if it binds child_process where it is defined).
+//   - the env identifier mutated through ANOTHER alias (`const H = G; H.GIT_DIR = x`) or by a
+//     function it is passed to (`tweak(G)`); only direct mutation of the declared name is seen.
+//   - a shell command that reaches git without the word appearing in the call (`sh script.sh`, a
+//     command assembled at runtime from parts).
+//   - a call inside a multi-line block comment whose lines do not start with `*`, or inside a
+//     string, would be misread.
 //   - a node child (process.execPath) is COUNTED and left alone: it is not a git spawn, and the
 //     gates it runs strip their own git children.
 //
 // Pure: a list of { label, text } in, a report out, so it is unit-tested red-first without a clone.
 // The enumeration is NOT walked here -- scripts/verify.mjs feeds it the same surfaces the pointer
 // gate walks (see the wiring there).
+
+// The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised). The
+// reason is printed by the gate: keep it free of parentheses.
+export const GIT_ENV_EXEMPTIONS = [
+  {
+    label: 'scripts/lib/git-env.test.mjs',
+    expr: 'env || gitEnv(root)',
+    reason: 'the hazard proof feeds a deliberately poisoned GIT_DIR into a sandbox to reproduce the incident',
+  },
+];
+
 const FNS = ['spawnSync', 'execFileSync', 'spawn', 'execFile', 'execSync', 'exec'];
 const SHELL_STRING_FNS = new Set(['execSync', 'exec']);
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
 const STRING_RE = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
 const CP_MOD = String.raw`['"](?:node:)?child_process['"]`;
 const DESTRUCTURED_RE = new RegExp(String.raw`\{([^}]*)\}\s*(?:=\s*(?:await\s+import|require)\(\s*|from\s*)` + CP_MOD, 'g');
@@ -38,26 +71,45 @@ const NS_IMPORT_RE = new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([\w$]+)\s+fr
 const NS_REQUIRE_RE = new RegExp(String.raw`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:await\s+import|require)\(\s*` + CP_MOD, 'g');
 const escapeDollar = (x) => x.replace(/\$/g, '\\$');
 
-// Which names does this file bind from child_process? locals: local name -> the real function
-// (`{ spawnSync as run }` maps run -> spawnSync); spaces: whole-module bindings, used as
-// `cp.spawnSync(`. Returns { locals, re } where re finds the calls, or null when the file binds
-// nothing (then there is nothing to census). Named groups: qfn = the function of a qualified call,
-// loc = the local name of a bare call.
+// Split one destructuring/import list into [canonical function, local name] pairs.
+function bindingPairs(list) {
+  const out = [];
+  for (const part of list.split(',')) {
+    const [canon, local] = part.trim().split(/\s+as\s+|\s*:\s*/);
+    if (FNS.includes(canon)) out.push([canon, (local || canon).trim()]);
+  }
+  return out;
+}
+
+// Which names does this file bind to child_process functions? locals: local name -> the real
+// function; spaces: whole-module bindings, used as `cp.spawnSync(`. Returns { locals, re } where re
+// finds the calls. Named groups: qfn = the function of a qualified call, ifn = the function of an
+// inline require/import call, loc = the local name of a bare call.
 function bindingsOf(text) {
   const locals = new Map();
-  for (const m of text.matchAll(DESTRUCTURED_RE)) {
-    for (const part of m[1].split(',')) {
-      const [canon, local] = part.trim().split(/\s+as\s+|\s*:\s*/);
-      if (FNS.includes(canon)) locals.set((local || canon).trim(), canon);
-    }
-  }
+  for (const m of text.matchAll(DESTRUCTURED_RE)) for (const [canon, local] of bindingPairs(m[1])) locals.set(local, canon);
   const spaces = new Set();
   for (const m of text.matchAll(NS_IMPORT_RE)) spaces.add(m[1]);
   for (const m of text.matchAll(NS_REQUIRE_RE)) spaces.add(m[1]);
+  if (spaces.size) {
+    const ns = [...spaces].map(escapeDollar).join('|');
+    // const { spawnSync: run } = cp;
+    for (const m of text.matchAll(new RegExp(String.raw`\{([^}]*)\}\s*=\s*(?:${ns})\s*(?:;|\n|$)`, 'g'))) {
+      for (const [canon, local] of bindingPairs(m[1])) locals.set(local, canon);
+    }
+    // const run = cp.spawnSync;
+    for (const m of text.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:${ns})\.(?:default\.)?(${FNS.join('|')})\s*(?:;|\n|,|$)`, 'g'))) locals.set(m[1], m[2]);
+  }
+  // const run = spawnSync;  (an alias by assignment, chained: a fixpoint over the assignments)
+  for (let pass = 0; pass < 3; pass++) {
+    for (const m of text.matchAll(/(?:const|let|var)\s+([\w$]+)\s*=\s*([\w$]+)\s*(?:;|\n|,|$)/g)) {
+      if (locals.has(m[2]) && !locals.has(m[1])) locals.set(m[1], locals.get(m[2]));
+    }
+  }
   const alts = [];
-  if (spaces.size) alts.push(`(?<ns>${[...spaces].map(escapeDollar).join('|')})\\.(?<qfn>${FNS.join('|')})`);
+  if (spaces.size) alts.push(`(?<ns>${[...spaces].map(escapeDollar).join('|')})\\.(?:default\\.)?(?<qfn>${FNS.join('|')})`);
   if (locals.size) alts.push(`(?<loc>${[...locals.keys()].map(escapeDollar).join('|')})`);
-  if (!alts.length) return null;
+  alts.push(`(?:require\\(\\s*${CP_MOD}\\s*\\)|\\(\\s*await\\s+import\\(\\s*${CP_MOD}\\s*\\)\\s*\\))\\.(?:default\\.)?(?<ifn>${FNS.join('|')})`);
   return { locals, re: new RegExp('(?<![.\\w$])(?:' + alts.join('|') + ')\\(', 'g') };
 }
 
@@ -94,22 +146,57 @@ function readExpr(text, from, limit) {
 }
 
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
+const normalise = (s) => s.replace(/\s+/g, ' ').trim();
 
-function envVerdict(callText, fileText) {
-  const m = /\benv\s*:/.exec(callText);
-  if (!m) return "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)";
-  const expr = readExpr(callText, m.index + m[0].length, callText.length).trim();
-  if (/\bprocess\.env\b/.test(expr)) {
-    return `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)`;
-  }
-  if (/\bgitEnv\(/.test(expr)) return null;
-  if (/^[A-Za-z_$][\w$]*$/.test(expr) && new RegExp(String.raw`(?:const|let|var)\s+${escapeDollar(expr)}\s*=\s*gitEnv\(`).test(fileText)) return null;
-  return `env: ${expr || '(empty)'} is not produced by gitEnv() -- assign it from gitEnv(...) in this file or call it in place (CWK-136)`;
+// Does a command string, run by a shell, invoke git? `git` as a whole word at a command position.
+const shellMentionsGit = (s) => /(^|[\s;&|(`$"'])git(\.exe|\.cmd|\.bat)?(\s|$)/i.test(s);
+
+// The expression is EXACTLY one call to gitEnv(...), nothing before or after it.
+function isWholeGitEnvCall(expr) {
+  if (!/^gitEnv\(/.test(expr)) return false;
+  return findMatchingClose(expr, expr.indexOf('(')) === expr.length - 1;
 }
 
-export function censusGitSpawns(files) {
+// `const NAME = gitEnv(...)` in this file: is NAME exactly that call, and is it left alone afterwards?
+// Returns null when the alias is sound, or the reason it is not.
+function aliasVerdict(name, fileText) {
+  const decl = new RegExp(String.raw`\bconst\s+${escapeDollar(name)}\s*=\s*gitEnv\(`).exec(fileText);
+  if (!decl) return 'is not declared `const ' + name + ' = gitEnv(...)` in this file';
+  const open = decl.index + decl[0].length - 1;
+  const close = findMatchingClose(fileText, open);
+  if (close === -1 || !/^\s*(?:;|\n|,|$)/.test(fileText.slice(close + 1))) return 'is assigned from more than the bare gitEnv(...) call';
+  const n = escapeDollar(name);
+  const mutation = new RegExp([
+    String.raw`\b${n}\s*\.\s*[\w$]+\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
+    String.raw`\b${n}\s*\[[^\]\n]*\]\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
+    String.raw`\bObject\s*\.\s*(?:assign|defineProperty|defineProperties)\s*\(\s*${n}\b`,
+    String.raw`\bdelete\s+${n}\b`,
+  ].join('|')).exec(fileText);
+  if (mutation) return 'is mutated after it is assigned (line ' + lineOf(fileText, mutation.index) + ')';
+  return null;
+}
+
+// null = the env is gitEnv() alone; otherwise { why, expr }.
+function envVerdict(callText, fileText) {
+  const m = /\benv\s*:/.exec(callText);
+  if (!m) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
+  const expr = readExpr(callText, m.index + m[0].length, callText.length).trim();
+  if (/\bprocess\s*(?:\.\s*env\b|\[\s*['"`]env['"`]\s*\])/.test(expr)) {
+    return { why: `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)`, expr };
+  }
+  if (isWholeGitEnvCall(expr)) return null;
+  if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
+    const bad = aliasVerdict(expr, fileText);
+    return bad ? { why: `env: ${expr} ${bad} -- take env from gitEnv(...) alone (CWK-136)`, expr } : null;
+  }
+  return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)`, expr };
+}
+
+export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {}) {
   const findings = [];
   const gitSpawns = [];
+  const exempt = [];
+  const used = new Set();
   let nodeChildren = 0;
   for (const { label, text } of files) {
     if (text === null || text === undefined) {
@@ -117,11 +204,10 @@ export function censusGitSpawns(files) {
       continue;
     }
     const b = bindingsOf(text);
-    if (!b) continue;
     let m;
     while ((m = b.re.exec(text))) {
       if (isInComment(text, m.index)) continue;
-      const fn = m.groups.qfn || b.locals.get(m.groups.loc);
+      const fn = m.groups.qfn || m.groups.ifn || b.locals.get(m.groups.loc);
       const openIdx = m.index + m[0].length - 1;
       const closeIdx = findMatchingClose(text, openIdx);
       const line = lineOf(text, m.index);
@@ -137,12 +223,28 @@ export function censusGitSpawns(files) {
         findings.push(`${label}:${line} ${fn}(...) command is not a string literal or process.execPath -- the census cannot prove it is not git; spell the command as a literal`);
         continue;
       }
-      const isGit = SHELL_STRING_FNS.has(fn) ? /^\s*git(\.exe)?(\s|$)/i.test(lit[2]) : /^git(\.exe)?$/i.test(lit[2]);
+      const cmd = lit[2];
+      const rest = callText.slice(1 + first.length);
+      const base = cmd.split(/[\\/]/).pop();
+      let isGit = false;
+      if (SHELL_STRING_FNS.has(fn) || /\bshell\s*:\s*(?!false\b)/.test(rest)) isGit = shellMentionsGit(cmd); // a command STRING run by a shell
+      else if (/^git(\.exe|\.cmd|\.bat)?$/i.test(base)) isGit = true; // git, however the binary is spelled
+      else if (SHELLS.has(base.toLowerCase())) isGit = (rest.match(STRING_RE) || []).some((s) => shellMentionsGit(s.slice(1, -1))); // sh -c '... git ...'
       if (!isGit) continue;
-      gitSpawns.push({ label, line, fn });
-      const why = envVerdict(callText, text);
-      if (why) findings.push(`${label}:${line} ${fn}(git) ${why}`);
+      const entry = { label, line, fn };
+      gitSpawns.push(entry);
+      const v = envVerdict(callText, text);
+      if (!v) continue;
+      const ex = exemptions.find((e) => e.label === label && v.expr !== null && normalise(e.expr) === normalise(v.expr));
+      if (ex) {
+        entry.exempt = true;
+        exempt.push({ label, line, expr: normalise(v.expr), reason: ex.reason });
+        used.add(ex);
+        continue;
+      }
+      findings.push(`${label}:${line} ${fn}(git) ${v.why}`);
     }
   }
-  return { findings, gitSpawns, nodeChildren };
+  const unusedExemptions = exemptions.filter((e) => !used.has(e));
+  return { findings, gitSpawns, exempt, unusedExemptions, nodeChildren };
 }
