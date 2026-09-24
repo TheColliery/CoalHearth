@@ -352,7 +352,14 @@ test("ResumeEngine.generateHandoffPrompt flags a GC'd transcript + points at Coa
   assert.match(goneMd, /garbage-collected/i, 'GC note present when the transcript is gone');
   assert.match(goneMd, /claude --resume/, 'names the dead resume path');
   assert.match(goneMd, /estate-search <topic>/, 'points at CoalWash estate-search (the CH×CW seam)');
-  assert.match(goneMd, /skip if CoalWash is not installed/i, 'degrade-safe: names the CW-absent skip');
+  // CWK-135 (b) / CWK-111 R9: a sibling pointer in shipped instruction text is an OFFER gated on the user and INERT
+  // when the sibling is absent -- the conditional wording CoalBoard's arbitration cue carries ("if <X> is present
+  // this session (its skill is listed) ...; a plugin that is not present <does nothing>"). Not a directive to dig.
+  assert.match(goneMd, /CoalWash\*\* is present this session \(its skill is listed\)/, 'conditional on presence, the CoalBoard R9 wording');
+  assert.match(goneMd, /OFFER the user a read-only dig/, 'an offer gated on the user, not a directive');
+  assert.match(goneMd, /a plugin that is not present offers nothing/, 'inert when the sibling is absent');
+  assert.doesNotMatch(goneMd, /dig the archived transcripts \(read-only\)/, 'the old unconditional imperative is gone');
+  assert.doesNotMatch(goneMd, /skip if CoalWash is not installed/i, 'the old absent-sibling escape hatch is replaced by the conditional');
   // (b) transcriptPath points at an EXISTING file -> NO GC note (resume path still alive).
   const livePath = path.join(d, 'live-session.jsonl');
   fs.writeFileSync(livePath, '{}');

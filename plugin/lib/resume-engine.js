@@ -230,7 +230,7 @@ class ResumeEngine {
     // U11-A1) — the path itself moved into the fenced snapshot ("Recorded transcript
     // path", below), so the note only points at it.
     const transcriptNote = transcriptGone
-      ? '\n> ⚠️ The Claude Code transcript recorded for this session (see \'Recorded transcript path\' in the snapshot below) has been **garbage-collected** — CC\'s transcript retention is version-dependent, not the guaranteed 30 days its docs imply, so `claude --resume` for this session will not work. **The journal below is your recovery source.** If a needed fact predates or slipped past the journal and **CoalWash** is installed, dig the archived transcripts (read-only): `node <CoalWash>/scripts/lib/cli.mjs estate-search <topic>` then `estate-restore` — skip if CoalWash is not installed.'
+      ? '\n> ⚠️ The Claude Code transcript recorded for this session (see \'Recorded transcript path\' in the snapshot below) has been **garbage-collected** — CC\'s transcript retention is version-dependent, not the guaranteed 30 days its docs imply, so `claude --resume` for this session will not work. **The journal below is your recovery source.** If a needed fact predates or slipped past the journal and **CoalWash** is present this session (its skill is listed), OFFER the user a read-only dig of the archived transcripts: `node <CoalWash>/scripts/lib/cli.mjs estate-search <topic>` then `estate-restore` — a plugin that is not present offers nothing.'
       : '';
 
     // The UNTRUSTED SNAPSHOT: every value above is plain text, one fence, nothing here can
