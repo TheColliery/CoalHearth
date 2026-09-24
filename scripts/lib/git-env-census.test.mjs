@@ -253,3 +253,32 @@ test('M1: an exemption that no longer matches anything is reported as UNUSED, so
   assert.equal(r.unusedExemptions.length, 1);
   assert.equal(r.unusedExemptions[0].label, 'scripts/x.test.mjs');
 });
+
+// -- R8 FIXBACK 2 MEDIUM-1: a path-qualified git inside a shell string, and git named only in the ARGUMENTS of a shell:true call ---
+// The reviewer's shapes (census-evasions2/3). Each is a git child; the CHANGELOG says so.
+test('M-1: a path-qualified git inside a shell string is a git spawn (an absolute path, a Windows path, a quoted path)', () => {
+  assert.equal(raw(`${BINDINGS}${ES}('/usr/bin/git init', { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { shell: true });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('C:/Program Files/Git/cmd/git.exe', ['init'], { shell: true });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${SP}('sh', ['-c', '/usr/bin/git init'], { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${ES}('"C:/Program Files/Git/cmd/git.exe" init', { cwd: d });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${ES}('C:\\Git\\cmd\\git.exe init', { cwd: d });\n`).findings.length, 1, 'a backslash-separated path');
+  assert.deepEqual(raw(`${BINDINGS}${ES}('/usr/bin/git init', { env: gitEnv(d) });\n`).findings, [], 'clean once env is gitEnv() alone');
+});
+
+test('M-1: with shell: true Node joins the ARGUMENTS into the command line, so git named only there is a git spawn', () => {
+  assert.equal(raw(`${BINDINGS}${SP}('echo', ['x', '&&', 'git', 'init'], { shell: true });\n`).findings.length, 1);
+  assert.equal(raw(`${BINDINGS}${EFS}('true', ['&&', '/usr/bin/git', 'init'], { shell: true });\n`).findings.length, 1);
+  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['x', '&&', 'git', 'init'], { shell: true, env: gitEnv(d) });\n`).findings, []);
+  // controls: shell false / absent leaves the arguments as argv, so the word git there is just data
+  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['git', 'init'], { cwd: d });\n`).findings, []);
+  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['git', 'init'], { shell: false });\n`).findings, []);
+  // and a shell:true call that runs no git stays clean
+  assert.deepEqual(raw(`${BINDINGS}${SP}('npm', ['test'], { shell: true, cwd: d });\n`).findings, []);
+});
+
+test('M-1: no new false positive -- a path or word that merely CONTAINS git is not git', () => {
+  for (const cmd of ['cat .gitignore', 'cat ./repo/.git/config', 'ls /var/gitea/data', 'echo digit', 'cd my-git-repo && ls', 'dir C:\\src\\github\\x']) {
+    assert.deepEqual(raw(`${BINDINGS}${ES}('${cmd}', { cwd: d });\n`).findings, [], cmd);
+  }
+});

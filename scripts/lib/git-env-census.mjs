@@ -41,7 +41,8 @@
 //   - the env identifier mutated through ANOTHER alias (`const H = G; H.GIT_DIR = x`) or by a
 //     function it is passed to (`tweak(G)`); only direct mutation of the declared name is seen.
 //   - a shell command that reaches git without the word appearing in the call (`sh script.sh`, a
-//     command assembled at runtime from parts).
+//     command assembled at runtime from parts), or a `shell:` call whose arguments are a variable
+//     rather than an array literal (its strings are not in the call text).
 //   - a call inside a multi-line block comment whose lines do not start with `*`, or inside a
 //     string, would be misread.
 //   - a node child (process.execPath) is COUNTED and left alone: it is not a git spawn, and the
@@ -148,8 +149,13 @@ function readExpr(text, from, limit) {
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
 const normalise = (s) => s.replace(/\s+/g, ' ').trim();
 
-// Does a command string, run by a shell, invoke git? `git` as a whole word at a command position.
-const shellMentionsGit = (s) => /(^|[\s;&|(`$"'])git(\.exe|\.cmd|\.bat)?(\s|$)/i.test(s);
+// Does a command string, run by a shell, invoke git? `git` as a whole word, at a command position or
+// reached by a path (`/usr/bin/git`, `C:/Program Files/Git/cmd/git.exe`, a quoted one). `.git`,
+// `.gitignore` and `my-git-repo` are not: the character before must be a separator, a quote or a path
+// separator, and the one after a separator or a quote (R8 FIXBACK 2 MEDIUM-1: the class had no `/` or
+// `\`, so every path-qualified git in a shell string evaded).
+const shellMentionsGit = (s) => /(^|[\s;&|(`$"'/\\])git(\.exe|\.cmd|\.bat)?(?=[\s;&|)`"']|$)/i.test(s);
+const GIT_BASENAME = /^git(\.exe|\.cmd|\.bat)?$/i;
 
 // The expression is EXACTLY one call to gitEnv(...), nothing before or after it.
 function isWholeGitEnvCall(expr) {
@@ -227,8 +233,13 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       const rest = callText.slice(1 + first.length);
       const base = cmd.split(/[\\/]/).pop();
       let isGit = false;
-      if (SHELL_STRING_FNS.has(fn) || /\bshell\s*:\s*(?!false\b)/.test(rest)) isGit = shellMentionsGit(cmd); // a command STRING run by a shell
-      else if (/^git(\.exe|\.cmd|\.bat)?$/i.test(base)) isGit = true; // git, however the binary is spelled
+      if (SHELL_STRING_FNS.has(fn) || /\bshell\s*:(?!\s*false\b)/.test(rest)) { // (?!\s*false) not \s*(?!false): the latter backtracks off the space and reads `shell: false` as a shell
+        // A command STRING run by a shell. With `shell:` set Node JOINS the arguments array into that
+        // command line, so git named only in the arguments is git too (an array literal; a variable is named open).
+        const second = readExpr(callText, 2 + first.length, callText.length).trim();
+        const argStrings = second.startsWith('[') ? (second.match(STRING_RE) || []) : [];
+        isGit = shellMentionsGit(cmd) || argStrings.some((s) => shellMentionsGit(s.slice(1, -1)));
+      } else if (GIT_BASENAME.test(base)) isGit = true; // git, however the binary is spelled
       else if (SHELLS.has(base.toLowerCase())) isGit = (rest.match(STRING_RE) || []).some((s) => shellMentionsGit(s.slice(1, -1))); // sh -c '... git ...'
       if (!isGit) continue;
       const entry = { label, line, fn };
