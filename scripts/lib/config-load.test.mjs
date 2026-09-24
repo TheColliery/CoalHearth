@@ -669,6 +669,7 @@ test('UMB-174 (b): a leading U+FEFF is STRIPPED before the parse -- a BOM-prefix
   for (const [name, api] of CJS_ESM) assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [], name);
 });
 
+// CWK-135 (a) supersedes the global half of this case: the GLOBAL line names the global file's OWN path (see below).
 test('UMB-174 (b): the GLOBAL config is reported too, when it is present but unreadable', (t) => {
   hermetic(t);
   const { sub } = project(t);
@@ -677,7 +678,7 @@ test('UMB-174 (b): the GLOBAL config is reported too, when it is present but unr
   fs.mkdirSync(path.dirname(g), { recursive: true });
   fs.writeFileSync(g, 'nope');
   for (const [name, api] of CJS_ESM) {
-    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'malformed JSON')], name);
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'malformed JSON', g)], name);
   }
 });
 
@@ -699,5 +700,45 @@ test('UMB-174 (b): an unreadable LEGACY file is reported as UNREADABLE, never al
   for (const [name, api] of CJS_ESM) {
     const lines = api.configNotices({ cwd: sub, home });
     assert.deepEqual(lines, [unreadableLine(legacy, 'malformed JSON')], name);
+  }
+});
+
+// CWK-135 (a): the UNREADABLE line names the path of the TIER that failed. The PROJECT tier keeps the
+// verbatim flock string (canonical = .claude/coal/coalhearth.json -- a project config has a canonical
+// place to move to). The GLOBAL tier names the global file's OWN path, because a global config has no
+// project location to move to, and a line that says "canonical = <a project path>" for it would
+// send the user to the wrong place (Standard System 4: a failure states what to do next). The path
+// comes from the loader (globalConfigPath -- CLAUDE_CONFIG_DIR wins over the home dir), never a
+// hardcoded ~/.claude.
+test('CWK-135 (a): a GLOBAL config the walk cannot read names the GLOBAL file as its canonical, not a project path', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(g), { recursive: true });
+  fs.writeFileSync(g, '[1,2]');
+  const canon = path.join(root, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(canon), { recursive: true });
+  fs.writeFileSync(canon, '{');
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [
+      unreadableLine(g, 'not a JSON object', g), // the global tier: its own path
+      unreadableLine(canon, 'malformed JSON'),   // the project tier: the verbatim flock string, unchanged
+    ], name);
+  }
+});
+
+test('CWK-135 (a): the global path is DERIVED from the loader -- CLAUDE_CONFIG_DIR wins over the home dir', (t) => {
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved; });
+  const { sub } = project(t);
+  const home = mkT(t);
+  const cfgDir = mkT(t);
+  const g = path.join(cfgDir, '.coalhearth.json');
+  fs.writeFileSync(g, 'nope');
+  process.env.CLAUDE_CONFIG_DIR = cfgDir;
+  assert.equal(twin.globalConfigPath(home), g, 'the loader resolves the global path here');
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'malformed JSON', g)], name);
   }
 });
