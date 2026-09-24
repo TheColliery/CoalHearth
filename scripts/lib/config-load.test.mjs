@@ -882,3 +882,29 @@ test('UMB-174 (b) reason "a directory": a DIRECTORY at the GLOBAL path is report
     assert.deepEqual(unreadableOf(api, { cwd: sub, home }), [unreadableLine(g, 'a directory', g)], name);
   }
 });
+
+// R8 FIXBACK L2: at root == home the nested legacy candidate IS the global path. The selector already excludes
+// it (isGlobalConfig), but the notice loop's stepped-over branch did not, so ONE directory was reported twice with
+// two contradictory targets: the global line (canonical = that same path) and a project line (canonical =
+// .claude/coal/coalhearth.json). One path, one line -- the GLOBAL tier's (CWK-135 a).
+test('L2: root == home with a DIRECTORY at the global path reports it ONCE, with the global tier canonical (both twins)', (t) => {
+  hermetic(t);
+  const home = mkT(t);
+  fs.mkdirSync(path.join(home, '.git')); // home is itself the project root
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(g, { recursive: true });
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: home, home }), [unreadableLine(g, 'a directory', g)], name);
+  }
+});
+
+test('L2: a directory at a canonical path is STILL reported when root == home (only the global path is skipped)', (t) => {
+  hermetic(t);
+  const home = mkT(t);
+  fs.mkdirSync(path.join(home, '.git'));
+  const dir = path.join(home, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, api] of CJS_ESM) {
+    assert.deepEqual(unreadableOf(api, { cwd: home, home }), [unreadableLine(dir, 'a directory')], name);
+  }
+});
