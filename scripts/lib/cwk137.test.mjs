@@ -44,8 +44,12 @@ function unlinkLinks(dir, depth = 0) {
     else if (l.isDirectory()) unlinkLinks(p, depth + 1);
   }
 }
+// The fixture root is CANONICAL: fs.realpathSync.native, never plain fs.realpathSync. On a Windows runner os.tmpdir() is spelled with an 8.3 alias
+// (C:\Users\RUNNER~1\...) that plain realpathSync leaves alone and .native expands, and the reader under test compares realpath.native of the
+// candidate against realpath.native of the root. A test that PRETENDS a link (pretendLink, below) hands the reader a target string exactly as a real
+// realpath.native would return it, i.e. already canonical, so a fixture spelled through the alias made every contained link read as an escape (R14 RED).
 function mk(t, prefix = 'ch-cwk137-') {
-  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const d = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   t.after(() => { unlinkLinks(d); fs.rmSync(d, { recursive: true, force: true }); });
   return d;
 }
