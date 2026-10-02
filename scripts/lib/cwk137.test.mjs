@@ -351,3 +351,54 @@ test('CWK-137 (any OS): the journal is read CONTAINED in its output dir -- a lin
     assert.equal(new HandoffJournal({ outputDirectory: dir }, dir)._loadOrQuarantine().sessionId, 'seen');
   } finally { restoreIn(); }
 });
+
+// ---- the journal's temp write (class 2): a link planted at `session_handoff.json.<pid>.tmp` was WRITTEN THROUGH ----------
+// The temp name is the pid alone, so it is predictable. A hard link works on any NTFS volume without privilege; the
+// symlink variant (what a cloned repo can actually commit) is capability-probed.
+const tempOf = (dir, name = JOURNAL) => path.join(dir, name + '.' + process.pid + '.tmp');
+
+test('CWK-137: HandoffJournal.save() never writes THROUGH a hard link planted at its temp name', (t) => {
+  const dir = mk(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'OUTSIDE');
+  try { fs.linkSync(victim, tempOf(dir)); } catch { t.skip('hard links not permitted on this volume (' + process.platform + ')'); return; }
+  assert.equal(new HandoffJournal({ outputDirectory: dir }, dir).save({ status: 'in_progress', sessionId: 's1' }), true);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE', 'the file the temp name was linked to is untouched');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, JOURNAL), 'utf8')).sessionId, 's1', 'the journal itself was written');
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no temp left behind');
+});
+
+test('CWK-137: atomicWriteJournal (markResumed, the corrupt quarantine) never writes THROUGH a hard link planted at its temp name', (t) => {
+  const dir = mk(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'OUTSIDE');
+  try { fs.linkSync(victim, tempOf(dir)); } catch { t.skip('hard links not permitted on this volume (' + process.platform + ')'); return; }
+  assert.equal(atomicWriteJournal(dir, JOURNAL, '{"status":"resumed"}'), true);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE', 'the linked file is untouched');
+  assert.equal(fs.readFileSync(path.join(dir, JOURNAL), 'utf8'), '{"status":"resumed"}');
+});
+
+test('CWK-137: a SYMLINK planted at the journal temp name is replaced, never followed (save and atomicWriteJournal)', (t) => {
+  const dir = mk(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'OUTSIDE');
+  if (!link(victim, tempOf(dir), false)) { t.skip('file symlink not permitted on this volume (' + process.platform + ') -- CI-measured on ubuntu/macOS'); return; }
+  assert.equal(new HandoffJournal({ outputDirectory: dir }, dir).save({ status: 'in_progress' }), true);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE', 'save() did not write through the link');
+  assert.ok(link(victim, tempOf(dir, 'other.json'), false));
+  assert.equal(atomicWriteJournal(dir, 'other.json', 'NEW'), true);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'OUTSIDE', 'atomicWriteJournal did not write through the link');
+});
+
+test('CWK-137 (control): a STALE regular temp left by a crashed holder of the same pid does not break the write', (t) => {
+  const dir = mk(t);
+  fs.writeFileSync(tempOf(dir), 'stale half-write');
+  assert.equal(new HandoffJournal({ outputDirectory: dir }, dir).save({ status: 'in_progress', sessionId: 's2' }), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, JOURNAL), 'utf8')).sessionId, 's2');
+  fs.writeFileSync(tempOf(dir, 'o.json'), 'stale half-write');
+  assert.equal(atomicWriteJournal(dir, 'o.json', 'FRESH'), true);
+  assert.equal(fs.readFileSync(path.join(dir, 'o.json'), 'utf8'), 'FRESH');
+});
