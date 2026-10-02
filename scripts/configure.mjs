@@ -73,6 +73,7 @@ import path from 'path';
 import { CONFIG_SCHEMA, validateValue } from './lib/config-schema.mjs';
 import { parseJsonc } from './lib/jsonc.mjs';
 import { findProjectRoot, projectConfigPath, projectConfigCandidates, globalConfigPath } from './lib/config-load.mjs';
+import { MAX_CONFIG_BYTES, readRepoBytes, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
 
 // FLATTEN THE NESTED SCHEMA ONCE. Each entry: `flagKey` (the dotted CLI name, or the
 // bare scalar name), `groupKey` (the top-level group this leaf lives under, or `null`
@@ -193,12 +194,24 @@ function main() {
   // readJsonc) -- never a typed regex/literal for U+FEFF (this room's own hard-won
   // lesson: a raw BOM character pasted into source gets silently converted to a real
   // char by the tool layer).
+  // CWK-137 (R14): the read is bounded and, for the PROJECT config, contained. This is a WRITER, so anything that is
+  // present but cannot be read safely (an over-bound file, a FIFO or device, a link out of the project, a denied
+  // read) is a loud refusal -- never "absent", which would overwrite the one copy of a file the user wrote. The
+  // global layer keeps following links (a dotfile manager's symlink is legitimate there) but is still bounded.
+  const readRoot = isGlobal ? null : projectRoot;
+  const got = readRepoBytes(readPath, readRoot, MAX_CONFIG_BYTES);
   let rawConfig = null;
-  try {
-    let content = fs.readFileSync(readPath, 'utf8');
+  let rawBytes = null;
+  if (got.bytes !== null) {
+    rawBytes = got.bytes;
+    let content = got.bytes.toString('utf8');
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
     rawConfig = content;
-  } catch {}
+  } else if (got.why !== 'absent' && got.why !== 'dir') {
+    process.exitCode = 1;
+    console.error(`Error: the existing config ${readPath} cannot be read safely (${got.why}) \u2014 nothing was written and it is untouched. Remove or fix it (a file over ${MAX_CONFIG_BYTES} bytes, a link out of the project, a special file or a permission problem), then run this again.`);
+    return;
+  }
   if (rawConfig !== null) {
     let notObject = false;
     try {
@@ -217,7 +230,7 @@ function main() {
       process.exitCode = 1;
       const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
       try {
-        fs.copyFileSync(readPath, readPath + '.bak');
+        writeRepoFile(readPath + '.bak', rawBytes, readRoot); // the bytes already read: never copyFileSync, which follows a link planted at the .bak
         console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
       } catch (bakErr) {
         // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
@@ -266,8 +279,13 @@ function main() {
   }
 
   try {
-    fs.mkdirSync(path.dirname(writePath), { recursive: true });
-    fs.writeFileSync(writePath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    const out = JSON.stringify(cfg, null, 2) + '\n';
+    if (isGlobal) {
+      fs.mkdirSync(path.dirname(writePath), { recursive: true });
+      fs.writeFileSync(writePath, out, 'utf8'); // the user's own home config: links followed on purpose (see the read above)
+    } else {
+      writeRepoFile(writePath, out, projectRoot); // CWK-137: realpath-and-contain, then a temp replaced into place
+    }
     // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy file is
     // removed only AFTER the new-home write above succeeded, and only when this write
     // actually migrated it. Best-effort -- a failed delete here still leaves a
@@ -283,7 +301,9 @@ function main() {
     console.log(`Successfully updated configuration in: ${writePath}`);
     console.log(JSON.stringify(cfg, null, 2));
   } catch (e) {
-    console.error(`Error: Failed to write to config file: ${e.message}`);
+    console.error(e instanceof RepoWriteRefused
+      ? `Error: refused to write the config \u2014 ${e.message}. Nothing was written. Remove the link (or run from the real project) and run this again.`
+      : `Error: Failed to write to config file: ${e.message}`);
     process.exitCode = 1;
     return;
   }

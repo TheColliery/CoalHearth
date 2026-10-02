@@ -459,3 +459,121 @@ test('CWK-137 (control): a REAL legacy phantom dir is still mopped up -- only th
   assert.equal(mopUp(sub, home).status, 0);
   assert.equal(fs.existsSync(legacy), false, 'a dir holding only the tool\'s own files is removed');
 });
+
+// ---- scripts/configure.mjs: the CLI writer (class 4) ----------------------------------------------------------
+const CONFIGURE = path.join(REPO, 'scripts', 'configure.mjs');
+function configure(cwd, args, extraEnv = {}) {
+  return spawnSync(process.execPath, [CONFIGURE, ...args], {
+    cwd, encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, ...extraEnv, NODE_OPTIONS: '--max-old-space-size=2048' },
+  });
+}
+const OWN_CFG = (root) => path.join(root, '.claude', 'coal', 'coalhearth.json');
+
+test('CWK-137: configure never writes THROUGH a directory link at .claude that leads out of the project', (t) => {
+  const root = project(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  if (!link(outside, path.join(root, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const r = configure(root, ['--language', 'th']);
+  assert.equal(r.status, 1, 'refused loudly: ' + r.stdout + r.stderr);
+  assert.equal(fs.existsSync(path.join(outside, 'coal')), false, 'nothing was created outside the project');
+  assert.doesNotMatch(r.stdout, /Successfully updated/);
+  assert.match(r.stderr, /refused to write/i);
+  assert.match(r.stderr, /Nothing was written/i, 'says what happened');
+  assert.match(r.stderr, /Remove the link/i, 'says what to do next');
+});
+
+test('CWK-137 (control): a directory link at .claude that stays INSIDE the project is written through normally', (t) => {
+  const root = project(t);
+  const inside = path.join(root, 'real-claude');
+  fs.mkdirSync(inside);
+  if (!link(inside, path.join(root, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const r = configure(root, ['--language', 'th']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(inside, 'coal', 'coalhearth.json'), 'utf8')).language, 'th');
+});
+
+test('CWK-137: configure never writes THROUGH a hard link at the config path -- the entry is replaced, the other name keeps its bytes', (t) => {
+  const root = project(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'PRECIOUS');
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  try { fs.linkSync(victim, OWN_CFG(root)); } catch { t.skip('hard links not permitted on this volume (' + process.platform + ')'); return; }
+  const r = configure(root, ['--language', 'th']);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'PRECIOUS', 'the file the hard link pointed at is untouched: ' + r.stdout + r.stderr);
+});
+
+test('CWK-137: configure never writes the .bak THROUGH a link planted at it (a hard link here; a symlink where permitted)', (t) => {
+  const root = project(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'PRECIOUS');
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  fs.writeFileSync(OWN_CFG(root), '{ this is not json');
+  try { fs.linkSync(victim, OWN_CFG(root) + '.bak'); } catch { t.skip('hard links not permitted on this volume (' + process.platform + ')'); return; }
+  configure(root, ['--language', 'th']);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'PRECIOUS', 'the .bak replaced the link entry, it did not write through it');
+  assert.equal(fs.readFileSync(OWN_CFG(root) + '.bak', 'utf8'), '{ this is not json', 'and the backup holds the original bytes');
+});
+
+test('CWK-137: a SYMLINK planted at the .bak is replaced, never followed', (t) => {
+  const root = project(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'PRECIOUS');
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  fs.writeFileSync(OWN_CFG(root), '[1,2]');
+  if (!link(victim, OWN_CFG(root) + '.bak', false)) { t.skip('file symlink not permitted on this volume (' + process.platform + ') -- CI-measured on ubuntu/macOS'); return; }
+  configure(root, ['--language', 'th']);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'PRECIOUS');
+  assert.equal(fs.readFileSync(OWN_CFG(root) + '.bak', 'utf8'), '[1,2]');
+});
+
+test('CWK-137: an existing project config over MAX_CONFIG_BYTES is REFUSED, untouched -- never read whole, never overwritten', (t) => {
+  const root = project(t);
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  const body = paddedJson({ journal: { atomicityRetries: 7 } }, MAX_CONFIG_BYTES + 1);
+  fs.writeFileSync(OWN_CFG(root), body);
+  const r = configure(root, ['--language', 'th']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(OWN_CFG(root), 'utf8'), body, 'byte-exact: nothing was written');
+  assert.doesNotMatch(r.stdout, /Successfully updated/);
+  assert.match(r.stderr, /cannot be read safely/);
+  assert.match(r.stderr, /nothing was written/i);
+});
+
+test('CWK-137: an existing GLOBAL config over MAX_CONFIG_BYTES is refused too (bounded, though links are followed there)', (t) => {
+  const root = project(t);
+  const home = mk(t, 'ch-cwk137-home-');
+  const g = path.join(home, '.coalhearth.json');
+  const body = paddedJson({ language: 'en' }, MAX_CONFIG_BYTES + 1);
+  fs.writeFileSync(g, body);
+  const r = configure(root, ['--global', '--language', 'th'], { CLAUDE_CONFIG_DIR: home });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(g, 'utf8'), body);
+});
+
+test('CWK-137 (control): a config exactly at MAX_CONFIG_BYTES is still read and rewritten', (t) => {
+  const root = project(t);
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  fs.writeFileSync(OWN_CFG(root), paddedJson({ journal: { atomicityRetries: 7 } }, MAX_CONFIG_BYTES));
+  const r = configure(root, ['--language', 'th']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const out = JSON.parse(fs.readFileSync(OWN_CFG(root), 'utf8'));
+  assert.equal(out.language, 'th');
+  assert.equal(out.journal.atomicityRetries, 7, 'the sibling key survived the rewrite');
+});
+
+test('CWK-137: configure never READS a project config through a directory link that leads out of the project', (t) => {
+  const root = project(t);
+  const outside = mk(t, 'ch-cwk137-out-');
+  fs.mkdirSync(path.join(outside, 'coal'), { recursive: true });
+  const planted = JSON.stringify({ language: 'fr' });
+  fs.writeFileSync(path.join(outside, 'coal', 'coalhearth.json'), planted);
+  if (!link(outside, path.join(root, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const r = configure(root, ['--journal.atomicityRetries', '5']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(path.join(outside, 'coal', 'coalhearth.json'), 'utf8'), planted, 'the file outside is untouched');
+  assert.match(r.stderr, /cannot be read safely \(refused\)/, 'the escaping read is refused, not merged into a rewrite');
+});
