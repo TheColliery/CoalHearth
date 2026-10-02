@@ -39,6 +39,7 @@ jobs:
   classify:
     name: classify
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # measured max 6 s over 8 runs (2026-10-03); ~50x headroom
     outputs:
       docs_only: ${{ steps.c.outputs.docs_only }}
       changed: ${{ steps.c.outputs.changed }}
@@ -103,6 +104,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22, 24]  # supported LTS only (24 Active, 22 Maintenance); 18/20 are EOL — bump as the Node LTS schedule moves
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15 # measured max 48 s (windows, n=16; macos max 22 s) over 8 runs (2026-10-03); ~19x headroom
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -124,6 +126,7 @@ jobs:
     needs: [classify, gate]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # measured max 5 s over 8 runs (2026-10-03); ~60x headroom
     steps:
       - name: gate result
         shell: bash

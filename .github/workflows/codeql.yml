@@ -37,12 +37,14 @@ jobs:
   analyze:
     name: analyze (javascript)
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # measured max 82 s over 10 runs (2026-10-03); ~22x headroom, CodeQL init/analyze varies with the DB build
     permissions:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the diff needs history to compare against
+          persist-credentials: false # pushes nothing
 
       # EVERY ${{ }} REACHES THE SHELL THROUGH env:, NEVER INSIDE run: -- Actions expands
       # ${{ }} by text substitution before bash parses, so a path carrying a quote becomes

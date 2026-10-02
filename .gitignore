@@ -20,3 +20,6 @@ scratchpad/
 # Generated coverage output (UMB-124) — the report-only Coverage workflow writes it; same
 # practice as the generated SkillSpector reports above: generated output is never tracked
 coverage/
+
+# CoalBoard staging and reports (.coalboard/proposed/, .coalboard/reports/): a board output lands inside the scanned repo by rule and is read there, never shipped.
+.coalboard/
