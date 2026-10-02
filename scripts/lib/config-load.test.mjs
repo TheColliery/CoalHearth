@@ -825,11 +825,12 @@ test('CWK-120 #2/#3: only the two CONSENT groups get this rule -- another group 
 // -- R8 FIXBACK L1: two reasons were not pinned on every OS ------------------------------------------------
 // (1) BOTH errnos of `unreadable`. The real-denial test above proves whichever errno THIS platform's denial
 // surfaces (EPERM through an NTFS ACL here); dropping EACCES from the map survived. The errno is INJECTED at
-// fs.readFileSync (the way the lock test injects its errnos), so EACCES and EPERM are each pinned on every OS,
+// fs.openSync (CWK-137: the loaders now read through lib/repo-fs.js, whose open is where a denied read fails; the lever moved
+// with the implementation, the assertions did not), so EACCES and EPERM are each pinned on every OS,
 // in both twins.
 function injectReadError(file, code) {
-  const real = fs.readFileSync;
-  fs.readFileSync = function (p, ...rest) {
+  const real = fs.openSync;
+  fs.openSync = function (p, ...rest) {
     if (typeof p === 'string' && path.resolve(p) === path.resolve(file)) {
       const err = new Error(code + ': injected, open');
       err.code = code;
@@ -837,7 +838,7 @@ function injectReadError(file, code) {
     }
     return real.call(this, p, ...rest);
   };
-  return () => { fs.readFileSync = real; };
+  return () => { fs.openSync = real; };
 }
 
 for (const code of ['EACCES', 'EPERM']) {

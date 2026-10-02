@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { containedOutputDir, findWorkspaceRoot } = require('./contained-dir.js');
+const { readRepoFileBounded, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 // One source of truth for the journal file layout + the atomic writer (H6/H7 one-flock:
 // mark-resumed and quarantine go through the SAME per-pid temp+rename as HandoffJournal.save).
 const { atomicWriteJournal, JOURNAL_NAME: JOURNAL_FILE, CORRUPT_NAME: CORRUPT_FILE } = require('./handoff-journal.js');
@@ -88,12 +89,9 @@ class ResumeEngine {
   detectAbortedSession() {
     if (!this.outputDir) return null; // fail-closed: no contained dir -> boot clean
     const journalPath = path.join(this.outputDir, JOURNAL_FILE);
-    let raw;
-    try {
-      raw = fs.readFileSync(journalPath, 'utf8');
-    } catch {
-      return null; // no journal -> nothing to resume, boot clean
-    }
+    // CWK-137 (R14): bounded, contained read (lib/repo-fs.js) -- a FIFO at the journal path used to hang SessionStart.
+    const raw = readRepoFileBounded(journalPath, this.outputDir, MAX_JOURNAL_BYTES);
+    if (raw === null) return null; // no journal (or one we refuse to read) -> nothing to resume, boot clean
 
     let data;
     try {

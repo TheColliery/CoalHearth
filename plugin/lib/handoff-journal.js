@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { containedOutputDir } = require('./contained-dir.js');
+const { readRepoFileBounded, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 
 const JOURNAL_NAME = 'session_handoff.json';
 const CORRUPT_NAME = 'session_handoff.corrupt.json'; // forensic quarantine (shared with resume-engine.js)
@@ -83,8 +84,13 @@ class HandoffJournal {
    */
   load() {
     if (!this.outputDir) return null;
+    // CWK-137 (R14): the journal sits in a directory a cloned repo can pre-populate, so it is read through
+    // lib/repo-fs.js's bounded reader, contained in the output dir (a FIFO, a device, a link out of the dir, a
+    // directory or an over-bound file is skipped without being opened or truncated).
+    const raw = readRepoFileBounded(path.join(this.outputDir, JOURNAL_NAME), this.outputDir, MAX_JOURNAL_BYTES);
+    if (raw === null) return null;
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(this.outputDir, JOURNAL_NAME), 'utf8'));
+      const data = JSON.parse(raw);
       return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
     } catch (_) {
       return null;
@@ -163,12 +169,10 @@ class HandoffJournal {
    */
   _loadOrQuarantine() {
     if (!this.outputDir) return null;
-    let raw;
-    try {
-      raw = fs.readFileSync(path.join(this.outputDir, JOURNAL_NAME), 'utf8');
-    } catch (_) {
-      return null; // absent -> fresh session
-    }
+    // CWK-137 (R14): bounded, contained read (see load()). Absent, refused or over-bound -> null: a fresh start, and
+    // nothing is quarantined, because only a PRESENT, in-bound, unparseable journal is "corrupt".
+    const raw = readRepoFileBounded(path.join(this.outputDir, JOURNAL_NAME), this.outputDir, MAX_JOURNAL_BYTES);
+    if (raw === null) return null;
     try {
       const data = JSON.parse(raw);
       return data && typeof data === 'object' && !Array.isArray(data) ? data : null;

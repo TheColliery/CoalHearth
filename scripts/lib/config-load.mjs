@@ -7,7 +7,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createRequire } from 'node:module';
 import { parseJsonc } from './jsonc.mjs';
+
+// CWK-137 (R14): the ONE implementation of the bounded read is the shipped CJS lib/repo-fs.js -- required, never copied.
+const { readRepoText, MAX_CONFIG_BYTES } = createRequire(import.meta.url)('../../lib/repo-fs.js');
 
 export function claudeBaseDir(home = os.homedir()) {
   const c = process.env.CLAUDE_CONFIG_DIR;
@@ -168,7 +172,7 @@ export function configNotices(opts) {
     if (globalRead.reason) lines.push(unreadable(globalPath, globalRead.reason, globalPath));
     let foundReason = null;
     for (const c of candidates) {
-      if (c === found) { foundReason = readConfigFile(c).reason; if (foundReason) lines.push(unreadable(c, foundReason)); break; }
+      if (c === found) { foundReason = readConfigFile(c, root).reason; if (foundReason) lines.push(unreadable(c, foundReason)); break; }
       // The walk stepped over it (CWK-127) -- but never the GLOBAL path: at root == home the nested legacy candidate IS
       // the global config, the selector already excludes it (isGlobalConfig), and the global tier above reported it once.
       if (isDirectory(c) && !isGlobalConfig(c, home)) lines.push(unreadable(c, 'a directory'));
@@ -203,16 +207,17 @@ export function configNotices(opts) {
 // U+FEFF is STRIPPED before the parse (RFC 8259 s8.1 lets a parser ignore a BOM; Windows
 // PowerShell 5.1 writes one whenever asked for UTF-8), so a BOM-prefixed VALID object is read
 // and never reported as malformed. Exemplar: CoalFace v0.12.0 / CoalTipple.
-function readConfigFile(file) {
-  let content;
-  try {
-    content = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    const code = e && e.code;
-    if (code === 'EISDIR') return { cfg: {}, reason: 'a directory' };
-    if (code === 'EACCES' || code === 'EPERM') return { cfg: {}, reason: 'unreadable' };
+//
+// CWK-137 (R14): mirrors lib/load-config.js 1:1 -- the read is lib/repo-fs.js's bounded reader; that twin's comment
+// carries the root and the reason mapping (a project candidate is contained in the project root, the global file is not).
+function readConfigFile(file, root) {
+  const r = readRepoText(file, root == null ? null : root, MAX_CONFIG_BYTES);
+  if (r.text === null) {
+    if (r.why === 'dir') return { cfg: {}, reason: 'a directory' };
+    if (r.why === 'denied' || r.why === 'refused' || r.why === 'too-large') return { cfg: {}, reason: 'unreadable' };
     return { cfg: {}, reason: null };
   }
+  let content = r.text;
   if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   let parsed;
   try {
@@ -223,8 +228,8 @@ function readConfigFile(file) {
   if (!(parsed && typeof parsed === 'object' && !Array.isArray(parsed))) return { cfg: {}, reason: 'not a JSON object' };
   return { cfg: parsed, reason: null };
 }
-function readJsonc(file) {
-  return readConfigFile(file).cfg;
+function readJsonc(file, root) {
+  return readConfigFile(file, root).cfg;
 }
 
 // Consent-cascade clamp (hooks-safety.md §9, USER 2026-07-27, amended R2) — mirrors
@@ -278,7 +283,7 @@ function quieterAutoInjectPrompt(globalValue, projectValue) {
 // `global`/`project`).
 export function loadMergedConfig({ cwd = process.cwd(), home = os.homedir(), ownDir } = {}) {
   const global = readJsonc(globalConfigPath(home));
-  const project = readJsonc(projectConfigPath(cwd, home, ownDir));
+  const project = readJsonc(projectConfigPath(cwd, home, ownDir), findProjectRoot(cwd, home));
   const merged = {};
   for (const key of new Set([...Object.keys(global), ...Object.keys(project)])) {
     const g = global[key];
