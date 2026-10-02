@@ -53,6 +53,17 @@ function mk(t, prefix = 'ch-cwk137-') {
   t.after(() => { unlinkLinks(d); fs.rmSync(d, { recursive: true, force: true }); });
   return d;
 }
+// Remove ONE link and nothing else. unlink answers a POSIX symlink (rmdir answers ENOTDIR for one: R14 RED); a Windows junction answers to rmdir.
+// Asserted here, so a wrong call can never delete a target: the path is inside the fixture root, it IS a link, it is gone afterwards, and the target
+// it pointed at is still there.
+function removeLink(p, root, targetThatMustSurvive) {
+  const base = fs.realpathSync.native(root) + path.sep;
+  assert.ok(path.resolve(p).startsWith(base), 'the link to remove sits inside the fixture root: ' + p);
+  assert.ok(fs.lstatSync(p).isSymbolicLink(), 'and it is a link: ' + p);
+  try { fs.unlinkSync(p); } catch { fs.rmdirSync(p); }
+  assert.throws(() => fs.lstatSync(p), (e) => e.code === 'ENOENT', 'the link is gone');
+  assert.ok(fs.existsSync(targetThatMustSurvive), 'and what it pointed at is untouched: ' + targetThatMustSurvive);
+}
 // A project: a directory carrying a .git marker, so the config walk and the journal anchor stop there.
 function project(t) {
   const root = mk(t, 'ch-cwk137-proj-');
@@ -144,7 +155,7 @@ test('CWK-137: a project config reached through a junction/symlink that ESCAPES 
     assert.deepEqual(unreadableOf(api, { cwd: root, home }), [unreadableLine(cfg, 'unreadable')], name);
   }
   // control: the same link aimed INSIDE the project stays allowed
-  fs.rmdirSync(path.join(root, '.claude', 'coal'));
+  removeLink(path.join(root, '.claude', 'coal'), root, path.join(outside, 'coal', 'coalhearth.json'));
   assert.ok(link(inside, path.join(root, '.claude', 'coal'), true));
   for (const [name, api] of TWINS) {
     const merged = api.loadMergedConfig ? api.loadMergedConfig({ cwd: root, home }) : api.loadConfig({ cwd: root, home });
