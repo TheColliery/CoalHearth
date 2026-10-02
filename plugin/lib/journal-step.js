@@ -157,6 +157,9 @@ function recordStep(cwd, config, step) {
       priorModifiedFiles: sameSession ? prior.modifiedFiles : [],
       touchedFile: step.touchedFile,
       priorInFlightAgents: sameSession ? prior.inFlightAgents : [],
+      // R14 FIXBACK: the cumulative count of oldest entries lib/journal-cap.js dropped to keep the journal under the reader's bound.
+      priorModifiedFilesDropped: sameSession ? prior.modifiedFilesDropped : 0,
+      priorInFlightAgentsDropped: sameSession ? prior.inFlightAgentsDropped : 0,
       spawn: step.spawn,
     });
   });

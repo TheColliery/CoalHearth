@@ -157,7 +157,12 @@ class ResumeEngine {
       .filter((item) => item && typeof item === 'object')
       .map((item) => `[${item.status === 'done' ? 'x' : item.status === 'doing' ? '/' : ' '}] ${item.task}`)
       .join('\n') || '(none)';
-    const files = asArray(data.modifiedFiles).map((f) => `- ${f}`).join('\n') || '(none)';
+    // R14 FIXBACK: lib/journal-cap.js keeps the journal under the reader's bound by dropping the OLDEST entries and counting
+    // them; say so, so a truncation is never silent. Number() is strict (a non-numeric string collapses to 0), like _orphanSweep,
+    // and the count is the only thing interpolated.
+    const droppedLine = (n, what) => (Number(n) > 0 ? `- ... ${Math.floor(Number(n))} earlier ${what} not listed (the journal keeps the most recent)` : '');
+    const withDropped = (lines, n, what) => [...lines, droppedLine(n, what)].filter(Boolean).join('\n') || '(none)';
+    const files = withDropped(asArray(data.modifiedFiles).map((f) => `- ${f}`), data.modifiedFilesDropped, 'path(s)');
     // In-flight subagents at interruption (Incident E; status/outcome added board #94,
     // issue #13 — the highest-value gap the operator named: "no per-subagent progress
     // record ... a single line would have changed the decision immediately"). HONEST
@@ -165,7 +170,7 @@ class ResumeEngine {
     // + where its residue may live — it does NOT recover the sub's work (a killed sub
     // journals nothing of its own); the resumed session verifies/re-spawns.
     const rawAgents = asArray(data.inFlightAgents).filter((a) => a && typeof a === 'object');
-    const agents = rawAgents
+    const agents = withDropped(rawAgents
       .map((a) => {
         const type = a.subagentType ? ` [${a.subagentType}]` : '';
         const status = a.status ? ` -- status: ${a.status}` : '';
@@ -173,8 +178,7 @@ class ResumeEngine {
         const out = a.outputPath ? ` -- residue: ${a.outputPath}` : '';
         const at = a.spawnedAt ? ` (recorded ${a.spawnedAt})` : '';
         return `- ${a.description || '(no description)'}${type}${status}${outcome}${out}${at}`;
-      })
-      .join('\n') || '(none)';
+      }), data.inFlightAgentsDropped, 'subagent record(s)');
     // issue #13 symptoms #3+#4: a reported `status` is self-reported by the subagent's
     // own tool_response and has been OBSERVED WRONG (one subagent reported `failed` and
     // had actually completed) -- never let either status word drive an auto-decision.
