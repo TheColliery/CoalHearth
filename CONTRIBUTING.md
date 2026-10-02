@@ -18,6 +18,7 @@ CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm in
 
 ```bash
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
+node scripts/secret-gate.mjs    # gate: the house secret scan of the tracked tree (the git hooks run it first)
 node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, git-spawn census, dist-sync, version pins
 node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list)
 ```
@@ -25,7 +26,8 @@ node scripts/test.mjs           # zero-dependency test suite (node --test, expli
 ### Development Rules
 * **Rebuild the dist after a source change:** edit `bin/`, `lib/`, `config/`, `hooks/`, `commands/`, or the manifest, then `node scripts/build-plugin.mjs` to re-sync `plugin/` (verify fails on a stale dist).
 * **`scripts/lib/config-schema.mjs` is the single source of truth** for every `.coalhearth.json` key — `verify.mjs` validates the factory config against it; the runtime `config/schema.json` mirrors it.
-* **A git child takes its environment from `gitEnv()` alone** (`scripts/lib/git-env.mjs`): a git hook exports an absolute `GIT_DIR`, and a gate or test fixture that inherits it acts on the wrong repository. The census in `verify.mjs` fails a git spawn whose `env:` is anything other than `gitEnv(...)` alone — the whole expression, or a `const` assigned from exactly that call and not mutated (a spawn with no `env:`, any mention of `process.env`, `env || gitEnv(x)` and a spread beside another object all fail). Git through a shell or a binary not spelled `git` counts as a git spawn. One spawn is exempt by name, counted and printed (`scripts/lib/git-env.test.mjs`, the hazard proof). Each exemption states how many spawns it covers: one more fails the gate, one fewer is stale and fails it too. The census is textual and its header in `scripts/lib/git-env-census.mjs` names what it cannot see, including a `shell:` call whose arguments are a variable rather than an array literal.
+* **A git child takes its environment from `gitEnv()` alone** (`scripts/lib/git-env.mjs`): a git hook exports an absolute `GIT_DIR`, and a gate or test fixture that inherits it acts on the wrong repository. The census in `verify.mjs` fails a git spawn whose `env:` is anything other than `gitEnv(...)` alone — the whole expression, or a `const` assigned from exactly that call and not mutated (a spawn with no `env:`, any mention of `process.env`, `env || gitEnv(x)` and a spread beside another object all fail). Git through a shell or a binary not spelled `git` counts as a git spawn. Five spawns are exempt by name, counted and printed: the hazard proof in `scripts/lib/git-env.test.mjs` (one), and two org-supplied test files that carry the secret scan, `scripts/secret-gate.test.mjs` (one) and `scripts/secret-scan.test.mjs` (three), whose own spawns do not take their environment from `gitEnv()`. Each exemption states how many spawns it covers: one more fails the gate, one fewer is stale and fails it too. The two org-supplied exemptions are also pinned to the file's exact bytes, so an edit or a re-copy of either file makes its exemption stale and fails the gate until it is re-examined; they are deleted when the org fixes those spawns. The census is textual and its header in `scripts/lib/git-env-census.mjs` names what it cannot see, including a `shell:` call whose arguments are a variable rather than an array literal.
+* **The git hooks are the local gate.** `.githooks/pre-commit` and `.githooks/pre-push` (identical bytes) run `scripts/secret-gate.mjs` first (the staged tree on a commit; every pushed commit's added lines, message and tag on a push), then `verify.mjs`, then `test.mjs`. Enable them once per clone with `git config core.hooksPath .githooks`; git does not let a repository configure its own hooks.
 * **Keep the hooks Phoenix-pure:** zero dependencies, fail-silent (wrap in try/catch, exit 0, never `process.exit()`), no network, silent except the sanctioned channels.
 * **Add tests:** every lib change gets a unit test; every hook-behavior change gets a **hermetic spawn test** (spawn the real hook, sandbox TEMP + HOME). Register a new test *file* in `scripts/test.mjs` (the runner fails on an unlisted orphan).
 * **Language & tone:** shipped source and docs stay in English.
@@ -53,6 +55,8 @@ docs-only push doesn't get a free pass from `link-check` the way it does from CI
 broken link in the very doc you're editing goes red on this check, even though it can't block a
 merge on its own.
 
+Every job in every workflow declares a `timeout-minutes`, sized from that job's own recent runs, so a hung job ends as a failure instead of holding a runner for the 360-minute default; every checkout sets `persist-credentials: false`, because no step in this repository pushes.
+
 A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
 can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
 docs-only or not. Unlike the two required checks it does **not** report "nothing ran": on a
@@ -76,7 +80,7 @@ CoalHearth is **hook-only by design** — the hooks ARE the product (a session-s
 | Path | Purpose |
 |---|---|
 | `bin/` | Hook entrypoints: `session-start.js` (resume + self-update schedule) · `post-tool-use.js` (journal). |
-| `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `journal-step`, `load-config`. |
+| `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `journal-step`, `load-config`, `repo-fs` (the bounded, contained reader every repo-planted file goes through). |
 | `config/schema.json` | Draft-07 JSON-Schema mirror of the config (derived from `scripts/lib/config-schema.mjs`). |
 | `hooks/hooks.json` | Hook wiring via `${CLAUDE_PLUGIN_ROOT}/bin/…`. |
 | `commands/update.md` | The `/coalhearth:update` self-update procedure (agent-side; the hook only schedules). |
@@ -89,7 +93,7 @@ CoalHearth is **hook-only by design** — the hooks ARE the product (a session-s
 
 ## 🚀 Releasing (Maintainers)
 
-Bump version in `.claude-plugin/plugin.json` ➡️ add a `CHANGELOG.md` entry ➡️ ensure `verify.mjs` and `test.mjs` pass ➡️ commit ➡️ create a signed git tag (`vX.Y.Z`) ➡️ push ➡️ create a GitHub Release (stable tags only; a beta launch gets a prerelease).
+Bump version in `.claude-plugin/plugin.json` ➡️ add a `CHANGELOG.md` entry ➡️ ensure `verify.mjs` and `test.mjs` pass ➡️ commit ➡️ create a signed git tag (`vX.Y.Z`) ➡️ push. The `create-release` workflow then creates the GitHub Release for a stable tag from that tag's own CHANGELOG entry and re-reads it byte for byte; nobody posts a Release by hand. A tag cut before the workflow existed is posted by running it from the default branch with the tag as input, and a beta launch is posted the same way with its launch-form option (a prerelease).
 
 ---
 
