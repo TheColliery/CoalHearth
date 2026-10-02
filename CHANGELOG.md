@@ -2,7 +2,7 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
-## [Unreleased]
+## [2.6.1] - 2026-10-03
 
 A cloned repository can no longer make CoalHearth hang or write or delete outside the project through a planted link.
 
