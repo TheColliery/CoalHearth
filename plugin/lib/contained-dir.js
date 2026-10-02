@@ -98,6 +98,13 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
   if (cwdAbs === anchoredRootAbs) return; // no drift -> the "legacy" dir IS the one we just used
   const legacyDir = path.resolve(cwdAbs, DEFAULT_OUTPUT_DIR);
   try {
+    // CWK-137 (R14): this is a DELETE through a path a cloned repo can supply -- a junction or symlink at
+    // <cwd>/.claude/coalhearth (or at <cwd>/.claude above it) aimed anywhere made the unlinks below land in the TARGET.
+    // The pre-fix code planted a REAL directory, so only a real directory is mopped: the dir's realpath must be the very
+    // path we built from the already-physical cwd. A link anywhere in the path (the leaf or any ancestor) makes them
+    // differ, and the dir is left alone, untouched and unlisted. (An lstat directory check would add nothing: a link
+    // never resolves to itself.) Unresolvable -> the catch below, nothing to clean.
+    if (fs.realpathSync.native(legacyDir) !== legacyDir) return;
     for (const name of fs.readdirSync(legacyDir)) {
       if (name !== '.gitignore' && !name.startsWith('session_handoff')) continue; // never a foreign file
       try { fs.unlinkSync(path.join(legacyDir, name)); } catch (_) {}

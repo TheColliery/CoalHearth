@@ -402,3 +402,60 @@ test('CWK-137 (control): a STALE regular temp left by a crashed holder of the sa
   assert.equal(atomicWriteJournal(dir, 'o.json', 'FRESH'), true);
   assert.equal(fs.readFileSync(path.join(dir, 'o.json'), 'utf8'), 'FRESH');
 });
+
+// ---- the legacy-phantom mop-up (class 3): a DELETE through a repo-planted link --------------------------------------
+// containedOutputDir's self-clean unlinks `.gitignore` and `session_handoff*` from <cwd>/.claude/coalhearth when the cwd
+// is a subdir of the project. That directory is whatever the repo put there: a junction/symlink aimed anywhere made the
+// hook unlink those names in the TARGET. Run in a child with its cwd in the subdir, as the hooks run.
+function mopUp(sub, home) {
+  const script = 'const {containedOutputDir}=require(' + JSON.stringify(path.join(REPO, 'lib', 'contained-dir.js')) + ');process.stdout.write(String(containedOutputDir()))';
+  return spawnSync(process.execPath, ['-e', script], {
+    cwd: sub, encoding: 'utf8', timeout: 20000,
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
+  });
+}
+
+test('CWK-137: the legacy-phantom mop-up never deletes THROUGH a junction/symlink at <cwd>/.claude/coalhearth', (t) => {
+  const root = project(t);
+  const home = mk(t, 'ch-cwk137-home-');
+  const outside = mk(t, 'ch-cwk137-out-');
+  const sub = path.join(root, 'sub');
+  fs.mkdirSync(path.join(sub, '.claude'), { recursive: true });
+  for (const f of ['.gitignore', 'session_handoff.json', 'keep.txt']) fs.writeFileSync(path.join(outside, f), f);
+  if (!link(outside, path.join(sub, '.claude', 'coalhearth'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const r = mopUp(sub, home);
+  assert.equal(r.status, 0, r.stderr);
+  for (const f of ['.gitignore', 'session_handoff.json', 'keep.txt']) {
+    assert.equal(fs.existsSync(path.join(outside, f)), true, f + ' outside the project is untouched');
+  }
+});
+
+test('CWK-137: the mop-up never deletes through a link ABOVE the legacy dir either (<cwd>/.claude itself linked out)', (t) => {
+  const root = project(t);
+  const home = mk(t, 'ch-cwk137-home-');
+  const outside = mk(t, 'ch-cwk137-out-');
+  const sub = path.join(root, 'sub');
+  fs.mkdirSync(sub, { recursive: true });
+  fs.mkdirSync(path.join(outside, 'coalhearth'));
+  for (const f of ['.gitignore', 'session_handoff.json']) fs.writeFileSync(path.join(outside, 'coalhearth', f), f);
+  if (!link(outside, path.join(sub, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  assert.equal(mopUp(sub, home).status, 0);
+  for (const f of ['.gitignore', 'session_handoff.json']) {
+    assert.equal(fs.existsSync(path.join(outside, 'coalhearth', f)), true, f + ' outside the project is untouched');
+  }
+});
+
+test('CWK-137 (control): a REAL legacy phantom dir is still mopped up -- only the tool\'s own names, never a foreign file', (t) => {
+  const root = project(t);
+  const home = mk(t, 'ch-cwk137-home-');
+  const sub = path.join(root, 'sub');
+  const legacy = path.join(sub, '.claude', 'coalhearth');
+  fs.mkdirSync(legacy, { recursive: true });
+  for (const f of ['.gitignore', 'session_handoff.json', 'foreign.txt']) fs.writeFileSync(path.join(legacy, f), f);
+  assert.equal(mopUp(sub, home).status, 0);
+  assert.deepEqual(fs.readdirSync(legacy), ['foreign.txt'], 'own names removed, the foreign file kept, so the dir stays');
+  fs.rmSync(path.join(legacy, 'foreign.txt'));
+  fs.writeFileSync(path.join(legacy, 'session_handoff.json'), '{}');
+  assert.equal(mopUp(sub, home).status, 0);
+  assert.equal(fs.existsSync(legacy), false, 'a dir holding only the tool\'s own files is removed');
+});
