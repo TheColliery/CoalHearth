@@ -2,6 +2,26 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+A cloned repository can no longer make CoalHearth hang or write or delete outside the project through a planted link.
+
+### Security
+
+- **A file a cloned repository plants is now read through one bounded, contained reader.** The project and global config, the journal, `AGENTS.md`, `task.md` and the update stamp were read with a plain read, so a link to `/dev/zero` allocated until the hook died, a FIFO blocked it, a file of any size was read whole, and a link out of the project was followed. The reader now checks the kind before it opens anything (a regular file proceeds; a symlink proceeds only when its target is inside the project and a regular file; a FIFO, device, socket, directory, or a link that escapes or dangles is refused), opens non-blocking, re-checks the opened descriptor, and skips a file over its bound, never truncating it: configs 1 MiB, the journal and `AGENTS.md`/`task.md` 4 MiB, the update stamp 1 KiB. The global config and the stamp, which dotfile managers legitimately link, get the kind check and the bound but no containment. A config the reader refuses is reported as `UNREADABLE … (unreadable)`; an over-size journal is skipped and left in place, never quarantined. Windows measured; the FIFO and device cases run on the Linux and macOS CI legs and skip on Windows. — test: `lib/repo-fs.test.js`, `scripts/lib/cwk137.test.mjs`, `scripts/lib/config-load.test.mjs`
+- **The journal temp file is created exclusive, so a planted link is replaced, never written through.** A link at the temp name sent the journal's bytes to the link target, outside the project; the corrupt-journal quarantine and the resumed marker used the same write. — test: `scripts/lib/cwk137.test.mjs`, `lib/repo-fs.test.js`
+- **The legacy-phantom clean-up no longer deletes through a link.** A junction or symlink at the stray `.claude/coalhearth` directory, or at `.claude` above it, made the clean-up delete its `session_handoff*` and `.gitignore` files in the link target. It now acts only when the directory's real path is the path it built. — test: `scripts/lib/cwk137.test.mjs`
+- **`scripts/configure.mjs` no longer reads, backs up or overwrites through a planted link.** It refuses (exit 1, nothing written) an existing config that is over 1 MiB, not a regular file, or reached through a link that leaves the project, and writes the config and its `<file>.bak` through an exclusive temp renamed into place, with the `.bak` made from the bytes it already read. `--global` keeps its follow-through write to `~/.claude/.coalhearth.json`, because dotfile managers link that file; its read is bounded. — test: `scripts/lib/cwk137.test.mjs`
+
+The advisory in `SECURITY.md` names the precondition, the affected range (every release through v2.6.0) and what to check if you ran CoalHearth in a clone you did not write.
+
+### Changed
+
+- **The git hooks run a secret scan first** *(repo gate, not in the plugin dist)*. `scripts/secret-gate.mjs` runs before `verify.mjs` and `test.mjs` in `.githooks/pre-commit` (the staged tree) and `.githooks/pre-push` (the added lines, message and tag of every pushed commit). It covers the generic kinds a provider-token scan does not: a private key, a connection string, an HTTP authentication header. A scan that cannot run fails the hook, and a hit never prints its value. The two hooks stay one file of identical bytes. — test: `scripts/secret-scan.test.mjs`, `scripts/secret-gate.test.mjs`
+- **The git-spawn census exempts two org-supplied test files by blob.** `scripts/secret-gate.test.mjs` (one spawn) and `scripts/secret-scan.test.mjs` (three) spawn git without taking their environment from `gitEnv()` alone. Each exemption is pinned to the file's exact bytes, so an edit or a re-copy of either file makes it stale and fails the gate until it is re-examined, and each is deleted when the org fixes the spawns. The census now counts five exempt spawns beside the hazard proof's one. — test: `scripts/lib/git-env-census.test.mjs`
+- **Every CI job has a finite clock, and no checkout persists the token** *(CI, not in the plugin dist)*. `timeout-minutes` on every job, sized from that job's own recent runs; `persist-credentials: false` on every checkout that lacked it; the Dependabot auto-merge workflow takes the pull-request URL through `env`; CoalBoard's report folder is gitignored. Job names are unchanged, so the required checks are the same. — test: none (workflow YAML; `verify.mjs` passes, and the workflows run on GitHub)
+- **A tag push now creates the GitHub Release** *(CI, not in the plugin dist)*. The `create-release` workflow derives the Release title and body from the tag's own CHANGELOG entry and re-reads the published Release byte for byte; it is the only creator of a Release. A tag cut before the workflow existed is posted by running it from the default branch with the tag as input. — test: `scripts/release-notes.test.mjs`, `scripts/verify-release-shape.test.mjs`, `scripts/lib/release-shape.test.mjs`
+
 ## [2.6.0] - 2026-09-24
 
 A config that cannot be read is now reported, and a directory at a config path no longer shadows a real one.
