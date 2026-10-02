@@ -20,6 +20,8 @@ const TESTS = [
   'scripts/lib/jsonc.test.mjs',
   'scripts/lib/git-env.test.mjs',
   'scripts/lib/git-env-census.test.mjs',
+  'scripts/secret-scan.test.mjs',
+  'scripts/secret-gate.test.mjs',
   'scripts/lib/hooks.test.mjs',
   'scripts/lib/cwk137.test.mjs',
   'scripts/lib/engine.test.mjs',
