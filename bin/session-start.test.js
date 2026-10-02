@@ -494,3 +494,185 @@ test('AL-2 LOW-2: an uppercase language value still fires the directive (case-in
   assert.match(r.stdout, /Language locked to 'th'/, 'TH normalizes to lowercase th, same as a lowercase th would');
   cleanup(home, cwd);
 });
+
+// ---------------------------------------------------------------------------------------
+// UMB-133 (config-path unification): SessionStart is the ONLY entry point that reports a
+// legacy hit or an IGNORED config. Two paths, ONE notice source, never twice: when the hook is
+// already speaking the lines are appended to that emission; when it would otherwise say nothing
+// they go out as ONE standalone line on the same sanctioned SessionStart channel (head's
+// fixback ruling -- the row says "never silently skipped", and a report that fires only when
+// something else is speaking is not that). The silence guarantee is the load-bearing half: a
+// clean canonical config, or none at all, still emits NOTHING. Each sandbox is registered for
+// cleanup on the line after it is allocated.
+// ---------------------------------------------------------------------------------------
+function writeJson(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(obj), 'utf8');
+}
+function plantInProgressJournal(cwd) {
+  writeJson(journalOf(cwd), {
+    sessionId: 'umb133-1',
+    timestamp: '2026-07-01T00:00:00.000Z',
+    status: 'in_progress',
+    checklist: [{ task: 'do the thing', status: 'doing' }],
+    modifiedFiles: ['lib/foo.js'],
+    activePlan: { goal: 'Ship the feature', nextSteps: ['write tests'], constraints: [] },
+  });
+}
+const countOf = (s, needle) => s.split(needle).length - 1;
+
+// FIXBACK (UMB-133): this test used to assert stdout === '' -- the head's original rail
+// (append, never standalone). The expectation INVERTS. RED-PROOF: on d4aa5d9 stdout is ''.
+test('UMB-133 fixback: a legacy + an IGNORED config with NOTHING else to say emit ONE standalone line each, once', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  writeJson(path.join(cwd, '.claude', '.coalhearth.json'), {});
+  writeJson(path.join(cwd, '.agents', '.coalhearth.json'), {}); // an IGNORED shape too
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  const lines = r.stdout.split(/\r?\n/).filter(Boolean);
+  assert.strictEqual(lines.length, 2, 'exactly the two notices, nothing else: ' + JSON.stringify(r.stdout));
+  assert.ok(lines[0].startsWith('[CoalHearth] LEGACY: ') && lines[1].startsWith('[CoalHearth] IGNORED: '));
+  assert.ok(!r.stdout.includes('Warm-Resume') && !r.stdout.includes('[self-update due]'), 'no other emission was invented');
+});
+
+test('UMB-133 fixback: the standalone notice carries the AL-2 language lock like every other emission', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  writeJson(path.join(home, '.claude', '.coalhearth.json'), { update: { updateMode: 'off' }, language: 'th' });
+  writeJson(path.join(cwd, '.claude', '.coalhearth.json'), {});
+  const r = runHook(cwd, home);
+  assert.strictEqual(countOf(r.stdout, 'LEGACY:'), 1);
+  assert.strictEqual(countOf(r.stdout, 'Language locked'), 1, 'the directive rides the notice once');
+});
+
+// THE SILENCE GUARANTEE -- what makes the standalone line safe. A test that only ever sees the
+// quiet case passing proves nothing, so it has a mutant (mutations-fixback.txt, M8: gate forced on).
+test('UMB-133 fixback SILENCE: a clean canonical config, nothing else to report, emits NOTHING', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  writeJson(path.join(cwd, '.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 2 } });
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '');
+  assert.strictEqual(r.stderr, '');
+});
+
+test('UMB-133 fixback SILENCE: no project config at all, nothing else to report, emits NOTHING', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.stdout, '');
+  assert.strictEqual(r.stderr, '');
+});
+
+test('UMB-133: a nested-legacy hit rides the recovery block as ONE line naming the canonical path', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  writeJson(path.join(cwd, '.claude', '.coalhearth.json'), {});
+  plantInProgressJournal(cwd);
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.ok(r.stdout.includes('Ship the feature'), 'the recovery block is intact');
+  assert.strictEqual(countOf(r.stdout, 'LEGACY:'), 1);
+  const line = r.stdout.split(/\r?\n/).find((l) => l.includes('LEGACY:'));
+  assert.ok(line.startsWith('[CoalHearth] LEGACY: '), 'own line, attributed like every other CoalHearth line');
+  assert.ok(line.includes(path.join('.claude', '.coalhearth.json')) && line.includes('canonical = .claude/coal/coalhearth.json'));
+});
+
+test('UMB-133: an IGNORED config is reported once, appended to the self-update directive', (t) => {
+  const { home, cwd } = sandbox(); // no global config, fresh home -> the update check is due
+  t.after(() => cleanup(home, cwd));
+  writeJson(path.join(cwd, '.claude', 'coalhearth.json'), {}); // missing the coal/ segment
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.ok(r.stdout.includes('[self-update due]'));
+  assert.strictEqual(countOf(r.stdout, 'IGNORED:'), 1);
+  const line = r.stdout.split(/\r?\n/).find((l) => l.includes('IGNORED:'));
+  assert.ok(line.startsWith('[CoalHearth] IGNORED: ') && line.endsWith('is not a config path; canonical = .claude/coal/coalhearth.json'));
+});
+
+test('UMB-133: with TWO emissions going out (recovery + self-update) the notice still appears exactly once', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  writeJson(path.join(cwd, '.gemini', '.coalhearth.json'), {});
+  plantInProgressJournal(cwd);
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.ok(r.stdout.includes('Ship the feature') && r.stdout.includes('[self-update due]'), 'both emissions are present');
+  assert.strictEqual(countOf(r.stdout, 'IGNORED:'), 1);
+});
+
+// NO DOUBLE EMISSION across the two paths: the hook speaks AND a notice exists -> the notice
+// is appended to that emission and NOT also printed standalone.
+test('UMB-133 fixback: a session where the hook IS speaking gets the notice appended once, never also standalone', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  writeJson(path.join(cwd, '.claude', '.coalhearth.json'), {});
+  plantInProgressJournal(cwd);
+  const r = runHook(cwd, home);
+  assert.ok(r.stdout.includes('Ship the feature'));
+  assert.strictEqual(countOf(r.stdout, 'LEGACY:'), 1);
+  const out = r.stdout.split(/\r?\n/);
+  assert.ok(out.findIndex((l) => l.includes('LEGACY:')) > out.findIndex((l) => l.includes('Ship the feature')), 'it follows the recovery block it rode');
+});
+
+// The RULING, pinned: only SessionStart reports. PostToolUse printing anything would breach
+// Phoenix #13 (no hook but the sanctioned channels emits), and the other three entry points
+// have no "already emitting" line to ride on every session. RED-PROOF: add a configNotices
+// call to any other bin/*.js and the source assertion goes red.
+test('UMB-133 ruling: ONLY bin/session-start.js reads configNotices; PostToolUse stays silent on a legacy config', (t) => {
+  for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.js') && !n.endsWith('.test.js'))) {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    assert.strictEqual(src.includes('configNotices'), f === 'session-start.js', f + ' must ' + (f === 'session-start.js' ? '' : 'NOT ') + 'call configNotices');
+  }
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  writeJson(path.join(cwd, '.claude', '.coalhearth.json'), {});
+  writeJson(path.join(cwd, '.agents', '.coalhearth.json'), {});
+  const r = runPTU(cwd, home, JSON.stringify({ tool_name: 'Read', tool_input: { file_path: path.join(cwd, 'x.txt') } }));
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '');
+  assert.strictEqual(r.stderr, '');
+});
+
+// UMB-174 (b): a config that EXISTS where the walk reads but cannot be used is REPORTED on the SAME
+// sanctioned SessionStart channel, never skipped in silence. One standalone line when nothing else is
+// speaking (the same rule as LEGACY/IGNORED above); the reasons themselves are proven per-reason,
+// through both twins, in scripts/lib/config-load.test.mjs. RED-PROOF: with configNotices' UNREADABLE
+// loop removed this hook prints nothing here (stdout === '').
+test('UMB-174 (b): a MALFORMED canonical project config is reported as ONE standalone [CoalHearth] UNREADABLE line', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  const canon = path.join(cwd, '.claude', 'coal', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(canon), { recursive: true });
+  fs.writeFileSync(canon, '{ not json', 'utf8');
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  assert.strictEqual(
+    r.stdout.trim(),
+    '[CoalHearth] UNREADABLE: ' + canon + ' exists but is not a readable config (malformed JSON); it was skipped \u2014 canonical = .claude/coal/coalhearth.json',
+  );
+});
+
+test('UMB-174 (b): a NON-OBJECT global config (a JSON array) is reported, and the hook still exits 0', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  const g = path.join(home, '.claude', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(g), { recursive: true });
+  fs.writeFileSync(g, '[]', 'utf8');
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(countOf(r.stdout, 'UNREADABLE:'), 1);
+  assert.ok(r.stdout.includes('(not a JSON object)'), r.stdout);
+});

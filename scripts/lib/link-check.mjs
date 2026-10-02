@@ -65,6 +65,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { gitEnv } from './git-env.mjs';
 
 const EXTERNAL_RE = /^([a-z][a-z0-9+.-]*:|\/\/)/i; // a URI scheme (http:, mailto:, tel:, ...) or protocol-relative `//`
 const LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
@@ -333,7 +334,9 @@ export function classifyTrackedIndexResult(r) {
 export function buildTrackedIndex(repoRoot) {
   let r;
   try {
-    const stdout = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    // CWK-133: a hook-run gate must not follow an ambient absolute GIT_DIR. No ceiling passed: repoRoot
+    // is the caller's cwd, which may legitimately sit in a subdirectory of a repo.
+    const stdout = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: gitEnv() });
     r = { status: 0, stdout };
   } catch (e) {
     r = e.code === 'ENOENT' ? { error: e } : { status: e.status, stderr: e.stderr };

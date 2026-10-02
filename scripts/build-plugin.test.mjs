@@ -85,3 +85,36 @@ test('a real content INSERTION under CRLF line endings still fails loud (stale, 
   assert.ok(drift.some((d) => d.includes('stale') && d.includes(rel)), `expected a stale entry for ${rel}, got: ${JSON.stringify(drift)}`);
   fs.rmSync(distRoot, { recursive: true, force: true });
 });
+
+// CWK-120 finding #9 (CodeRabbit, Trivial), verified at the live tree: DIST_ITEMS names ONE file inside .claude-plugin
+// (plugin.json), so checkDist accounted for that file's own path and treated the whole .claude-plugin directory as
+// allowed at the top level -- an EXTRA file committed beside it in plugin/.claude-plugin/ matched no DIST_ITEM, was
+// listed by neither per-item loop, and passed every gate: an undeclared file shipping in the marketplace dist.
+test('checkDist flags an orphan file inside a directory a file-shaped DIST_ITEM lives in (plugin/.claude-plugin/)', () => {
+  const distRoot = mkTmp();
+  try {
+    buildDist(distRoot);
+    assert.deepEqual(checkDist(distRoot), [], 'fixture setup: a fresh build is in sync');
+    fs.writeFileSync(path.join(distRoot, '.claude-plugin', 'settings.json'), '{}');
+    const drift = checkDist(distRoot);
+    assert.ok(
+      drift.some((d) => d.startsWith('orphan in plugin/ (no DIST_ITEM):') && d.includes('settings.json')),
+      'expected the undeclared sibling to be reported by name, got: ' + JSON.stringify(drift),
+    );
+  } finally {
+    fs.rmSync(distRoot, { recursive: true, force: true });
+  }
+});
+
+test('checkDist flags an orphan DIRECTORY there too, and still passes the declared file alone', () => {
+  const distRoot = mkTmp();
+  try {
+    buildDist(distRoot);
+    fs.mkdirSync(path.join(distRoot, '.claude-plugin', 'extra'));
+    assert.ok(checkDist(distRoot).some((d) => d.includes('extra')), 'an undeclared subdirectory is an orphan as well');
+    fs.rmSync(path.join(distRoot, '.claude-plugin', 'extra'), { recursive: true });
+    assert.deepEqual(checkDist(distRoot), [], 'plugin.json alone is exactly what is declared');
+  } finally {
+    fs.rmSync(distRoot, { recursive: true, force: true });
+  }
+});

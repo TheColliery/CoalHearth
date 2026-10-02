@@ -391,3 +391,37 @@ test('NON-LOCALITY: the SAME extensionless plant beside a path-shaped sibling un
   assert.equal(fails(findings).length, 2);
   assert.ok(fails(findings).every((m) => /lives under the gitignored `lib`/.test(m)), fails(findings).join(' | '));
 });
+
+// CWK-120 finding #7 (CodeRabbit, Minor), verified at the live tree: pointerCandidates stripped fenced blocks with
+// `/^```[\s\S]*?^```/gm` -- unindented BACKTICK fences only. CommonMark also allows TILDE fences, up to three
+// spaces of indentation, a longer fence that CONTAINS a shorter fence line, and an unclosed fence that runs to the end
+// of the document; a path inside any of those examples reached checkPointers and could fail the gate as a real citation.
+// (link-check.mjs's own fence scanner already handles the character and length rules; this module imports nothing, so it
+// carries its own small scanner rather than a shared one.)
+test('fence: a TILDE fence is an example too (CWK-120 #7)', () => {
+  assert.deepEqual(pointerCandidates('~~~\n`lib/inside-tilde.js`\n~~~\n`lib/outside.js`\n'), ['lib/outside.js']);
+});
+
+test('fence: a fence indented by up to three spaces is a fence; four spaces is NOT (an indented code block)', () => {
+  assert.deepEqual(pointerCandidates('  ```\n`lib/inside.js`\n  ```\n`lib/outside.js`\n'), ['lib/outside.js']);
+  assert.deepEqual(pointerCandidates('   ~~~\n`lib/inside.js`\n   ~~~\n'), []);
+  assert.deepEqual(pointerCandidates('    ```\n`lib/kept.js`\n    ```\n'), ['lib/kept.js'], 'four spaces is not a fence opener -- unchanged from before, and named as a bound');
+});
+
+test('fence: a LONGER fence is not closed by a shorter fence line inside it', () => {
+  const t = '````\n```\n`lib/inside.js`\n```\n````\n`lib/outside.js`\n';
+  assert.deepEqual(pointerCandidates(t), ['lib/outside.js']);
+});
+
+test('fence: only a closer of the SAME character and at least the same length closes it', () => {
+  const t = '```\n`lib/in-a.js`\n~~~\n`lib/in-b.js`\n```\n`lib/outside.js`\n';
+  assert.deepEqual(pointerCandidates(t), ['lib/outside.js']);
+});
+
+test('fence: an UNCLOSED fence runs to the end of the document (CommonMark), and an info string does not stop it opening', () => {
+  assert.deepEqual(pointerCandidates('`lib/before.js`\n```js\n`lib/inside.js`\n'), ['lib/before.js']);
+});
+
+test('fence: CRLF text is handled the same', () => {
+  assert.deepEqual(pointerCandidates('```\r\n`lib/inside.js`\r\n```\r\n`lib/outside.js`\r\n'), ['lib/outside.js']);
+});

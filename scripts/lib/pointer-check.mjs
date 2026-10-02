@@ -353,10 +353,31 @@ export function applyCheckIgnoreProbe({ toProbe, PROBE_SUFFIX, ignoredRoots, fai
 
 // Candidate extraction. Exported so an adopter measures its OWN funnel with this instrument
 // rather than re-implementing it and getting different numbers.
+// Fenced code blocks are EXAMPLES, not prose claims about this tree. A small CommonMark fence scanner (CWK-120 #7): an
+// opener is 0-3 spaces then 3+ backticks or 3+ tildes (a backtick fence's info string may not itself hold a backtick); it
+// closes only on a line of the SAME character, AT LEAST as long, with only whitespace after (0-3 spaces before); an
+// unclosed fence runs to the end of the text. Four or more spaces of indentation is an indented code block, not a fence,
+// and is left alone (a named bound). Fenced lines are dropped; the rest is returned with its line endings intact.
+function stripFencedBlocks(text) {
+  const kept = [];
+  let fence = null;
+  for (const line of String(text).split('\n')) {
+    const bare = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (fence === null) {
+      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(bare);
+      if (open && !(open[1][0] === '`' && open[2].includes('`'))) { fence = { ch: open[1][0], len: open[1].length }; continue; }
+      kept.push(line);
+    } else {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(bare);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+    }
+  }
+  return kept.join('\n');
+}
+
 export function pointerCandidates(text) {
   const out = [];
-  // Fenced code blocks are EXAMPLES, not prose claims about this tree.
-  const prose = String(text).replace(/^```[\s\S]*?^```/gm, '');
+  const prose = stripFencedBlocks(text);
   for (const m of prose.matchAll(/`([^`\n]+)`/g)) {
     const tok = m[1];
     if (/\s/.test(tok)) continue;          // a command or a Markdown table row, not a pointer

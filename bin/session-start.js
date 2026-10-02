@@ -15,7 +15,7 @@ const { findWorkspaceRoot } = require('../lib/contained-dir.js');
 // (this honors CLAUDE_CONFIG_DIR). The earlier inline copy hardcoded '.claude', so a
 // custom config dir silently diverged the WRITE path (post-tool) from the READ path
 // (session-start) and broke warm-resume — the whole value-prop (work-review MED #1).
-const { loadConfig } = require('../lib/load-config.js');
+const { loadConfig, configNotices } = require('../lib/load-config.js');
 
 // Self-update is kind-1 (series-standard, mirrors the CoalBoard/CoalTipple conductor):
 // the HOOK only SCHEDULES (a throttled, crash-safe stamp — written BEFORE the directive
@@ -72,6 +72,33 @@ function languageDirective(config) {
 function main() {
   const config = loadConfig();
   const recovery = config.recovery || {};
+
+  // UMB-133 — REPORT a legacy config hit or a config at a NON-candidate path, never skip it.
+  // SessionStart is the ONLY entry point that reports (post-tool-use, user-prompt-submit and
+  // the two AG adapters read the same config and stay silent: PostToolUse printing anything
+  // would breach Phoenix #13, and none of the other three has a line it already prints every
+  // session to ride on). TWO PATHS, ONE notice source, never twice: when the hook is already
+  // speaking, the lines are APPENDED to the first emission (a one-shot via tail(), so recovery
+  // + self-update together do not repeat it); when it would otherwise say nothing, they go out
+  // as one standalone line at the end of main() on the SAME sanctioned SessionStart channel
+  // (head's fixback ruling: hole (1) says "never silently skipped", and a report that fires
+  // only when something else happens to be speaking is not that; hooks-safety.md 13 already
+  // sanctions this channel, so this changes WHEN it speaks, never WHERE). The trigger is
+  // narrow by construction — configNotices() is empty for a clean canonical config or none at
+  // all, and then nothing is printed. configNotices never throws; the catch is the second
+  // belt (Phoenix #4 — a failed probe never costs the hook its real job).
+  let pendingNotice = '';
+  try {
+    const lines = configNotices();
+    if (lines.length) pendingNotice = '\n' + lines.map((l) => '[CoalHearth] ' + l).join('\n');
+  } catch {
+    // fail-silent: no notice, hook carries on
+  }
+  const tail = () => {
+    const t = languageDirective(config) + pendingNotice;
+    pendingNotice = '';
+    return t;
+  };
   const engine = new ResumeEngine(config.journal || {}, recovery);
 
   // H5: the journal dir could not be created (a FILE occupies .claude/coalhearth, or a perms
@@ -82,7 +109,7 @@ function main() {
   // and expected (containedOutputDir's own auto-anchor already refused it) — only warn when
   // there IS a project and its journal dir is still blocked, the actionable case.
   if (!engine.outputDir && findWorkspaceRoot(process.cwd())) {
-    console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.' + languageDirective(config));
+    console.log('[CoalHearth] Cannot create the journal directory (.claude/coalhearth) — a file may be occupying that path. Warm-resume protection is OFF until it is cleared.' + tail());
   }
 
   const aborted = engine.detectAbortedSession();
@@ -117,14 +144,23 @@ function main() {
       if (out && !markedResumed) {
         out += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
       }
-      if (out) console.log(out + languageDirective(config)); // sanctioned SessionStart context-injection channel (Phoenix #13)
+      if (out) console.log(out + tail()); // sanctioned SessionStart context-injection channel (Phoenix #13)
     }
   }
 
   // Orthogonal to the resume path (its own off-switch is update.updateMode) — rides the
   // same sanctioned SessionStart context-injection channel.
   if (updateDue(config)) {
-    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.' + languageDirective(config));
+    console.log('[CoalHearth] [self-update due] Offer the /coalhearth:update check: web-check the latest CoalHearth tag vs the installed plugin.json version; if newer, OFFER `claude plugin update coalhearth@coalhearth`; if current, say "up to date"; if git/network is unavailable, say so and suggest updating manually later (never assume). Consent-gated; the hook only scheduled it.' + tail());
+  }
+
+  // Nothing above spoke (tail() would have consumed the notice) but a stranded or legacy config
+  // exists on this user's disk: say so on its own, carrying the language lock like every other
+  // emission. Never reached with an empty notice, so the quiet case stays byte-silent.
+  if (pendingNotice) {
+    const standalone = pendingNotice.slice(1) + languageDirective(config);
+    pendingNotice = '';
+    console.log(standalone); // sanctioned SessionStart context-injection channel (Phoenix #13)
   }
 }
 

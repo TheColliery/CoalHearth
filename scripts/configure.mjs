@@ -166,9 +166,11 @@ function main() {
   // (loadMergedConfig's safer-value-wins clamp on updateMode/autoInjectPrompt).
   //
   // READ follows projectConfigPath's own rail (own-dir -> other known agent dirs ->
-  // LEGACY root dotfile — see config-load.mjs's header for the full precedence).
-  // WRITE goes back to wherever the config was found, EXCEPT a config found at the
-  // LEGACY location migrates on THIS write to the own-dir-or-first-agent-dir default
+  // LEGACY nested .claude/.coalhearth.json -> LEGACY root dotfile — see config-load.mjs's
+  // header for the full precedence).
+  // WRITE goes back to wherever the config was found, EXCEPT a config found at EITHER
+  // LEGACY location (UMB-133 added the nested one) migrates on THIS write to the
+  // own-dir-or-first-agent-dir default
   // (`projectConfigCandidates(...)[0]`) — never a bare `.claude`, so a project that
   // only uses `.agents`/`.gemini` does not get a foreign `.claude/` planted into it.
   // Move-on-CONFIG-WRITE-only (Phoenix #5): a hook never performs this move on a mere
@@ -177,11 +179,12 @@ function main() {
   const isGlobal = globalIdx !== -1;
   if (isGlobal) args.splice(globalIdx, 1);
   const projectRoot = findProjectRoot(process.cwd());
-  const legacyPath = path.join(projectRoot, '.coalhearth.json');
+  const legacyPaths = [path.join(projectRoot, '.claude', '.coalhearth.json'), path.join(projectRoot, '.coalhearth.json')];
   const readPath = isGlobal ? globalConfigPath() : projectConfigPath(process.cwd());
+  const readIsLegacy = !isGlobal && legacyPaths.includes(readPath);
   const writePath = isGlobal
     ? readPath
-    : (readPath === legacyPath ? projectConfigCandidates(process.cwd())[0] : readPath);
+    : (readIsLegacy ? projectConfigCandidates(process.cwd())[0] : readPath);
 
   let cfg = {};
   let hadComments = false;
@@ -197,20 +200,31 @@ function main() {
     rawConfig = content;
   } catch {}
   if (rawConfig !== null) {
+    let notObject = false;
     try {
       hadComments = rawConfig.includes('//');
       const parsed = parseJsonc(rawConfig); // proto-pollution-guarded parse (jsonc.mjs)
-      cfg = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      // CWK-120 ride-along (a): valid JSON that is not a plain object ([], "str", 42, null, true) is NEVER
+      // accepted as the config -- and this is a WRITER: the old `... ? parsed : {}` fallback treated it as
+      // an empty config and OVERWROTE the file with no backup and no notice. It takes the malformed
+      // recovery below instead (back up, rebuild from defaults, exit 1), with an accurate message.
+      if (!(parsed && typeof parsed === 'object' && !Array.isArray(parsed))) { notObject = true; throw new Error('not a JSON object'); }
+      cfg = parsed;
     } catch (e) {
       // Fail loud (scripts-quality.md 1): a malformed config we silently overwrite is a
       // partial failure the user must notice -- flag the non-zero exit even though the
-      // run continues from defaults (the old config is backed up where possible).
+      // run continues from defaults.
       process.exitCode = 1;
+      const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
       try {
         fs.copyFileSync(readPath, readPath + '.bak');
-        console.warn(`Warning: existing config is malformed — backed it up to ${readPath}.bak and rebuilding.`);
-      } catch {
-        console.warn('Warning: existing config is malformed. Overwriting.');
+        console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
+      } catch (bakErr) {
+        // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
+        // file the user wrote. Refuse: nothing written, the original stays byte-exact, exit 1, and the message says what
+        // happened and what to do next (Standard System 4). Keyed on the errno CODE, never its message (node/runtime.md 7).
+        console.error(`Error: existing config ${why}, and it could not be backed up to ${readPath}.bak (${(bakErr && bakErr.code) || 'error'}) \u2014 nothing was written and ${readPath} is untouched. Remove or rename ${readPath}.bak (it may be a directory), or free the space/permission it needs, then run again.`);
+        return;
       }
     }
   }
@@ -254,14 +268,14 @@ function main() {
   try {
     fs.mkdirSync(path.dirname(writePath), { recursive: true });
     fs.writeFileSync(writePath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-    // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy root file is
+    // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy file is
     // removed only AFTER the new-home write above succeeded, and only when this write
     // actually migrated it. Best-effort -- a failed delete here still leaves a
     // correctly-written new config; the stray legacy file is simply not cleaned up
     // this run.
-    if (readPath === legacyPath && writePath !== legacyPath) {
-      try { fs.rmSync(legacyPath, { force: true }); } catch {}
-      console.log(`Migrated the project config from ${legacyPath} to ${writePath}.`);
+    if (readIsLegacy && writePath !== readPath) {
+      try { fs.rmSync(readPath, { force: true }); } catch {}
+      console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
     }
     if (hadComments) {
       console.warn('Note: inline comments were stripped (this tool writes plain JSON). Every key stays documented in platform-configs/.coalhearth.json.');

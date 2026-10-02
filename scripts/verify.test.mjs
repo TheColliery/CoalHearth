@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from './lib/git-env.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -39,8 +40,8 @@ function seed(tmp) {
   for (const f of COPY_FILES) fs.cpSync(path.join(repo, f), path.join(tmp, f));
 }
 
-function run(tmp) {
-  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8' });
+function run(tmp, env) {
+  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8', ...(env ? { env } : {}) });
 }
 
 test('verify.mjs negative path: an over-cap .claude-plugin/plugin.json description FAILs the gate', () => {
@@ -92,13 +93,18 @@ test('verify.mjs negative path: a truthy non-string plugin.json description FAIL
 // the comments/hash-comments rows out of collectSurfaces) are the ones proven to redden them --
 // see the coder's own return for the mutation log, not restated here.
 function gitInit(tmp) {
-  const opts = { cwd: tmp, encoding: 'utf8' };
-  spawnSync('git', ['init', '-q', '.'], opts);
+  // CWK-133: the whole GIT_* family stripped and a ceiling at the sandbox's parent, so a hook
+  // that exported an absolute GIT_DIR (a linked worktree's) can never redirect this fixture onto
+  // the real enclosing repo.
+  // One spawn site with an explicit env: (the census, CWK-136, reads it -- a shared `opts` object
+  // would hide the env from it).
+  const g = (args) => spawnSync('git', args, { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) });
+  g(['init', '-q', '.']);
   // Local, throwaway identity -- never touches the operator's own global git config.
-  spawnSync('git', ['config', 'user.email', 'ci@coalhearth.invalid'], opts);
-  spawnSync('git', ['config', 'user.name', 'coalhearth-verify-test'], opts);
-  spawnSync('git', ['add', '-A'], opts);
-  spawnSync('git', ['commit', '-q', '-m', 'fixture'], opts);
+  g(['config', 'user.email', 'ci@coalhearth.invalid']);
+  g(['config', 'user.name', 'coalhearth-verify-test']);
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'fixture']);
 }
 
 // INDEPENDENT of collectSurfaces() and of DEFAULT_SURFACE_PLAN's own code -- a mutation to
@@ -164,7 +170,7 @@ test('verify.mjs pointer-drift block FAILs loud when git check-ignore cannot run
     // bypasses a PATH-prepended .cmd/shebang git shim and resolves straight to the real
     // binary regardless of PATH order (r31 BUILD1) -- core.bare sidesteps that dead end
     // entirely by making the REAL git binary itself the one that refuses.
-    spawnSync('git', ['config', 'core.bare', 'true'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['config', 'core.bare', 'true'], { cwd: tmp, encoding: 'utf8', env: gitEnv(path.dirname(tmp)) });
 
     const r = run(tmp);
     assert.equal(r.status, 1,
@@ -178,4 +184,179 @@ test('verify.mjs pointer-drift block FAILs loud when git check-ignore cannot run
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// CWK-133 -- the git fixtures and the gate's own git children must not follow an ambient
+// absolute GIT_DIR. Inside a LINKED worktree a git hook exports one, and it overrides both cwd and
+// GIT_CEILING_DIRECTORIES: a fixture's `git init` then re-initialises the REAL enclosing repo and
+// its `git config` writes there (CoalFace measured core.bare=true on its own repo, 2026-09-23).
+// The sandbox stands in for that enclosing repo. The redirect is universal; the core.bare FLIP is
+// platform-conditional (CoalTipple f0b95b9), so this asserts the universal leg only and never
+// depends on the flip.
+// `bare` marks the enclosing repo core.bare=true AFTER its index is built: git ls-files still answers from
+// the index, while git check-ignore refuses outright ("must be run in a work tree"), so a check-ignore
+// spawn that follows the ambient GIT_DIR instead of THIS fixture fails loud -- the second git child the
+// gate spawns is pinned by the same test as the first.
+function mkSandboxRepo(t, { bare = false } = {}) {
+  const sandbox = mkTmp();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const g = (args) => spawnSync('git', args, { cwd: sandbox, encoding: 'utf8', env: gitEnv(path.dirname(sandbox)) });
+  assert.equal(g(['init', '-q', '.']).status, 0, 'setup: the sandbox repo must init cleanly');
+  fs.writeFileSync(path.join(sandbox, 'unrelated.txt'), 'not ours\n');
+  assert.equal(g(['add', 'unrelated.txt']).status, 0, 'setup: the sandbox repo tracks one unrelated file');
+  if (bare) assert.equal(g(['config', 'core.bare', 'true']).status, 0, 'setup: the sandbox repo is marked bare');
+  return { sandbox, gitDir: path.join(sandbox, '.git'), configOf: () => fs.readFileSync(path.join(sandbox, '.git', 'config')) };
+}
+
+function plantGitDir(t, gitDir) {
+  const saved = process.env.GIT_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; });
+  process.env.GIT_DIR = gitDir;
+}
+
+test('CWK-133: the git fixture never touches another repo when an absolute GIT_DIR is ambient -- it gets its own .git, the other repo config is byte-unchanged', (t) => {
+  const { gitDir, configOf } = mkSandboxRepo(t);
+  const before = configOf();
+  const fixture = mkTmp();
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  plantGitDir(t, gitDir);
+
+  gitInit(fixture);
+
+  assert.ok(before.equals(configOf()), 'the enclosing repo config must be byte-unchanged (a redirected fixture writes user.email/user.name into it)');
+  assert.ok(fs.existsSync(path.join(fixture, '.git')), 'the fixture must get the .git its caller asked for, not be redirected onto the enclosing repo');
+});
+
+test('CWK-133: verify.mjs asks git about ITS OWN repo when an absolute GIT_DIR is ambient -- the gate is a git-hook child and must not follow it (ls-files AND check-ignore)', (t) => {
+  const { gitDir } = mkSandboxRepo(t, { bare: true });
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  gitInit(tmp);
+
+  const clean = run(tmp);
+  assert.equal(clean.status, 0, `setup: a pristine committed fixture must PASS, got:\n${clean.stdout}${clean.stderr}`);
+
+  const poisoned = run(tmp, { ...process.env, GIT_DIR: gitDir });
+  assert.equal(poisoned.status, 0,
+    `an ambient GIT_DIR must not change the verdict -- the tracked list must come from THIS fixture, not the enclosing repo:\n${poisoned.stdout}${poisoned.stderr}`);
+  assert.doesNotMatch(poisoned.stdout, /UNTRACKED|NOT CHECKED/);
+});
+
+// CWK-136 -- the census in verify.mjs proves SAFETY, not presence. Presence alone passes
+// `env: process.env`, which hands a linked-worktree hook's absolute GIT_DIR straight to the child.
+// Each test plants a git spawn in a scratch copy of the tree and runs the REAL gate over it.
+// The planted source is assembled from name parts so this file's own text never contains a literal
+// spawn the census would read as real (verify.mjs walks scripts/**, tests included).
+const PLANT_FN = 'spawn' + 'Sync';
+function plantSpawn(tmp, envText) {
+  const call = PLANT_FN + "('git', ['status'], { cwd: '.'" + (envText ? ', env: ' + envText : '') + ' });';
+  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, ''].join('\n');
+  fs.writeFileSync(path.join(tmp, 'scripts', 'zz-planted.test.mjs'), body);
+}
+
+test('CWK-136: the pristine tree passes the git-spawn census, and the gate PRINTS what it walked', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const r = run(tmp);
+  assert.equal(r.status, 0, `a pristine copy must PASS, got:\n${r.stdout}${r.stderr}`);
+  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\)/);
+  assert.ok(m, `the census must print its counts, got:\n${r.stdout}`);
+  // 8 call SITES today (2 in verify.mjs, 1 in link-check.mjs, and the fixture helpers), down from the
+  // 20 literal spawns CWK-133 found -- the fixtures were folded into one helper each. A floor, not an equality.
+  assert.ok(Number(m[1]) >= 8, 'the census must see this room\'s git spawns, not walk an empty set');
+  assert.ok(Number(m[2]) >= 20, 'the census must walk the scripts/, lib/ and bin/ trees');
+});
+
+test('CWK-136: a git spawn planted with env: process.env FAILs the gate, naming file:line', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, 'process.env');
+  const r = run(tmp);
+  assert.equal(r.status, 1, `presence of an env: key is not safety -- must FAIL, got:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /VERIFY: FAIL/);
+  assert.match(r.stdout, /FAIL scripts\/zz-planted\.test\.mjs:3 .*process\.env/);
+});
+
+test('CWK-136: a git spawn planted with NO env: key FAILs the gate, naming file:line', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, '');
+  const r = run(tmp);
+  assert.equal(r.status, 1, `a bare git spawn must FAIL, got:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /FAIL scripts\/zz-planted\.test\.mjs:3 .*no 'env:'/);
+});
+
+test('CWK-136: a git spawn planted with env: gitEnv(...) passes the census', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  plantSpawn(tmp, 'gitEnv(dir)');
+  const r = run(tmp);
+  assert.equal(r.status, 0, `the safe shape must PASS, got:\n${r.stdout}${r.stderr}`);
+});
+
+// CWK-120 finding #11 (CodeRabbit, Trivial), verified at the live tree: the required-files list named
+// bin/session-start.js and bin/post-tool-use.js but not bin/user-prompt-submit.js, the third Claude Code hook entry.
+// hooks.json is only checked for the path as TEXT, the libs check never imports a hook entry, and checkDist derives
+// its parity from the files that EXIST -- so deleting the entry point from source AND plugin/ produced no finding
+// while hooks.json kept pointing at it. (The two ag-*.js entries are held by the pointer gate, which the CodeRabbit
+// note itself observed: platform-configs/hooks/README.md cites both paths.)
+test('CWK-120 #11: deleting bin/user-prompt-submit.js from source AND plugin/ FAILs the gate by name', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  assert.equal(run(tmp).status, 0, 'setup: a pristine copy passes');
+  fs.rmSync(path.join(tmp, 'bin', 'user-prompt-submit.js'));
+  fs.rmSync(path.join(tmp, 'plugin', 'bin', 'user-prompt-submit.js'));
+  const r = run(tmp);
+  assert.equal(r.status, 1, 'a missing hook entry point must FAIL, got:\n' + r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL bin\/user-prompt-submit\.js missing/);
+});
+
+// R8 FIXBACK M1: the gate's printed census line must not claim more than the instrument produced. The one
+// deliberate hazard fixture (a spawn fed a poisoned GIT_DIR on purpose) is a NAMED, COUNTED, PRINTED exemption.
+test('M1: the census line counts the exemption instead of claiming every spawn takes env from gitEnv() alone', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const r = run(tmp);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\).*: (\d+) take env from gitEnv\(\) alone, (\d+) exempt by name \(([^)]*)\)/);
+  assert.ok(m, 'the ok line must split alone vs exempt, got:\n' + r.stdout);
+  assert.equal(Number(m[3]) + Number(m[4]), Number(m[1]), 'alone + exempt = every counted spawn');
+  assert.ok(Number(m[4]) >= 1, 'the hazard fixture is counted as exempt');
+  assert.match(m[5], /git-env\.test\.mjs/, 'the exemption names its file');
+  assert.doesNotMatch(r.stdout, /every one takes env from gitEnv\(\) alone/, 'the old blanket claim is gone');
+});
+
+test('M1: an exemption whose spawn is gone FAILs the gate as stale', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const f = path.join(tmp, 'scripts', 'lib', 'git-env.test.mjs');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('env: env || gitEnv(root)', 'env: gitEnv(root)'));
+  const r = run(tmp);
+  assert.equal(r.status, 1, 'a stale exemption must FAIL, got:\n' + r.stdout);
+  assert.match(r.stdout, /FAIL .*exemption.*no longer matches/i);
+});
+
+// R8 FIXBACK 2 LOW-1: the exemption is keyed to a COUNT, so a second spawn with the exempted expression in the
+// same file FAILs the gate as surely as a stale exemption does (INSPECT's X2: it used to PASS and print "2 exempt").
+test('L1: a second spawn with the exempted expression in the same file FAILs the gate', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const f = path.join(tmp, 'scripts', 'lib', 'git-env.test.mjs');
+  const src = fs.readFileSync(f, 'utf8');
+  const anchor = "  const git = (cwd, args, env) => " + PLANT_FN + "('git', args, { cwd, encoding: 'utf8', env: env || gitEnv(root) });";
+  assert.ok(src.includes(anchor), 'setup: the exempted spawn is where the test expects it');
+  const second = "\n  const git2 = (cwd, args, env) => " + PLANT_FN + "('git', ['init'], { cwd, env: env || gitEnv(root) });";
+  fs.writeFileSync(f, src.replace(anchor, anchor + second));
+  const r = run(tmp);
+  assert.equal(r.status, 1, 'the widened exemption must FAIL, got:\n' + r.stdout);
+  assert.match(r.stdout, /FAIL .*git-env\.test\.mjs:\d+ .*allows 1 spawn/);
 });

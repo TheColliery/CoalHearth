@@ -18,13 +18,14 @@ CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm in
 
 ```bash
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
-node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, dist-sync, version pins
+node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, git-spawn census, dist-sync, version pins
 node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list)
 ```
 
 ### Development Rules
 * **Rebuild the dist after a source change:** edit `bin/`, `lib/`, `config/`, `hooks/`, `commands/`, or the manifest, then `node scripts/build-plugin.mjs` to re-sync `plugin/` (verify fails on a stale dist).
 * **`scripts/lib/config-schema.mjs` is the single source of truth** for every `.coalhearth.json` key — `verify.mjs` validates the factory config against it; the runtime `config/schema.json` mirrors it.
+* **A git child takes its environment from `gitEnv()` alone** (`scripts/lib/git-env.mjs`): a git hook exports an absolute `GIT_DIR`, and a gate or test fixture that inherits it acts on the wrong repository. The census in `verify.mjs` fails a git spawn whose `env:` is anything other than `gitEnv(...)` alone — the whole expression, or a `const` assigned from exactly that call and not mutated (a spawn with no `env:`, any mention of `process.env`, `env || gitEnv(x)` and a spread beside another object all fail). Git through a shell or a binary not spelled `git` counts as a git spawn. One spawn is exempt by name, counted and printed (`scripts/lib/git-env.test.mjs`, the hazard proof). Each exemption states how many spawns it covers: one more fails the gate, one fewer is stale and fails it too. The census is textual and its header in `scripts/lib/git-env-census.mjs` names what it cannot see, including a `shell:` call whose arguments are a variable rather than an array literal.
 * **Keep the hooks Phoenix-pure:** zero dependencies, fail-silent (wrap in try/catch, exit 0, never `process.exit()`), no network, silent except the sanctioned channels.
 * **Add tests:** every lib change gets a unit test; every hook-behavior change gets a **hermetic spawn test** (spawn the real hook, sandbox TEMP + HOME). Register a new test *file* in `scripts/test.mjs` (the runner fails on an unlisted orphan).
 * **Language & tone:** shipped source and docs stay in English.
@@ -51,6 +52,16 @@ non-markdown targets, so a filter scoped to `.md` would miss the change that bre
 docs-only push doesn't get a free pass from `link-check` the way it does from CI and CodeQL — a
 broken link in the very doc you're editing goes red on this check, even though it can't block a
 merge on its own.
+
+A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
+can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
+docs-only or not. Unlike the two required checks it does **not** report "nothing ran": on a
+docs-only push it still runs the **whole test suite** (every `*.test.mjs`, `*.test.cjs` and
+`*.test.js` on disk, under Node's experimental coverage flag) and publishes one line-coverage
+report, which GitHub shows as a coverage comment on a pull request. A red run there is a real
+failure to fix — a test broke — not a gate. Its upload step is `fail-on-error: false`, so a
+refused upload (say, Code Quality isn't switched on for the repository) shows as an `::error::`
+annotation inside a green run, not a red one.
 
 ---
 
