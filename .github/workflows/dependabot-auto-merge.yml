@@ -1,0 +1,52 @@
+name: Dependabot auto-merge
+
+# Auto-merge Dependabot PATCH/MINOR bumps AFTER the required checks pass, for the
+# maintainer's bot ONLY. A ruleset on `main` (require all-green + analyze, bypass
+# the owner) makes `--auto` WAIT for CI+CodeQL — without it `--auto` would merge
+# immediately, so the ruleset is load-bearing, not optional. A red check leaves the
+# PR open (the dependabot.yml `assignees` then notifies the maintainer). MAJOR bumps
+# are never auto-merged (a human reviews the breaking change). Only `dependabot[bot]`
+# reaches the merge step, so a human-opened PR never auto-merges.
+on: pull_request
+
+# Minimal top-level token (Scorecard Token-Permissions best practice); only the
+# merge job escalates to the write scopes `gh pr merge` needs.
+permissions:
+  contents: read
+
+# cancel-in-progress TRUE (CWK-058, superseding the FALSE reading below), keyed to the PR
+# rather than the ref. The landed canon's discriminator is ATOMICITY, not read-vs-write:
+# `gh pr merge --auto` arming a merge is IDEMPOTENT, not a partial external state a killed
+# run could strand -- a killed run simply leaves the merge NOT-YET-ARMED, and the next run
+# for the same PR (a new push, or Dependabot's own retry) arms it the same way. There is no
+# half-armed state to leave behind, unlike scorecard.yml's OpenSSF publish.
+#
+# THE PRIOR READING, kept for the record rather than erased: "this workflow acts on state
+# outside its own run (`gh pr merge --auto` arms a merge on a real PR); killing a superseded
+# run could leave a PR un-armed with nothing to re-arm it" -- true that nothing re-arms it
+# AUTOMATICALLY, but "un-armed" is exactly the SAFE, cancel-in-progress side of this flag:
+# a killed run costs one un-armed PR, re-armed by the next trigger, never a corrupted or
+# partially-applied merge.
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # Patch + minor auto-merge; a major bump waits for a human.
+      - name: Enable auto-merge (patch/minor)
+        if: ${{ steps.meta.outputs.update-type != 'version-update:semver-major' }}
+        run: gh pr merge --squash --auto "${{ github.event.pull_request.html_url }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
