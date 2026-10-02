@@ -577,3 +577,20 @@ test('CWK-137: configure never READS a project config through a directory link t
   assert.equal(fs.readFileSync(path.join(outside, 'coal', 'coalhearth.json'), 'utf8'), planted, 'the file outside is untouched');
   assert.match(r.stderr, /cannot be read safely \(refused\)/, 'the escaping read is refused, not merged into a rewrite');
 });
+
+// R14 FIXBACK (INSPECT LOW-1, M8c): the write guard fails CLOSED on a root it cannot resolve, exactly like its read-side twin.
+// configure.mjs always passes an existing root, so the branch is reachable only through a race (the root removed between the
+// walk and the write); a unit test is the only thing that holds it.
+test('CWK-137: checkRepoWriteTarget refuses (RepoWriteRefused, EREFUSED) when the project root cannot be resolved -- it fails CLOSED', async (t) => {
+  const { checkRepoWriteTarget, RepoWriteRefused } = await import('./repo-fs.mjs');
+  const base = mk(t);
+  const absentRoot = path.join(base, 'no-such-root');
+  assert.throws(() => checkRepoWriteTarget(path.join(absentRoot, '.claude', 'coal', 'coalhearth.json'), absentRoot), (e) => {
+    assert.ok(e instanceof RepoWriteRefused);
+    assert.equal(e.code, 'EREFUSED');
+    assert.match(e.message, /cannot be resolved/);
+    return true;
+  });
+  // and the control: an existing root with a target inside it is accepted (the check is not a blanket refusal)
+  assert.doesNotThrow(() => checkRepoWriteTarget(path.join(base, '.claude', 'coal', 'coalhearth.json'), base));
+});
