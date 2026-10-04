@@ -47,7 +47,7 @@ const TESTS = [
 // marked failed at the limit but its file child stays alive while the test left a timer or a child running, so the run still hung; `--test-force-exit` ends that file child
 // once its tests are done.
 // THE TRADE, chosen here: force-exit ends a child held open by a leaked handle, and it also lets a LATE async failure pass unreported. A test that returns, and then has an
-// unawaited timer throw or a promise reject after it, is reported as a pass (the R20 INSPECT witness, scratchpad/r20/insp/forceexit.mjs: the same file exits 1 without the
+// unawaited timer throw or a promise reject after it, is reported as a pass (the R20 INSPECT witness: the same file exits 1 without the
 // flag and 0 with it). So a test must await everything it starts; a handle left running is a defect in the test, not something this flag makes safe.
 // `--test-concurrency=1` runs the files one at a time (the house rule for a test child). The heap cap goes to the runner and node:test hands it on to
 // every test file it starts (measured: a planted test saw a 2240 MB heap limit under it).
