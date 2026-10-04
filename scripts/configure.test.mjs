@@ -5,7 +5,7 @@
 // CLAUDE_CONFIG_DIR (globalConfigPath reads that env var before falling back to
 // os.homedir() -- sandboxing it is enough, no need to fake the OS home directory
 // cross-platform).
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,8 +31,20 @@ function sandboxHome(t) {
   return dir;
 }
 
+// R20 (the same class as CodeRabbit PR #19 thread 20, found by the sweep one file over): a spawned configure.mjs got the parent's environment, so a run that reaches the global
+// layer without its own CLAUDE_CONFIG_DIR would read or WRITE the operator's real global config (globalConfigPath honours CLAUDE_CONFIG_DIR, then HOME). The default is now a throwaway
+// directory for HOME, USERPROFILE, TEMP, TMP and TMPDIR and a CLAUDE_CONFIG_DIR inside it; a caller's own keys (the --global tests pass theirs; one test overrides PATH) still win.
+const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-configure-sandbox-'));
+after(() => fs.rmSync(SANDBOX_HOME, { recursive: true, force: true }));
+const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR', 'CLAUDE_CONFIG_DIR'];
+function sandboxedEnv(extra) {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v; // Windows names are case-insensitive
+  for (const k of SANDBOXED_KEYS) out[k] = k === 'CLAUDE_CONFIG_DIR' ? path.join(SANDBOX_HOME, '.claude') : SANDBOX_HOME;
+  return { ...out, ...extra };
+}
 function run(cwd, args, envExtra = {}) {
-  return spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...envExtra } });
+  return spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: sandboxedEnv(envExtra) });
 }
 function ownDirConfig(projectDir) {
   return path.join(projectDir, '.claude', 'coal', 'coalhearth.json');
@@ -480,4 +492,17 @@ test('R19 FIXBACK: the .git entry is looked for ABOVE the project too (a refused
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.existsSync(legacy), true, 'kept: the .git entry sits in the parent, and git refuses it');
   assert.match(r.stdout, /could not be asked/, r.stdout);
+});
+
+// R20 (the sweep for the class of CodeRabbit PR #19 thread 20): run() handed configure.mjs the parent's environment, so a --global run that forgot its own CLAUDE_CONFIG_DIR wrote
+// the OPERATOR's real global config. The parent's value stands in for it here, a throwaway directory; the child must never write there.
+test('R20: a --global run that passes no CLAUDE_CONFIG_DIR of its own never touches the parent\'s (the operator\'s) global config directory', (t) => {
+  const projectDir = sandboxProject(t);
+  const operatorDir = sandboxHome(t);
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved; });
+  process.env.CLAUDE_CONFIG_DIR = operatorDir;
+  const r = run(projectDir, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(fs.readdirSync(operatorDir), [], 'the operator\'s config directory was not written');
 });

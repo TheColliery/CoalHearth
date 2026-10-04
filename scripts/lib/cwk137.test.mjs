@@ -8,7 +8,7 @@
 // VISIBLE t.skip -- one skippable leg per test -- and is CI-measured on ubuntu/macOS, never manufactured here.
 // The "never OPENED" cases spy on fs.openSync / fs.readFileSync and refuse the open themselves, so a pre-cure run
 // goes red without ever reading a device.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -304,7 +304,7 @@ test('CWK-137: an over-bound update stamp is SKIPPED (the check reads as due), a
   fs.mkdirSync(path.dirname(stamp), { recursive: true });
   const run = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'session-start.js')], {
     cwd, encoding: 'utf8', timeout: 20000,
-    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' },
   });
   fs.writeFileSync(stamp, String(Date.now()));
   assert.equal(run().stdout, '', 'a fresh normal stamp throttles (silent)');
@@ -426,7 +426,7 @@ function mopUp(sub, home) {
   const script = 'const {containedOutputDir}=require(' + JSON.stringify(path.join(REPO, 'lib', 'contained-dir.js')) + ');process.stdout.write(String(containedOutputDir()))';
   return spawnSync(process.execPath, ['-e', script], {
     cwd: sub, encoding: 'utf8', timeout: 20000,
-    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' },
   });
 }
 
@@ -477,10 +477,22 @@ test('CWK-137 (control): a REAL legacy phantom dir is still mopped up -- only th
 
 // ---- scripts/configure.mjs: the CLI writer (class 4) ----------------------------------------------------------
 const CONFIGURE = path.join(REPO, 'scripts', 'configure.mjs');
+// R20 (the same class as CodeRabbit PR #19 thread 20, found by the sweep one file over): a spawned configure.mjs got the parent's environment, so a run that reaches the global
+// layer without its own CLAUDE_CONFIG_DIR would read or WRITE the operator's real global config (globalConfigPath honours CLAUDE_CONFIG_DIR, then HOME). The default is now a throwaway
+// directory for HOME, USERPROFILE, TEMP, TMP and TMPDIR and a CLAUDE_CONFIG_DIR inside it; a caller's own keys (the --global tests pass theirs; one test overrides PATH) still win.
+const CONFIGURE_SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-configure-sandbox-'));
+after(() => fs.rmSync(CONFIGURE_SANDBOX, { recursive: true, force: true }));
+const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR', 'CLAUDE_CONFIG_DIR'];
+function sandboxedEnv(extra) {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v; // Windows names are case-insensitive
+  for (const k of SANDBOXED_KEYS) out[k] = k === 'CLAUDE_CONFIG_DIR' ? path.join(CONFIGURE_SANDBOX, '.claude') : CONFIGURE_SANDBOX;
+  return { ...out, ...extra };
+}
 function configure(cwd, args, extraEnv = {}) {
   return spawnSync(process.execPath, [CONFIGURE, ...args], {
     cwd, encoding: 'utf8', timeout: 60000,
-    env: { ...process.env, ...extraEnv, NODE_OPTIONS: '--max-old-space-size=2048' },
+    env: { ...sandboxedEnv(extraEnv), NODE_OPTIONS: '--max-old-space-size=2048' },
   });
 }
 const OWN_CFG = (root) => path.join(root, '.claude', 'coal', 'coalhearth.json');
@@ -608,4 +620,18 @@ test('CWK-137: checkRepoWriteTarget refuses (RepoWriteRefused, EREFUSED) when th
   });
   // and the control: an existing root with a target inside it is accepted (the check is not a blanket refusal)
   assert.doesNotThrow(() => checkRepoWriteTarget(path.join(base, '.claude', 'coal', 'coalhearth.json'), base));
+});
+
+// R20 (the same sweep): configure() handed the child the parent's HOME, and this file removes CLAUDE_CONFIG_DIR from its own environment, so a --global run that forgot its own
+// CLAUDE_CONFIG_DIR fell back to the operator's real home. The parent's HOME stands in for it here, a throwaway directory; the child must never write there.
+test('R20: a --global configure run that passes no CLAUDE_CONFIG_DIR never writes under the parent\'s HOME', (t) => {
+  const root = project(t);
+  const operatorHome = mk(t, 'ch-cwk137-operator-home-');
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  process.env.HOME = operatorHome;
+  process.env.USERPROFILE = operatorHome;
+  const r = configure(root, ['--global', '--language', 'th']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(fs.readdirSync(operatorHome), [], 'the operator\'s home was not written');
 });
