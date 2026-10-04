@@ -118,3 +118,36 @@ test('checkDist flags an orphan DIRECTORY there too, and still passes the declar
     fs.rmSync(distRoot, { recursive: true, force: true });
   }
 });
+
+// R19 (CodeRabbit PR #19 thread 12): a dist entry that EXISTS but is not a directory made fs.readdirSync throw ENOTDIR inside the
+// orphan scan, so checkDist never returned its drift report (a raw stack trace from a gate, scripts-quality.md 1). The bad entry is
+// now a finding line and the scan keeps going.
+test('checkDist reports a plugin/.claude-plugin that is a regular FILE, never throws, and keeps scanning', () => {
+  const distRoot = mkTmp();
+  try {
+    buildDist(distRoot);
+    fs.rmSync(path.join(distRoot, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(distRoot, '.claude-plugin'), 'not a directory');
+    fs.mkdirSync(path.join(distRoot, 'scripts')); // a SECOND defect, found only if the scan continues past the first
+    let drift;
+    assert.doesNotThrow(() => { drift = checkDist(distRoot); });
+    assert.ok(drift.some((d) => d.startsWith('invalid in plugin/ (not a directory):') && d.includes('.claude-plugin')),
+      'the bad entry is named: ' + JSON.stringify(drift));
+    assert.ok(drift.some((d) => d.includes('orphan top-level') && d.includes('scripts')), 'and the scan continued to the next defect: ' + JSON.stringify(drift));
+  } finally {
+    fs.rmSync(distRoot, { recursive: true, force: true });
+  }
+});
+
+test('checkDist reports a dist ROOT that is a regular file instead of throwing', () => {
+  const tmp = mkTmp();
+  try {
+    const distRoot = path.join(tmp, 'plugin');
+    fs.writeFileSync(distRoot, 'not a directory');
+    let drift;
+    assert.doesNotThrow(() => { drift = checkDist(distRoot); });
+    assert.ok(drift.some((d) => d.startsWith('invalid plugin/ (not a directory):')), 'the root is named: ' + JSON.stringify(drift));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
