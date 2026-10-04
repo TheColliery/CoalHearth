@@ -70,12 +70,14 @@ export const GIT_ENV_EXEMPTIONS = [
   // so the census refuses the SHAPE (CWK-136 asks for the room's helper alone); secret-scan.test.mjs spawns git with no env: at all,
   // so a pathspec or -a commit run from a hook hands those children an absolute GIT_INDEX_FILE (the CWK-133 class in the canon, routed
   // to the .github deputy). Delete each row when the canon carries the fix and this room re-copies the file.
+  // 05a (UMB-444): secret-gate.test.mjs was re-copied at .github 7afc4ef (blob f61a33e7, was 3fcd3f0d: the explicit test env). Measured on the new bytes: without this row the census
+  // still fails on the same line, because the canon keeps its own GIT_-stripping helper plus the per-call overlay, so the row stays and its pin moves to the new blob.
   {
     label: 'scripts/secret-gate.test.mjs',
     expr: '{ ...gitEnv(), ...extra }',
     count: 1,
-    blob: '3fcd3f0d020ea3b3f369feca01dc770d102ca5b3',
-    reason: 'a byte-equal org carrier from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
+    blob: 'f61a33e75a3a420e0de0116f45d2b1fd44936a50',
+    reason: 'a byte-equal org carrier at blob f61a33e7 from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
   },
   {
     label: 'scripts/secret-scan.test.mjs',
