@@ -29,6 +29,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// NAMED DIVERGENCE from Phoenix #10 (hooks-safety.md §6, row 10), declared here so it is a divergence and not drift (CodeRabbit PR #19, R19). That row lets a hook write only under
+// os.tmpdir() and os.homedir()/.claude/, and this default is neither: it is `<project root>/.claude/coalhearth/`, inside the user's own workspace. Two rules name that place
+// as the right one: hooks-safety.md §8 calls the project root's `.claude/coalhearth/` "the correct location" (state is anchored there, never at a subdirectory), and AGENTS.md,
+// "Well-behaved OS citizen", scope note (2), says project-scoped state stays at the workspace because it is project data, not scatter. Every write and prune under it goes
+// through containedOutputDir below (realpath-and-contain on both sides, fail closed, self-ignored by its own .gitignore), so the divergence is wider than Phoenix #10 in
+// where it writes and no wider in what it can reach.
 const DEFAULT_OUTPUT_DIR = path.join('.claude', 'coalhearth');
 
 // realpath to the PHYSICAL path via the expanding, 8.3/case-correct variant
