@@ -32,9 +32,11 @@ const path = require('node:path');
 // NAMED DIVERGENCE from Phoenix #10 (hooks-safety.md §6, row 10), declared here so it is a divergence and not drift (CodeRabbit PR #19, R19). That row lets a hook write only under
 // os.tmpdir() and os.homedir()/.claude/, and this default is neither: it is `<project root>/.claude/coalhearth/`, inside the user's own workspace. Two rules name that place
 // as the right one: hooks-safety.md §8 calls the project root's `.claude/coalhearth/` "the correct location" (state is anchored there, never at a subdirectory), and AGENTS.md,
-// "Well-behaved OS citizen", scope note (2), says project-scoped state stays at the workspace because it is project data, not scatter. Every write and prune under it goes
-// through containedOutputDir below (realpath-and-contain on both sides, fail closed, self-ignored by its own .gitignore), so the divergence is wider than Phoenix #10 in
-// where it writes and no wider in what it can reach.
+// "Well-behaved OS citizen", scope note (2), says project-scoped state stays at the workspace because it is project data, not scatter. Two code paths touch that place, and each
+// is bounded on its own. The journal's writes and prunes (and the resume engine's reads, quarantine and mark-resumed) go through containedOutputDir below: realpath-and-contain on
+// both sides, fail closed, and the default directory carries its own self-ignoring .gitignore. The orphan sweep (ResumeEngine.sweepOrphans) deletes under the `scratch` and
+// `worktrees` directories there (and their `.agents` twins) through its own check, not this function: it pins each owned directory to its literal location, refusing it when
+// its realpath differs (a link planted there), and sweeps nothing in a directory it refuses.
 const DEFAULT_OUTPUT_DIR = path.join('.claude', 'coalhearth');
 
 // realpath to the PHYSICAL path via the expanding, 8.3/case-correct variant
