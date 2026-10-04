@@ -77,6 +77,9 @@ export function checkDist(distRoot = dist) {
     for (const rel of filesUnder(repo, item)) {
       const d = path.join(distRoot, rel);
       if (!fs.existsSync(d)) out.push(`missing in plugin/: ${rel}`);
+      // R19 FIXBACK 1 (the sibling of thread 12): a dist entry that is not a file where the source holds one (a directory) made filesMatch's
+      // readFileSync throw EISDIR and the rest of the drift report was lost. It is a finding, and the scan goes on.
+      else if (!fs.statSync(d).isFile()) out.push(`invalid in plugin/ (not a file): ${rel}`);
       else if (!filesMatch(path.join(repo, rel), d)) out.push(`stale in plugin/: ${rel}`);
     }
     for (const rel of filesUnder(distRoot, item)) {

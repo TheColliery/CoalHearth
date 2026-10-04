@@ -151,3 +151,24 @@ test('checkDist reports a dist ROOT that is a regular file instead of throwing',
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// R19 FIXBACK 1, LOW-1 (the sibling site of thread 12, one call deeper): a dist entry that is a DIRECTORY where the source holds a FILE made filesMatch's readFileSync
+// throw EISDIR, so the rest of the drift report was lost. It is a finding line now (`invalid in plugin/ (not a file): <rel>`) and the scan goes on.
+test('checkDist reports a dist entry that is a DIRECTORY where the source is a file, never throws, and keeps scanning', () => {
+  const distRoot = mkTmp();
+  try {
+    buildDist(distRoot);
+    const victim = path.join(distRoot, 'bin', 'session-start.js');
+    fs.rmSync(victim);
+    fs.mkdirSync(victim); // the dist holds a directory where the source holds a file
+    fs.mkdirSync(path.join(distRoot, 'scripts')); // a SECOND defect, found only if the scan continues past the first
+    let drift;
+    assert.doesNotThrow(() => { drift = checkDist(distRoot); });
+    assert.ok(drift.some((d) => d.startsWith('invalid in plugin/ (not a file):') && d.includes('session-start.js')),
+      'the bad entry is named: ' + JSON.stringify(drift));
+    assert.ok(drift.some((d) => d.includes('orphan top-level') && d.includes('scripts')), 'and the scan continued to the next defect: ' + JSON.stringify(drift));
+    assert.ok(!drift.some((d) => d.startsWith('stale in plugin/') && d.includes('session-start.js')), 'and it is not ALSO reported as stale: ' + JSON.stringify(drift));
+  } finally {
+    fs.rmSync(distRoot, { recursive: true, force: true });
+  }
+});
