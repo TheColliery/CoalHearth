@@ -193,8 +193,13 @@ test('a malformed existing config is backed up + rebuilt from defaults, exit 1, 
 });
 
 // ---------------------------------------------------------------- legacy migration
+// R19 FIXBACK 1: these three tests are about the migration and its announcement, not about git. Their sandbox used to carry an EMPTY `.git` directory, which git
+// answers with exit 128 and the migration used to read as "no repository" (so the legacy file was removed). A `.git` entry with git answering 128 now means a
+// repository git refuses and KEEPS the file, so the anchor is a REAL repository where the legacy file is untracked. With no git binary the empty directory is
+// still enough (nothing to ask, the file is removed).
+function migrationProject(t) { return haveGit ? realRepo(t) : sandboxProject(t); }
 test('a config found at the LEGACY root path migrates to the own-dir default on write', (t) => {
-  const dir = sandboxProject(t);
+  const dir = migrationProject(t);
   const legacy = path.join(dir, '.coalhearth.json');
   fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
   const r = run(dir, ['--language', 'zh']);
@@ -231,7 +236,7 @@ function assertMigrationAnnounced(stdout, legacyPath, canonicalPath) {
 // there must migrate exactly like the root legacy does -- write the canonical file, remove the
 // legacy one -- instead of quietly rewriting the deprecated path in place.
 test('UMB-133: a config found at the NESTED legacy path migrates to the own-dir default on write', (t) => {
-  const dir = sandboxProject(t);
+  const dir = migrationProject(t);
   const nested = path.join(dir, '.claude', '.coalhearth.json');
   fs.mkdirSync(path.dirname(nested), { recursive: true });
   fs.writeFileSync(nested, JSON.stringify({ language: 'auto' }));
@@ -248,7 +253,7 @@ test('UMB-133: a config found at the NESTED legacy path migrates to the own-dir 
 // announces the path its own root walk produced -- the PHYSICAL one. Capability is PROBED (a
 // link that cannot be created skips visibly), never guessed from process.platform.
 test('UMB-133 (macOS class): the migration announcement holds when the sandbox is spelled through a directory link', (t) => {
-  const real = sandboxProject(t);
+  const real = migrationProject(t);
   const link = real + '-link';
   try {
     fs.symlinkSync(real, link, 'junction');
@@ -415,4 +420,64 @@ test('R19: a tracked legacy config in a SUBDIRECTORY of a bigger repository (the
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.existsSync(legacy), true, 'kept: the enclosing repository tracks it');
   assert.match(r.stdout, /git rm -- \.coalhearth\.json/, r.stdout);
+});
+
+// R19 FIXBACK 1, MEDIUM-1: git exits 128 for EVERY fatal error, not only "not a git repository". A repository git refuses to read (dubious ownership, a corrupt
+// .git) answers 128 for a file it tracks, and 128 was read as "no repository", so the tracked legacy file was still deleted. 128 now means "no repository" only when no
+// `.git` entry exists above the project at all, decided with fs and never by matching git's localised stderr; any other 128 is unknown and KEEPS the file.
+test('R19 FIXBACK: a tracked legacy config in a repository git REFUSES (garbage HEAD, git exits 128) is KEPT, never read as "no repository"', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const dir = realRepo(t);
+  const legacy = path.join(dir, '.coalhearth.json');
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  assert.equal(git(dir, ['add', '--', '.coalhearth.json']).status, 0, 'fixture: tracked');
+  fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'garbage\n'); // the repository is now one git refuses to read
+  assert.equal(git(dir, ['ls-files', '--error-unmatch', '--', '.coalhearth.json']).status, 128, 'fixture: git answers 128 for it');
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), true, 'kept: 128 here is a repository git refuses, not the absence of one');
+  assert.match(r.stdout, /could not be asked/, r.stdout);
+  assert.match(r.stdout, /git rm -- \.coalhearth\.json/, r.stdout);
+});
+
+test('R19 FIXBACK: a garbage .git FILE (git exits 128) also KEEPS the legacy file', (t) => {
+  const dir = sandboxProject(t);
+  fs.rmdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(path.join(dir, '.git'), 'not a gitfile\n');
+  const legacy = path.join(dir, '.coalhearth.json');
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), true, 'a .git entry exists, so nothing says there is no repository');
+  assert.match(r.stdout, /could not be asked/, r.stdout);
+});
+
+test('R19 FIXBACK: with NO .git entry anywhere above the project, git exits 128 and the legacy file is removed as before', (t) => {
+  const dir = sandboxProject(t);
+  fs.rmdirSync(path.join(dir, '.git'));
+  for (let d = dir; ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) { t.skip('a .git entry exists above the temp root on this box: ' + d); return; }
+    if (path.dirname(d) === d) break;
+  }
+  const legacy = path.join(dir, '.coalhearth.json'); // also the root marker that anchors the project here
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), false, 'no repository at all: nothing to protect');
+  assertMigrationAnnounced(r.stdout, legacy, ownDirConfig(dir));
+});
+
+test('R19 FIXBACK: the .git entry is looked for ABOVE the project too (a refused repository around a project subdirectory keeps the legacy file)', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const repo = realRepo(t);
+  const proj = path.join(repo, 'proj');
+  fs.mkdirSync(proj);
+  const legacy = path.join(proj, '.coalhearth.json'); // the root marker that anchors the project at proj
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  assert.equal(git(repo, ['add', '--', 'proj/.coalhearth.json']).status, 0, 'fixture: tracked by the enclosing repository');
+  fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'garbage\n');
+  const r = run(proj, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), true, 'kept: the .git entry sits in the parent, and git refuses it');
+  assert.match(r.stdout, /could not be asked/, r.stdout);
 });

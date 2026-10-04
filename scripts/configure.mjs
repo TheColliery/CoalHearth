@@ -80,18 +80,30 @@ import { gitEnv } from './lib/git-env.mjs';
 // R19 (CodeRabbit PR #19 thread 14): does git TRACK `file`? 'tracked' | 'untracked' | 'unknown'. The legacy migration removes the old config only
 // when it is untracked or there is nothing to ask: a tracked root `.coalhearth.json` is often a team-shared, committed file, and deleting it here
 // would remove it for the whole team at the next `git commit -a`. NO-EXTERNAL-ASSUMPTION: git is optional. No git binary (ENOENT) or no
-// repository (git exits 128) means there is nothing to protect, so the answer is 'untracked' and the behaviour is exactly what it was before this
-// check. Any OTHER failure (a timeout, a signal, an unexpected status) is 'unknown', which KEEPS the file: the safe side. The spawn takes
+// repository means there is nothing to protect, so the answer is 'untracked' and the behaviour is exactly what it was before this check. Git exits 128
+// for EVERY fatal error, not only "not a git repository": a repository it refuses to read (dubious ownership, a corrupt .git) also answers 128 for a file it
+// tracks. So 128 reads as "no repository" only when no `.git` entry exists above the project at all (decided with fs, never by matching git's localised
+// stderr); with one present it is 'unknown'. Any OTHER failure (a timeout, a signal, an unexpected status) is 'unknown' too, which KEEPS the file: the safe side. The spawn takes
 // `env: gitEnv(...)` (the room's census, CWK-133: a hook's absolute GIT_DIR must never steer it), an explicit timeout (coding-style Error
 // Handling 6) and no shell. NO ceiling is passed: the project root is not always the repository root (a config file is itself a root marker, so a
 // project directory inside a bigger repository is normal), and a repository ABOVE the project that tracks the file must be allowed to say so.
+// Is there a `.git` entry (a directory, or a worktree's file) in `dir` or any parent? The marker findProjectRoot uses, walked to the filesystem root the way git walks.
+function gitEntryAbove(dir) {
+  for (let d = path.resolve(dir); ; ) {
+    if (fs.existsSync(path.join(d, '.git'))) return true;
+    const parent = path.dirname(d);
+    if (parent === d) return false;
+    d = parent;
+  }
+}
 function gitTracks(file, projectRoot) {
   const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
     cwd: projectRoot, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'ignore', 'ignore'], env: gitEnv(),
   });
   if (r.error) return r.error.code === 'ENOENT' ? 'untracked' : 'unknown'; // no git binary: nothing to ask; a timeout or other spawn error: keep
   if (r.status === 0) return 'tracked';
-  if (r.status === 1 || r.status === 128) return 'untracked'; // 1: in a repository but not tracked; 128: not a repository (an empty .git dir reads this way)
+  if (r.status === 1) return 'untracked'; // in a repository, not tracked
+  if (r.status === 128) return gitEntryAbove(projectRoot) ? 'unknown' : 'untracked'; // 128: a repository git refuses (keep), or no repository at all (nothing to protect)
   return 'unknown';
 }
 
