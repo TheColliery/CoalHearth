@@ -162,7 +162,7 @@ The high-impact keys, and the exact CLI flag for each (`node scripts/configure.m
 | `language` | `--language` | `auto` | Lock the reply language: `auto` / `th` / `en` / `ja` / `zh` / `es`. **Top-level** — not inside a group, unlike every other row here (see below). |
 | `recovery.autoInjectPrompt` | `--recovery.autoInjectPrompt` | `true` | Inject the recovery block on resume. `false` = detect + sweep silently, no injection. |
 | `recovery.stashUnsavedChanges` | `--recovery.stashUnsavedChanges` | `true` | Add a "consider `git stash`" line to the recovery block. `false` drops it. |
-| `update.updateMode` | `--update.updateMode` | `ask` | Self-update behavior at session start: `ask` / `auto` / `remind` / `off`. |
+| `update.updateMode` | `--update.updateMode` | `ask` | Self-update at session start: `off` schedules no check; `ask`, `auto` and `remind` all print the same consent-gated offer when a check is due (the hook does not tell the agent which one is set). |
 
 Every flag is the dotted key **verbatim** — `--journal.outputDirectory`, `--journal.atomicityRetries`, and `--update.updateCheckDays` follow the same rows below and aren't repeated here; a flat `--outputDirectory` would spell one key two ways, so there is no shorthand form.
 
