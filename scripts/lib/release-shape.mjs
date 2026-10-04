@@ -85,8 +85,25 @@ export function extractChangelogEntry(changelogText, tagVersion, { previousStabl
   const afterSummary = body.slice(firstContentIdx + 1);
   const sectionsStart = afterSummary.findIndex((l) => /^###\s/.test(l));
   const sectionsBody = sectionsStart === -1 ? '' : afterSummary.slice(sectionsStart).join('\n').trim();
+  // The lead paragraph: whatever sits between the summary line and the first "### " heading. It is where a longer explanation goes, so the
+  // summary (the title) can stay short; it rides into the body right after the Lead.
+  const lead = (sectionsStart === -1 ? afterSummary : afterSummary.slice(0, sectionsStart)).join('\n').trim();
 
-  return { version, date, summary, sectionsBody };
+  return { version, date, summary, lead, sectionsBody };
+}
+
+// The title's summary length is a SIGNAL with a band, never a hard cap (RELEASE-PATTERN.md "The title", BA-14): aim 60 characters, 45 to 75
+// passes clean, outside the band a named warning that passes. The numbers are the house's own; no formal standard sets one.
+export const SUMMARY_AIM = 60;
+export const SUMMARY_BAND = [45, 75];
+
+// null when the summary part of a "vX.Y.Z - <summary>" title is inside the band (or there is no summary to measure); else the warning text.
+export function titleBandWarning(title) {
+  const at = String(title).indexOf(' - ');
+  if (at === -1) return null;
+  const n = Array.from(String(title).slice(at + 3).trim()).length;
+  if (n >= SUMMARY_BAND[0] && n <= SUMMARY_BAND[1]) return null;
+  return `release-title-band: the summary in the title is ${n} characters, outside the band ${SUMMARY_BAND[0]} to ${SUMMARY_BAND[1]} (aim ${SUMMARY_AIM}). Shorten the CHANGELOG summary line and put the longer explanation in a lead paragraph under it (it rides into the body), or keep it and state the reason in the checker's return.`;
 }
 
 // "vX.Y.Z - <summary>" per RELEASE-PATTERN.md "The title": bare version, spaced hyphen,
@@ -100,9 +117,12 @@ export function buildReleaseTitle(version, summary) {
   // project..."), but leave an acronym/identifier-shaped first word alone -- one whose first
   // TWO characters are both capitals ("SHA256SUMS.txt", "CI") reads as an acronym or a file
   // name, never an ordinary sentence opener; an ordinary word has at most one leading capital.
+  // Only an ORDINARY opener lower-cases: ONE capital followed by lower-case letters (with an optional contraction, hyphenated
+  // lower-case compound or closing punctuation: "Fixed,", "It's", "Two-phase"). Every other opener is left as written: "CoalFace",
+  // "McKinsey", "SHA256SUMS.txt", "CI", "V8", "Node.js", "Python3" (UMB-417, pass 14 A-2).
   const firstWord = s.match(/^\S+/)?.[0] ?? '';
-  const looksLikeIdentifier = /^[A-Z]{2}/.test(firstWord);
-  if (!looksLikeIdentifier && /^[A-Z]/.test(s)) s = s[0].toLowerCase() + s.slice(1);
+  const ordinaryOpener = /^[A-Z][a-z]*(?:['\u2019][a-z]+)?(?:-[a-z]+)*[.,;:!?)]*$/.test(firstWord);
+  if (ordinaryOpener) s = s[0].toLowerCase() + s.slice(1);
   return `v${version} - ${s}`;
 }
 
@@ -113,6 +133,6 @@ export function buildReleaseTitle(version, summary) {
 // verified at press, back-fill provenance); a room wanting one writes it into the CHANGELOG
 // entry itself, inside the entry's own body, before the tag, and it rides through as part of
 // sectionsBody like any other line.
-export function buildReleaseBody(summary, sectionsBody) {
-  return sectionsBody ? `${summary}\n\n${sectionsBody}\n` : `${summary}\n`;
+export function buildReleaseBody(summary, sectionsBody, lead = '') {
+  return `${[summary, lead, sectionsBody].filter(Boolean).join('\n\n')}\n`;
 }
