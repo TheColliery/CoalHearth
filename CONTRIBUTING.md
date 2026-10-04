@@ -20,7 +20,7 @@ CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm in
 node scripts/build-plugin.mjs   # regenerate plugin/ from source
 node scripts/secret-gate.mjs    # gate: the house secret scan of the tracked tree (the git hooks run it first)
 node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, git-spawn census, dist-sync, version pins
-node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list)
+node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list; 120 s per test, one file at a time)
 ```
 
 ### Development Rules
