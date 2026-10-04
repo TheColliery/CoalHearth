@@ -29,16 +29,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// The AMENDED PHOENIX #10 EXCEPTION, not a divergence (hooks-safety.md §6, row 10, amended 2026-10-04, UMB-427 ruling 1; an earlier note here called this folder a divergence, before the
-// amendment). The row lets a hook write under os.tmpdir() and os.homedir()/.claude/, and names a third place: a tool's own project-scoped state folder, `<project root>/.<agent-dir>/<tool>/`,
-// written only through a realpath-containment helper that resolves both sides with fs.realpathSync.native and fails closed, and named in the room's shipped text. This default is that folder:
-// `<project root>/.claude/coalhearth/`, which hooks-safety.md §8 calls "the correct location" (state is anchored at the project root, never at a subdirectory) and AGENTS.md, "Well-behaved OS
-// citizen", scope note (2), keeps at the workspace because it is project data, not scatter. Two code paths touch it, and each is bounded on its own. The journal's writes and prunes (and the
-// resume engine's reads, quarantine and mark-resumed) go through containedOutputDir below: it resolves the project root and the candidate with realpath.native (through the nearest existing
-// ancestor for a directory not created yet), refuses a candidate whose resolved path is outside the project root, fails closed, and gives only the default folder its own self-ignoring
-// .gitignore (a custom `outputDirectory` is contained to the project root and is not self-ignored). The orphan sweep, ResumeEngine.sweepOrphans, deletes under the `scratch` and `worktrees`
-// directories there (and their `.agents` twins) through its own check, not this function: it pins each owned directory to its literal location, refusing it when its realpath differs (a link
-// planted there), and sweeps nothing in a directory it refuses.
+// The default folder is the AMENDED PHOENIX #10 EXCEPTION, not a divergence (hooks-safety.md §6, row 10, amended 2026-10-04, UMB-427 ruling 1; an earlier note here called it a
+// divergence, before the amendment). The row lets a hook write under os.tmpdir() and os.homedir()/.claude/, and names a third place: a tool's own project-scoped state folder,
+// `<project root>/.<agent-dir>/<tool>/`, written only through a realpath-containment helper that resolves both sides with fs.realpathSync.native, refuses a candidate whose realpath is
+// not inside that folder ITSELF (never merely inside the project root), fails closed, and is named in the room's shipped text. `<project root>/.claude/coalhearth/` is that folder, and
+// containedOutputDir meets the row for it: when the candidate is the default folder and its realpath is not path.join(realRoot, DEFAULT_OUTPUT_DIR) (a link planted at it, or at
+// `.claude` above it), the candidate is refused before anything is created, so the journal has no directory this session. hooks-safety.md §8 calls this folder "the correct location"
+// (state is anchored at the project root, never at a subdirectory) and AGENTS.md, "Well-behaved OS citizen", scope note (2), keeps it at the workspace.
+// Two code paths touch it, each bounded on its own. The journal's writes and prunes (and the resume engine's reads, quarantine and mark-resumed) go through containedOutputDir, and the
+// ENOSPC prune (HandoffJournal._pruneOldLogs) deletes only inside a folder isOwnedDefaultDir accepts. The orphan sweep, ResumeEngine.sweepOrphans, deletes under the `scratch` and
+// `worktrees` directories there (and their `.agents` twins) through its own check: it pins each owned directory to its literal location and sweeps nothing in one it refuses.
+// OUTSIDE the exception: a custom `journal.outputDirectory` (it comes from a project config a clone can supply). It is contained to the PROJECT ROOT only, not pinned to the folder
+// above, and is not self-ignored; the journal still writes there. Whether to clamp it, amend the row or deprecate the key is an OPEN decision for the owner, not settled by this code.
 const DEFAULT_OUTPUT_DIR = path.join('.claude', 'coalhearth');
 
 // realpath to the PHYSICAL path via the expanding, 8.3/case-correct variant
@@ -216,6 +218,11 @@ function containedOutputDir(configured, root) {
     }
     const rel = path.relative(realRoot, realCandidate);
     if (rel.startsWith('..') || path.isAbsolute(rel)) continue; // escapes -> skip
+    // 05a FIXBACK 1 (HIGH-1): the amended row 10 asks for a candidate that is the owned folder ITSELF, not merely one inside the project root. The default folder is pinned to its
+    // literal location the way ResumeEngine.sweepOrphans pins scratch and worktrees: a link planted at it (or at `.claude` above it) and aimed at another directory of the project
+    // resolves elsewhere, so it is refused here, before mkdir, and the loop falls through to null. Only the candidate is canonicalised, never the expectation; a differently cased
+    // existing spelling never matches, which is the safe direction (no journal).
+    if (candidate === path.join(rootAbs, DEFAULT_OUTPUT_DIR) && realCandidate !== path.join(realRoot, DEFAULT_OUTPUT_DIR)) continue;
     try {
       fs.mkdirSync(candidate, { recursive: true });
     } catch (_) {
@@ -259,4 +266,18 @@ function resolveThroughExisting(p) {
 // tool call that drifted into a subdir with nothing above it) is silent-and-expected,
 // never the same "may repeat" class of problem as "a real project's journal dir is
 // blocked by a file". See bin/session-start.js and bin/ag-pre-invocation.js.
-module.exports = { containedOutputDir, findWorkspaceRoot, DEFAULT_OUTPUT_DIR };
+// Is `dir` the OWNED default folder itself: spelled `<root>/.claude/coalhearth` and resolving, through realpath.native on both sides, to exactly that literal location under the
+// realpath of `<root>`? The ENOSPC prune deletes only where this says yes, so a custom outputDirectory, or a link at the default folder or above it, is never pruned. Fails closed.
+function isOwnedDefaultDir(dir) {
+  try {
+    const abs = path.resolve(dir);
+    const depth = DEFAULT_OUTPUT_DIR.split(path.sep).length;
+    const base = path.resolve(abs, ...Array(depth).fill('..'));
+    if (path.join(base, DEFAULT_OUTPUT_DIR) !== abs) return false;
+    return fs.realpathSync.native(abs) === path.join(fs.realpathSync.native(base), DEFAULT_OUTPUT_DIR);
+  } catch (_) {
+    return false;
+  }
+}
+
+module.exports = { containedOutputDir, findWorkspaceRoot, isOwnedDefaultDir, DEFAULT_OUTPUT_DIR };
