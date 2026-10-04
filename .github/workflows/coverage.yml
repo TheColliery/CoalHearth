@@ -46,6 +46,7 @@ jobs:
   coverage:
     name: coverage (report only)
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # measured max 22 s over 7 runs (2026-10-03); ~27x headroom
     permissions:
       contents: read
       code-quality: write
@@ -54,6 +55,7 @@ jobs:
         with:
           # The PR HEAD commit, not the merge commit, so coverage line numbers map onto the diff.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false # pushes nothing
       - name: Set up Node (skips cleanly until scripts/test.mjs exists)
         if: hashFiles('scripts/test.mjs') != ''
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

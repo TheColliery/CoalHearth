@@ -77,6 +77,9 @@ export function checkDist(distRoot = dist) {
     for (const rel of filesUnder(repo, item)) {
       const d = path.join(distRoot, rel);
       if (!fs.existsSync(d)) out.push(`missing in plugin/: ${rel}`);
+      // R19 FIXBACK 1 (the sibling of thread 12): a dist entry that is not a file where the source holds one (a directory) made filesMatch's
+      // readFileSync throw EISDIR and the rest of the drift report was lost. It is a finding, and the scan goes on.
+      else if (!fs.statSync(d).isFile()) out.push(`invalid in plugin/ (not a file): ${rel}`);
       else if (!filesMatch(path.join(repo, rel), d)) out.push(`stale in plugin/: ${rel}`);
     }
     for (const rel of filesUnder(distRoot, item)) {
@@ -96,12 +99,17 @@ export function checkDist(distRoot = dist) {
   for (const [dir, allowed] of allowedByDir) {
     const abs = path.join(distRoot, dir);
     if (!fs.existsSync(abs)) continue;
+    // R19 (CodeRabbit PR #19 thread 12): an entry that exists but is not a directory made readdirSync throw ENOTDIR and the drift
+    // report never returned. It is a finding now, and the scan goes on.
+    if (!fs.statSync(abs).isDirectory()) { out.push(`invalid in plugin/ (not a directory): ${dir}`); continue; }
     for (const name of fs.readdirSync(abs)) {
       if (!allowed.has(name)) out.push(`orphan in plugin/ (no DIST_ITEM): ${path.join(dir, name)}`);
     }
   }
   const allowedTops = new Set(DIST_ITEMS.map((rel) => rel.split(path.sep)[0]));
-  if (fs.existsSync(distRoot)) {
+  if (fs.existsSync(distRoot) && !fs.statSync(distRoot).isDirectory()) {
+    out.push(`invalid plugin/ (not a directory): ${path.basename(distRoot)}`); // same rule at the top level
+  } else if (fs.existsSync(distRoot)) {
     for (const name of fs.readdirSync(distRoot)) {
       if (!allowedTops.has(name)) out.push(`orphan top-level in plugin/ (no DIST_ITEM): ${name}`);
     }

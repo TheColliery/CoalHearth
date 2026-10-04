@@ -713,3 +713,90 @@ test('RETIRED budget guardrail: tracker file gone + recordStep is journal-only (
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// R19 FIXBACK 1, MEDIUM-P (pre-existing, the head's ruling: fixed here). sweepOrphans' contained() checked a candidate only against the project ROOT, so a link planted at an
+// OWNED sweep directory (.claude/coalhearth/scratch or worktrees, or the .agents twins) and aimed at another directory INSIDE the project passed it, and every resume then
+// deleted matching files there: the beta.1 hazard ("sweep ONLY CoalHearth-owned dirs") back through a link. The ownership rule (node/runtime.md 4): the realpath of each owned
+// sweep directory must EQUAL its literal expected location, `path.join(realRoot, relDir)`, or nothing is swept there. Junction on Windows (unprivileged), dir symlink elsewhere;
+// a link this volume cannot make skips VISIBLY, one skippable leg per test.
+function plantLink(t, target, linkPath) {
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+  try {
+    fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch {
+    t.skip('symlink/junction not permitted on this filesystem');
+    return false;
+  }
+  return true;
+}
+function unlinkQuiet(p) { try { fs.unlinkSync(p); } catch { try { fs.rmdirSync(p); } catch { /* gone */ } } }
+
+for (const tool of ['.claude', '.agents']) {
+  test('ResumeEngine.sweepOrphans: a link planted at ' + tool + '/coalhearth/scratch and aimed INSIDE the project sweeps nothing', (t) => {
+    const root = tmp();
+    const link = path.join(root, tool, 'coalhearth', 'scratch');
+    try {
+      fs.mkdirSync(path.join(root, '.git'));
+      fs.mkdirSync(path.join(root, 'src'));
+      fs.writeFileSync(path.join(root, 'src', 'probe_user.mjs'), 'user code');
+      if (!plantLink(t, path.join(root, 'src'), link)) return;
+      const counts = new ResumeEngine({}, {}, root).sweepOrphans(root);
+      assert.strictEqual(fs.existsSync(path.join(root, 'src', 'probe_user.mjs')), true, "the user's own probe_*.mjs is NEVER swept through a link");
+      assert.strictEqual(counts.scratch, 0, 'nothing counted: ' + JSON.stringify(counts));
+    } finally {
+      unlinkQuiet(link);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('ResumeEngine.sweepOrphans: a link planted at ' + tool + '/coalhearth/worktrees and aimed INSIDE the project removes no directory', (t) => {
+    const root = tmp();
+    const link = path.join(root, tool, 'coalhearth', 'worktrees');
+    try {
+      fs.mkdirSync(path.join(root, '.git'));
+      fs.mkdirSync(path.join(root, 'build', 'ch-worker-user'), { recursive: true });
+      if (!plantLink(t, path.join(root, 'build'), link)) return;
+      const counts = new ResumeEngine({}, {}, root).sweepOrphans(root);
+      assert.strictEqual(fs.existsSync(path.join(root, 'build', 'ch-worker-user')), true, 'a ch-worker-* directory reached through a link is NEVER removed');
+      assert.strictEqual(counts.worktrees, 0, 'nothing counted: ' + JSON.stringify(counts));
+    } finally {
+      unlinkQuiet(link);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('ResumeEngine.sweepOrphans: a link planted at the PARENT .claude/coalhearth and aimed inside the project sweeps nothing', (t) => {
+  const root = tmp();
+  const link = path.join(root, '.claude', 'coalhearth');
+  try {
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.mkdirSync(path.join(root, 'src', 'scratch'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'scratch', 'probe_user.mjs'), 'user code');
+    if (!plantLink(t, path.join(root, 'src'), link)) return;
+    const counts = new ResumeEngine({}, {}, root).sweepOrphans(root);
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'scratch', 'probe_user.mjs')), true, 'a linked parent leaves the owned dir at the wrong real location: refused');
+    assert.deepStrictEqual(counts, { scratch: 0, worktrees: 0 });
+  } finally {
+    unlinkQuiet(link);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ResumeEngine.sweepOrphans: the legitimate sweep of REAL owned directories still works beside the link refusal', () => {
+  const root = tmp();
+  try {
+    fs.mkdirSync(path.join(root, '.git'));
+    for (const tool of ['.claude', '.agents']) {
+      fs.mkdirSync(path.join(root, tool, 'coalhearth', 'scratch'), { recursive: true });
+      fs.writeFileSync(path.join(root, tool, 'coalhearth', 'scratch', 'probe_a.mjs'), 'x');
+      fs.mkdirSync(path.join(root, tool, 'coalhearth', 'worktrees', 'ch-worker-9'), { recursive: true });
+    }
+    const counts = new ResumeEngine({}, {}, root).sweepOrphans(root);
+    assert.deepStrictEqual(counts, { scratch: 2, worktrees: 2 });
+    assert.strictEqual(fs.existsSync(path.join(root, '.claude', 'coalhearth', 'scratch', 'probe_a.mjs')), false);
+    assert.strictEqual(fs.existsSync(path.join(root, '.agents', 'coalhearth', 'worktrees', 'ch-worker-9')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

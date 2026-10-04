@@ -70,9 +70,42 @@
 //     — so `parseValue` below adds the one case their files never had reason to write.
 import fs from 'fs';
 import path from 'path';
+import { spawnSync } from 'node:child_process';
 import { CONFIG_SCHEMA, validateValue } from './lib/config-schema.mjs';
 import { parseJsonc } from './lib/jsonc.mjs';
 import { findProjectRoot, projectConfigPath, projectConfigCandidates, globalConfigPath } from './lib/config-load.mjs';
+import { MAX_CONFIG_BYTES, readRepoBytes, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
+import { gitEnv } from './lib/git-env.mjs';
+
+// R19 (CodeRabbit PR #19 thread 14): does git TRACK `file`? 'tracked' | 'untracked' | 'unknown'. The legacy migration removes the old config only
+// when it is untracked or there is nothing to ask: a tracked root `.coalhearth.json` is often a team-shared, committed file, and deleting it here
+// would remove it for the whole team at the next `git commit -a`. NO-EXTERNAL-ASSUMPTION: git is optional. No git binary (ENOENT) or no
+// repository means there is nothing to protect, so the answer is 'untracked' and the behaviour is exactly what it was before this check. Git exits 128
+// for EVERY fatal error, not only "not a git repository": a repository it refuses to read (dubious ownership, a corrupt .git) also answers 128 for a file it
+// tracks. So 128 reads as "no repository" only when no `.git` entry exists above the project at all (decided with fs, never by matching git's localised
+// stderr); with one present it is 'unknown'. Any OTHER failure (a timeout, a signal, an unexpected status) is 'unknown' too, which KEEPS the file: the safe side. The spawn takes
+// `env: gitEnv(...)` (the room's census, CWK-133: a hook's absolute GIT_DIR must never steer it), an explicit timeout (coding-style Error
+// Handling 6) and no shell. NO ceiling is passed: the project root is not always the repository root (a config file is itself a root marker, so a
+// project directory inside a bigger repository is normal), and a repository ABOVE the project that tracks the file must be allowed to say so.
+// Is there a `.git` entry (a directory, or a worktree's file) in `dir` or any parent? The marker findProjectRoot uses, walked to the filesystem root the way git walks.
+function gitEntryAbove(dir) {
+  for (let d = path.resolve(dir); ; ) {
+    if (fs.existsSync(path.join(d, '.git'))) return true;
+    const parent = path.dirname(d);
+    if (parent === d) return false;
+    d = parent;
+  }
+}
+function gitTracks(file, projectRoot) {
+  const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
+    cwd: projectRoot, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'ignore', 'ignore'], env: gitEnv(),
+  });
+  if (r.error) return r.error.code === 'ENOENT' ? 'untracked' : 'unknown'; // no git binary: nothing to ask; a timeout or other spawn error: keep
+  if (r.status === 0) return 'tracked';
+  if (r.status === 1) return 'untracked'; // in a repository, not tracked
+  if (r.status === 128) return gitEntryAbove(projectRoot) ? 'unknown' : 'untracked'; // 128: a repository git refuses (keep), or no repository at all (nothing to protect)
+  return 'unknown';
+}
 
 // FLATTEN THE NESTED SCHEMA ONCE. Each entry: `flagKey` (the dotted CLI name, or the
 // bare scalar name), `groupKey` (the top-level group this leaf lives under, or `null`
@@ -193,12 +226,24 @@ function main() {
   // readJsonc) -- never a typed regex/literal for U+FEFF (this room's own hard-won
   // lesson: a raw BOM character pasted into source gets silently converted to a real
   // char by the tool layer).
+  // CWK-137 (R14): the read is bounded and, for the PROJECT config, contained. This is a WRITER, so anything that is
+  // present but cannot be read safely (an over-bound file, a FIFO or device, a link out of the project, a denied
+  // read) is a loud refusal -- never "absent", which would overwrite the one copy of a file the user wrote. The
+  // global layer keeps following links (a dotfile manager's symlink is legitimate there) but is still bounded.
+  const readRoot = isGlobal ? null : projectRoot;
+  const got = readRepoBytes(readPath, readRoot, MAX_CONFIG_BYTES);
   let rawConfig = null;
-  try {
-    let content = fs.readFileSync(readPath, 'utf8');
+  let rawBytes = null;
+  if (got.bytes !== null) {
+    rawBytes = got.bytes;
+    let content = got.bytes.toString('utf8');
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
     rawConfig = content;
-  } catch {}
+  } else if (got.why !== 'absent' && got.why !== 'dir') {
+    process.exitCode = 1;
+    console.error(`Error: the existing config ${readPath} cannot be read safely (${got.why}) \u2014 nothing was written and it is untouched. Remove or fix it (a file over ${MAX_CONFIG_BYTES} bytes, a link out of the project, a special file or a permission problem), then run this again.`);
+    return;
+  }
   if (rawConfig !== null) {
     let notObject = false;
     try {
@@ -217,7 +262,7 @@ function main() {
       process.exitCode = 1;
       const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
       try {
-        fs.copyFileSync(readPath, readPath + '.bak');
+        writeRepoFile(readPath + '.bak', rawBytes, readRoot); // the bytes already read: never copyFileSync, which follows a link planted at the .bak
         console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
       } catch (bakErr) {
         // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
@@ -266,16 +311,29 @@ function main() {
   }
 
   try {
-    fs.mkdirSync(path.dirname(writePath), { recursive: true });
-    fs.writeFileSync(writePath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    const out = JSON.stringify(cfg, null, 2) + '\n';
+    if (isGlobal) {
+      fs.mkdirSync(path.dirname(writePath), { recursive: true });
+      fs.writeFileSync(writePath, out, 'utf8'); // the user's own home config: links followed on purpose (see the read above)
+    } else {
+      writeRepoFile(writePath, out, projectRoot); // CWK-137: realpath-and-contain, then a temp replaced into place
+    }
     // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy file is
     // removed only AFTER the new-home write above succeeded, and only when this write
     // actually migrated it. Best-effort -- a failed delete here still leaves a
     // correctly-written new config; the stray legacy file is simply not cleaned up
     // this run.
     if (readIsLegacy && writePath !== readPath) {
-      try { fs.rmSync(readPath, { force: true }); } catch {}
-      console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+      const tracking = gitTracks(readPath, projectRoot);
+      if (tracking === 'untracked') {
+        try { fs.rmSync(readPath, { force: true }); } catch {}
+        console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+      } else {
+        // tracked (or unknown): KEEP it. The canonical file is written, so the legacy one is now the loser of the read order; removing it is the
+        // user's decision, taken after reviewing the diff.
+        const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
+        console.log(`Wrote the project config to ${writePath}. The old ${readPath} was KEPT: ${tracking === 'tracked' ? 'git tracks it' : 'git could not be asked whether it tracks it'}. After you review the change, remove it with: git rm -- ${rel}`);
+      }
     }
     if (hadComments) {
       console.warn('Note: inline comments were stripped (this tool writes plain JSON). Every key stays documented in platform-configs/.coalhearth.json.');
@@ -283,7 +341,9 @@ function main() {
     console.log(`Successfully updated configuration in: ${writePath}`);
     console.log(JSON.stringify(cfg, null, 2));
   } catch (e) {
-    console.error(`Error: Failed to write to config file: ${e.message}`);
+    console.error(e instanceof RepoWriteRefused
+      ? `Error: refused to write the config \u2014 ${e.message}. Nothing was written. Remove the link (or run from the real project) and run this again.`
+      : `Error: Failed to write to config file: ${e.message}`);
     process.exitCode = 1;
     return;
   }

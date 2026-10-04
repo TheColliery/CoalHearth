@@ -29,6 +29,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # measured max 9 s over 8 runs (2026-10-03); ~33x headroom
     steps:
       # CWK-120 #4 -- persist-credentials: false. This job never pushes (`contents: read` above), so the
       # checkout token has no use once the checkout completes, and leaving it in .git/config would let the

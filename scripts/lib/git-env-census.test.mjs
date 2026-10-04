@@ -9,7 +9,7 @@
 // file's own source, the same self-reference hazard the pointer gate's plan comment records.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { censusGitSpawns } from './git-env-census.mjs';
+import { censusGitSpawns, blobId } from './git-env-census.mjs';
 
 const SP = 'spawn' + 'Sync';
 const EFS = 'execFile' + 'Sync';
@@ -363,4 +363,77 @@ test('A19: an env alias whose name carries $ is declared and matched literally (
   const E = '$' + 'env';
   const ok = census(`const ${E} = gitEnv(d);\n${SP}('git', ['init'], { env: ${E} });\n`);
   assert.deepEqual(ok.findings, []);
+});
+
+// -- CWK-174 (R14): a BLOB-PINNED exemption for a byte-equal org carrier, and a row for spawns that carry no env: at all ------------
+// A byte-equal carrier (the house secret scan's tests) cannot be edited here without breaking the umbrella's parity check, so the
+// census exempts it ONLY while its content is exactly the pinned git blob id; any edit or template re-sync makes it a finding again.
+const NOENV = BINDINGS + SP + "('git', ['fetch'], { cwd: d });\n";
+const NOENV_ROW = (blob) => [{ label: 'scripts/carrier.test.mjs', expr: null, count: 1, blob, reason: 'a byte-equal org carrier whose spawns inherit the environment' }];
+
+test('CWK-174: blobId equals git hash-object for the same bytes', () => {
+  assert.equal(blobId(''), 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391', 'git\'s empty-blob id');
+  assert.equal(blobId('hello\n'), 'ce013625030ba8dba906f756967f9e9ca394464a', 'git hash-object of "hello" and an LF');
+});
+
+test('CWK-174: a row with expr null covers a spawn that carries no env:, counted and printed, and only while its blob matches', () => {
+  const file = [{ label: 'scripts/carrier.test.mjs', text: NOENV }];
+  const bare = censusGitSpawns(file);
+  assert.equal(bare.findings.length, 1, 'control: with no row the env-less spawn is a finding');
+  const r = censusGitSpawns(file, { exemptions: NOENV_ROW(blobId(NOENV)) });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.exempt.length, 1);
+  assert.deepEqual(r.unusedExemptions, []);
+});
+
+test('CWK-174: an edited carrier is a finding again, and says its blob id is not the pinned one', () => {
+  const pin = blobId(NOENV);
+  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: NOENV + '// edited\n' }], { exemptions: NOENV_ROW(pin) });
+  assert.equal(r.exempt.length, 0, 'the exemption is not spent on changed content');
+  assert.ok(r.findings.some((f) => /blob id is [0-9a-f]{40}, not the pinned /.test(f) && f.includes(pin)), 'names the mismatch: ' + r.findings.join(' | '));
+  assert.equal(r.unusedExemptions.length, 1, 'and the row reads as unused, so the gate fails on it too');
+});
+
+test('CWK-174: a pin is per row, a row without one is unchanged behaviour', () => {
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
+  assert.deepEqual(r.findings, [], 'the existing unpinned row still exempts');
+  const other = censusGitSpawns([{ label: 'scripts/other.test.mjs', text: NOENV }], { exemptions: NOENV_ROW(blobId(NOENV)) });
+  assert.equal(other.findings.length, 1, 'a pin never widens to another file');
+});
+
+// R19 (CodeRabbit PR #19 thread 15): the literal check accepted a BACKTICK string, and `[^\\]` matches `$`, `{` and `}`, so an
+// interpolated template (a computed command) read as a provable literal, matched neither git nor a shell and went unchecked, though the
+// header promises a spawn whose command is neither a string literal nor process.execPath is REFUSED. A template with an interpolation
+// is not a provable literal; one with none (or an escaped dollar-brace) still is. The shell branch (execSync/exec, shell: true) reads the
+// command through the same check.
+const BT = '`'; // the samples are built from parts so this file's own source never holds a literal spawn call
+const interp = (body) => BT + body + BT;
+
+test('census: an INTERPOLATED template-literal command is refused as not a provable literal (spawn form)', () => {
+  const r = census(SP + '(' + interp('${gitBin}') + ", ['init'], { cwd: d });\n");
+  assert.equal(r.findings.length, 1, JSON.stringify(r.findings));
+  assert.match(r.findings[0], /command is not a string literal or process\.execPath/);
+  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:\d+ /);
+});
+
+test('census: an INTERPOLATED template-literal command is refused in the shell branch too (execSync, exec, shell: true)', () => {
+  for (const text of [
+    ES + '(' + interp('${cmd} status') + ', { cwd: d });\n',
+    EX + '(' + interp('${cmd} status') + ', { cwd: d });\n',
+    SP + '(' + interp('${cmd}') + ", ['status'], { cwd: d, shell: true });\n",
+  ]) {
+    const r = census(text);
+    assert.equal(r.findings.length, 1, text + ' -> ' + JSON.stringify(r.findings));
+    assert.match(r.findings[0], /not a string literal/);
+  }
+});
+
+test('census: a template literal with NO interpolation is still a provable literal, and an escaped dollar-brace is not an interpolation', () => {
+  const plain = census(SP + '(' + interp('git') + ", ['status'], { cwd: d });\n");
+  assert.equal(plain.gitSpawns.length, 1, 'git as a plain template is seen as a git spawn');
+  assert.match(plain.findings[0], /carries no 'env:'/, 'and judged on its env, not refused as a non-literal');
+  const escaped = census(SP + '(' + interp('git\\${x}') + ", ['status'], { cwd: d });\n");
+  assert.ok(!/not a string literal/.test(escaped.findings.join(' ')), 'an escaped dollar-brace is text, not an interpolation: ' + JSON.stringify(escaped.findings));
+  const dollar = census(SP + '(' + interp('node $x') + ", ['status'], { cwd: d });\n");
+  assert.deepEqual(dollar.findings, [], 'a lone dollar sign is text too (and node is not this census\'s business)');
 });

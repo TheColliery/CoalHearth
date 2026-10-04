@@ -726,11 +726,14 @@ test('workflow: link-check.yml builds the file list as a NUL-delimited array, ne
 // engine) from the pull-request checkout -- so pull-request code could read the live read-scoped credential. No step
 // here pushes (contents: read), so the token has no use after the checkout: persist-credentials: false on every
 // checkout of the two workflows the finding names. (CoalTipple PR24 #5 made the same call for its link-check.yml.)
+// R19 (CodeRabbit PR #19 thread 16): the matcher knew only a step that OPENS with `- uses:`, so a name-first step (`- name: ...` then `uses: actions/checkout@`,
+// which create-release.yml has twice) was invisible to it, and the roster below was a literal two-file list. A checkout is now a step whose `uses:` line is anywhere in the
+// step, and the roster is every workflow file that names actions/checkout@ at all.
 function checkoutStepsOf(yml) {
   const lines = yml.split(/\r?\n/);
   const out = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)- uses: actions\/checkout@/.exec(lines[i]);
+    const m = /^(\s*)-\s/.exec(lines[i]);
     if (!m) continue;
     const indent = m[1].length;
     const block = [lines[i]];
@@ -741,17 +744,50 @@ function checkoutStepsOf(yml) {
       if (ind <= indent) break; // the next step (or a dedent) -- this step's keys are indented deeper than its dash
       block.push(l);
     }
-    out.push({ line: i + 1, text: block.join('\n') });
+    const text = block.join('\n');
+    if (/^\s*(?:-\s+)?uses:\s*['"]?actions\/checkout@/m.test(text)) out.push({ line: i + 1, text });
   }
   return out;
 }
-for (const wf of ['ci.yml', 'link-check.yml']) {
+function workflowsWithCheckout(dir) {
+  return fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()
+    .filter((f) => /actions\/checkout@/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
+}
+const wfDir = path.join(repo, '.github', 'workflows');
+const PLANTED_NAME_FIRST = [
+  'jobs:', '  j:', '    steps:',
+  '      - name: Check out the tag', '        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567', '        with:', '          ref: x',
+  '      - run: echo done', '',
+].join('\n');
+
+test('workflow: checkoutStepsOf finds a name-first checkout step (CodeRabbit PR #19 thread 16)', () => {
+  const steps = checkoutStepsOf(PLANTED_NAME_FIRST);
+  assert.equal(steps.length, 1, 'a step that opens with `- name:` still holds a checkout');
+  assert.equal(steps[0].line, 4);
+  assert.doesNotMatch(steps[0].text, /persist-credentials:\s*false/, 'and this planted one does not set it');
+  assert.equal(checkoutStepsOf('steps:\n  - run: echo actions/checkout@x\n').length, 0, 'a mention in a run line is not a checkout');
+});
+
+test('workflow: the roster is every workflow file that names actions/checkout@, not a fixed list (CodeRabbit PR #19 thread 16)', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-wf-roster-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.yml'), PLANTED_NAME_FIRST);
+  fs.writeFileSync(path.join(dir, 'b.yaml'), 'steps:\n  - uses: actions/checkout@abc\n');
+  fs.writeFileSync(path.join(dir, 'c.yml'), 'steps:\n  - run: echo no checkout here\n');
+  fs.writeFileSync(path.join(dir, 'd.txt'), 'actions/checkout@abc');
+  assert.deepEqual(workflowsWithCheckout(dir), ['a.yml', 'b.yaml']);
+  const real = workflowsWithCheckout(wfDir);
+  assert.ok(real.includes('ci.yml') && real.includes('link-check.yml'), 'the two workflows the finding first named are still in the roster');
+  assert.ok(real.length >= 2, 'a roster that finds nothing proves nothing');
+});
+
+for (const wf of workflowsWithCheckout(wfDir)) {
   test('workflow: every actions/checkout in ' + wf + ' sets persist-credentials: false (CWK-120 #4)', () => {
-    const yml = fs.readFileSync(path.join(repo, '.github', 'workflows', wf), 'utf8');
+    const yml = fs.readFileSync(path.join(wfDir, wf), 'utf8');
     const steps = checkoutStepsOf(yml);
-    assert.ok(steps.length >= 1, wf + ' must have at least one checkout to check (an empty match proves nothing)');
+    assert.ok(steps.length >= 1, wf + ' names actions/checkout@ and must have at least one checkout step to check (an empty match proves nothing)');
     for (const s of steps) {
-      assert.match(s.text, /^\s+persist-credentials:\s*false\s*$/m, wf + ':' + s.line + ' checkout must not persist the token');
+      assert.match(s.text, /^\s+persist-credentials:\s*false\s*(#.*)?$/m, wf + ':' + s.line + ' checkout must not persist the token');
     }
   });
 }

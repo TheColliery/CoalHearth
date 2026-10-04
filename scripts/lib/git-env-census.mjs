@@ -53,10 +53,37 @@
 // The enumeration is NOT walked here -- scripts/verify.mjs feeds it the same surfaces the pointer
 // gate walks (see the wiring there).
 
+import { createHash } from 'node:crypto';
+
+// BLOB-PINNED rows (CWK-174, R14): a row may carry `blob`, a git blob id (git hash-object <file>). It then applies ONLY while the
+// file's text is exactly those bytes; any edit, or a template re-sync that changes them, spends nothing, reads as UNUSED and adds a
+// finding naming the new id. This is for a byte-equal org carrier (the house secret scan's tests): the umbrella's parity check forbids
+// editing it here, so the census cannot be satisfied by routing its spawns through gitEnv(), and the row must not outlive that content.
+// A row whose `expr` is null covers a spawn that carries no env: key at all.
+//
 // The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
 // COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
 // stale. The reason is printed by the gate: keep it free of parentheses.
 export const GIT_ENV_EXEMPTIONS = [
+  // CWK-174 (R14): the canon's two secret-scan tests, byte-equal org carriers from the published-code template at .github 05da36a.
+  // secret-gate.test.mjs builds its env from a LOCAL gitEnv helper that strips every GIT_* variable and then spreads a per-call overlay,
+  // so the census refuses the SHAPE (CWK-136 asks for the room's helper alone); secret-scan.test.mjs spawns git with no env: at all,
+  // so a pathspec or -a commit run from a hook hands those children an absolute GIT_INDEX_FILE (the CWK-133 class in the canon, routed
+  // to the .github deputy). Delete each row when the canon carries the fix and this room re-copies the file.
+  {
+    label: 'scripts/secret-gate.test.mjs',
+    expr: '{ ...gitEnv(), ...extra }',
+    count: 1,
+    blob: '3fcd3f0d020ea3b3f369feca01dc770d102ca5b3',
+    reason: 'a byte-equal org carrier from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
+  },
+  {
+    label: 'scripts/secret-scan.test.mjs',
+    expr: null,
+    count: 3,
+    blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
+    reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
+  },
   {
     label: 'scripts/lib/git-env.test.mjs',
     expr: 'env || gitEnv(root)',
@@ -203,6 +230,23 @@ function envVerdict(callText, fileText) {
   return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)`, expr };
 }
 
+// R19 (CodeRabbit PR #19 thread 15): does a template literal's BODY carry an interpolation, a dollar-brace no backslash escapes? Such a
+// command is computed at run time, so it is not a provable literal (the header's promise: a spawn whose command is neither a string literal
+// nor process.execPath is REFUSED). A template with none, an escaped dollar-brace or a lone dollar sign is plain text and stays a literal.
+function interpolates(body) {
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\\') { i++; continue; } // a backslash escapes the next character
+    if (body[i] === '$' && body[i + 1] === '{') return true;
+  }
+  return false;
+}
+
+// The git blob id of `text`, as `git hash-object` prints it for a file holding exactly these bytes.
+export function blobId(text) {
+  const body = Buffer.from(text, 'utf8');
+  return createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + body.length + String.fromCharCode(0)), body])).digest('hex');
+}
+
 export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {}) {
   const findings = [];
   const gitSpawns = [];
@@ -234,7 +278,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       const end = 1 + rawFirst.length;
       if (first === 'process.execPath') { nodeChildren++; continue; }
       const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(first);
-      if (!lit) {
+      if (!lit || (lit[1] === '`' && interpolates(lit[2]))) {
         findings.push(`${label}:${line} ${fn}(...) command is not a string literal or process.execPath -- the census cannot prove it is not git; spell the command as a literal`);
         continue;
       }
@@ -255,14 +299,23 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       gitSpawns.push(entry);
       const v = envVerdict(callText, text);
       if (!v) continue;
-      const ex = exemptions.find((e) => e.label === label && v.expr !== null && normalise(e.expr) === normalise(v.expr));
+      const sameSpawn = (e) => e.label === label && (e.expr === null ? v.expr === null : v.expr !== null && normalise(e.expr) === normalise(v.expr));
+      const pinOk = (e) => e.blob === undefined || blobId(text) === e.blob;
+      const ex = exemptions.find((e) => sameSpawn(e) && pinOk(e));
+      if (!ex) {
+        const pinned = exemptions.find((e) => sameSpawn(e) && !pinOk(e));
+        if (pinned) {
+          findings.push(`${label}:${line} ${fn}(git) ${v.why} -- the exemption for ${pinned.label} is pinned to blob ${pinned.blob}, and this file's blob id is ${blobId(text)}, not the pinned ${pinned.blob}: re-derive it from the template or drop the pin with its reason`);
+          continue;
+        }
+      }
       if (ex) {
         const want = ex.count ?? 1;
         const n = (matched.get(ex) || 0) + 1;
         matched.set(ex, n);
         if (n <= want) {
           entry.exempt = true;
-          exempt.push({ label, line, expr: normalise(v.expr), reason: ex.reason });
+          exempt.push({ label, line, expr: v.expr === null ? null : normalise(v.expr), reason: ex.reason });
         } else {
           // R8 FIXBACK 2 LOW-1: the exemption is keyed to an EXPECTED COUNT, so a further spawn with the same
           // expression in the same file is a finding, not a silent widening of the exemption.

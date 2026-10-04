@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { ResumeEngine } = require('../lib/resume-engine.js');
 const { findWorkspaceRoot } = require('../lib/contained-dir.js');
+const { readRepoFileBounded, MAX_STAMP_BYTES } = require('../lib/repo-fs.js');
 // Shared with post-tool-use.js — both hooks MUST resolve the journal dir IDENTICALLY
 // (this honors CLAUDE_CONFIG_DIR). The earlier inline copy hardcoded '.claude', so a
 // custom config dir silently diverged the WRITE path (post-tool) from the READ path
@@ -37,8 +38,12 @@ function updateDue(config) {
     const stamp = path.join(os.homedir(), '.claude', 'coal', 'coalhearth', 'update-check');
     const oldStamp = path.join(os.homedir(), '.claude', '.coalhearth-update-check');
     let last = 0;
+    // CWK-137 (R14): a HOME file (root null: a dotfile manager may link it) but still a bounded regular-file read --
+    // a FIFO or /dev/zero there is a hang or an allocation. Over MAX_STAMP_BYTES = skipped, so the check reads as due.
     for (const p of [stamp, oldStamp]) {
-      try { last = Number(String(fs.readFileSync(p, 'utf8')).trim()) || 0; } catch { continue; }
+      const text = readRepoFileBounded(p, null, MAX_STAMP_BYTES);
+      if (text === null) continue;
+      last = Number(String(text).trim()) || 0;
       if (last) break;
     }
     const now = Date.now();
