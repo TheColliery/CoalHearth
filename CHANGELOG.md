@@ -2,6 +2,23 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+The update command now matches what the update hook does.
+
+### Fixed
+
+- **`/coalhearth:update` no longer promises behaviour the hook does not have.** It said `auto` lets the check run when due without re-asking, and implied `remind` differs. The hook tells only `off` from every other mode: `off` schedules no check, and `ask`, `auto` and `remind` all print the same consent-gated offer when a check is due; the mode is not passed to the agent. The command now says that, and states the precedence rule: a project config may only quieten `update.updateMode`, the quieter of the two values wins, so a project can never re-enable a global `off`. The README key table and the commented template `platform-configs/.coalhearth.json` carried the same claim and are conformed. Wording only, no code changed. — test: none (shipped command text; `node scripts/verify.mjs` checks the dist copy)
+- **`scripts/configure.mjs` no longer deletes a legacy project config that git tracks** *(repo script, not in the plugin dist)*. A migrated write used to remove the old `<project>/.coalhearth.json` or `<project>/.claude/.coalhearth.json` outright, so the next `git commit -a` removed a team-shared file for everyone. It now asks git first: a tracked file is kept and the script prints `git rm -- <path>` for you to run after you review the change. An untracked file is still removed, and with no git binary or no repository the behaviour is unchanged; any other git failure keeps the file. — test: `scripts/configure.test.mjs`
+- **The git-spawn census refuses an interpolated template-literal command** *(repo gate, not in the plugin dist)*. A command written as a backtick string with an interpolation matched neither git nor a shell and went unchecked; it now fails as not a provable literal, as the gate's header always promised. A template with no interpolation is still plain text. — test: `scripts/lib/git-env-census.test.mjs`
+- **`checkDist` reports a dist entry that is not a directory instead of throwing** *(repo gate)*. A regular file where `plugin/` or `plugin/.claude-plugin` belongs raised `ENOTDIR` and the drift report never returned; it now prints `invalid plugin/ (not a directory)` (or `invalid in plugin/ ...`) and keeps scanning. — test: `scripts/build-plugin.test.mjs`
+- **Three tests no longer depend on the machine** *(test only, nothing shipped moved)*. The journal lock-poll tests decide by the sleep seam, not the wall clock (`lib/handoff-journal.test.js`); the spawned `verify.mjs` in its test gets a throwaway `HOME`, `USERPROFILE`, `TEMP` and `TMP` (`scripts/verify.test.mjs`); the `persist-credentials` shape test derives its workflow roster (7 files; was 2) and sees a checkout step that starts with `name:` (`scripts/lib/link-check.test.mjs`).
+
+### Changed
+
+- **The canon release set is re-adopted** *(CI, not in the plugin dist)*. The Release title summary is bounded as a signal band (aim 60 characters, 45 to 75 passes clean) and a lead paragraph under the summary carries into the body; a CamelCase first word keeps its case and only an ordinary opener is lower-cased; the `create-release` workflow stops by name when the derive step wrote nothing. No local divergence. — test: `scripts/lib/release-shape.test.mjs`, `scripts/release-notes.test.mjs`, `scripts/verify-release-shape.test.mjs`
+- **A comment in `lib/contained-dir.js` names the journal directory's place.** The default journal directory, `<project root>/.claude/coalhearth/`, is inside the workspace on purpose, and every write and prune under it goes through the contained-directory resolver. Comment bytes only; the dist copy moved with it. — test: none (no behaviour change)
+
 ## [2.6.1] - 2026-10-03
 
 A cloned repository can no longer make CoalHearth hang or write or delete outside the project through a planted link.
