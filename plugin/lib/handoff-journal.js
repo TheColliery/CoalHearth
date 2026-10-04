@@ -4,7 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { containedOutputDir, isOwnedDefaultDir } = require('./contained-dir.js');
+const { containedOutputDir, anchorRoot, isOwnedDefaultDir } = require('./contained-dir.js');
 const { readRepoFileBounded, writeTempExclusive, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 const { fitJournal } = require('./journal-cap.js');
 
@@ -71,6 +71,7 @@ class HandoffJournal {
   constructor(config, root) {
     this.config = config || {};
     this.outputDir = containedOutputDir(this.config.outputDirectory, root);
+    this.root = anchorRoot(root); // the project root this journal was built for: the prune's ownership check is anchored to it (05a FIXBACK 3)
     // Clamp to [1, MAX_RETRIES]: a non-positive/absent value -> 3 (default), an
     // over-large one -> MAX_RETRIES, so the synchronous busy-wait backoff stays bounded.
     const wanted = Number.isInteger(this.config.atomicityRetries) && this.config.atomicityRetries > 0
@@ -277,9 +278,9 @@ class HandoffJournal {
   // We deliberately KEEP the *.corrupt.json forensic quarantine and any unrecognized file.
   _pruneOldLogs() {
     if (!this.outputDir) return; // fail-closed: no contained dir -> nothing to prune
-    // 05a FIXBACK 1 (HIGH-1): delete only inside the LITERAL owned folder (<root>/.claude/coalhearth, realpath equal to that location), whatever outputDir is. A custom
+    // 05a FIXBACK 1 (HIGH-1), anchored to the project root in FIXBACK 3: delete only inside the LITERAL owned folder (<root>/.claude/coalhearth, realpath equal to that location under THIS root), whatever outputDir is. A custom
     // outputDirectory such as `src`, or a link at the default folder, is contained to the project root but is not the owned folder, and its *.tmp files may be the user's.
-    if (!isOwnedDefaultDir(this.outputDir)) return;
+    if (!isOwnedDefaultDir(this.outputDir, this.root)) return;
     try {
       let root;
       try {

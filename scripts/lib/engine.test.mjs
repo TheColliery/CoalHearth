@@ -20,7 +20,7 @@ const require = createRequire(import.meta.url);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { HandoffJournal } = require(path.join(REPO, 'lib', 'handoff-journal.js'));
 const { ResumeEngine } = require(path.join(REPO, 'lib', 'resume-engine.js'));
-const { containedOutputDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
+const { containedOutputDir, isOwnedDefaultDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
 import { validateValue, validateConfig, CONFIG_SCHEMA } from './config-schema.mjs';
 
 function tmp() {
@@ -907,5 +907,65 @@ test('HandoffJournal: a link swapped in at the owned folder AFTER the journal wa
   } finally {
     unlinkQuiet(owned);
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 05a FIXBACK 3, MEDIUM-2 (05a RE-INSPECT, case G). isOwnedDefaultDir took its anchor from the CANDIDATE (a lexical grandparent), so it never saw the project root: a configured
+// journal.outputDirectory of sub/.claude/coalhearth looked like an owned folder and the ENOSPC prune deleted the *.tmp files in it. The anchor is now the project root the journal was
+// built with: the candidate must be spelled <root>/.claude/coalhearth AND resolve, through realpath.native on both sides, to that literal location under the realpath of the root.
+test('HandoffJournal: the prune leaves a configured nested sub/.claude/coalhearth alone (it is not the owned folder of THIS project root)', () => {
+  const root = projectWithSrc();
+  try {
+    const nested = path.join(root, 'sub', '.claude', 'coalhearth');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'other.tmp'), 'a user file');
+    fs.writeFileSync(path.join(nested, 'error.log'), 'a user file');
+    const j = new HandoffJournal({ outputDirectory: path.join('sub', '.claude', 'coalhearth') }, root);
+    assert.strictEqual(j.outputDir, nested, 'the journal does write there (a custom directory, an open decision), only the prune is closed');
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(nested, 'other.tmp')), true, 'other.tmp survives');
+    assert.strictEqual(fs.existsSync(path.join(nested, 'error.log')), true, 'error.log survives');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: an alias .claude/alias linked to the owned folder is a custom outputDirectory, not the owned folder: the prune leaves it alone', (t) => {
+  const root = projectWithSrc();
+  const owned = path.join(root, '.claude', 'coalhearth');
+  const alias = path.join(root, '.claude', 'alias');
+  try {
+    fs.mkdirSync(owned, { recursive: true });
+    fs.writeFileSync(path.join(owned, 'error.log'), 'stale');
+    if (!plantLink(t, owned, alias)) return;
+    const j = new HandoffJournal({ outputDirectory: path.join('.claude', 'alias') }, root);
+    assert.strictEqual(j.outputDir, alias, 'built on the alias spelling');
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(owned, 'error.log')), true, 'nothing is pruned through the alias, though it resolves into the owned folder');
+  } finally {
+    unlinkQuiet(alias);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isOwnedDefaultDir(dir, root): true only for <root>/.claude/coalhearth resolving to itself under that root; any other dir, a wrong or missing root, an absent dir: false', () => {
+  const root = projectWithSrc();
+  const other = projectWithSrc();
+  try {
+    const owned = path.join(root, '.claude', 'coalhearth');
+    fs.mkdirSync(owned, { recursive: true });
+    fs.mkdirSync(path.join(other, '.claude', 'coalhearth'), { recursive: true });
+    assert.strictEqual(isOwnedDefaultDir(owned, root), true, 'the owned folder of its own root');
+    assert.strictEqual(isOwnedDefaultDir(owned, other), false, 'not the owned folder of another root');
+    assert.strictEqual(isOwnedDefaultDir(path.join(root, 'src'), root), false, 'a custom directory');
+    assert.strictEqual(isOwnedDefaultDir(owned, undefined), false, 'no root: fails closed');
+    assert.strictEqual(isOwnedDefaultDir(undefined, root), false, 'no dir: fails closed');
+    assert.strictEqual(isOwnedDefaultDir(path.join(root, 'no', '.claude', 'coalhearth'), root), false, 'an absent directory: fails closed');
+    const nested = path.join(root, 'sub', '.claude', 'coalhearth');
+    fs.mkdirSync(nested, { recursive: true });
+    assert.strictEqual(isOwnedDefaultDir(nested, root), false, 'a nested look-alike is not the root\'s owned folder');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
   }
 });
