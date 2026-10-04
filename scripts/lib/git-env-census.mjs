@@ -84,6 +84,25 @@ export const GIT_ENV_EXEMPTIONS = [
     blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
     reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
   },
+  // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): two byte-equal org carriers from the overlay template at .github 7afc4ef.
+  // release-notes.mjs builds an explicit minimal env (PATH, the temp and home keys, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT; no GIT_ variable passes) and hands it to its one git
+  // spawn as the shorthand `env`, which the census reads as no env: key at all. release-notes.test.mjs gives its git children its own sandboxEnv(cwd), an allowlist plus a throwaway home
+  // and a ceiling directory, not gitEnv(). Both are unreachable for the room (the umbrella's parity check forbids editing a carrier), so each row is pinned by blob id and deleted when the
+  // canon carries the room helper and this room re-copies the file.
+  {
+    label: 'scripts/release-notes.mjs',
+    expr: null,
+    count: 1,
+    blob: '674592e0ff25dbdc14a8a4e21e6a598953b90eaa',
+    reason: 'a byte-equal org carrier from the overlay template whose one git spawn takes an explicit minimal env object built from an allowlist with no GIT_ variable in it, pinned by blob id and deleted when the canon uses the room helper',
+  },
+  {
+    label: 'scripts/release-notes.test.mjs',
+    expr: 'sandboxEnv(cwd)',
+    count: 1,
+    blob: 'a8f3ba69d6229b571ce89b4373362e93f074fb7b',
+    reason: 'a byte-equal org carrier from the overlay template whose git children take their own allowlist env with a throwaway home and a ceiling directory, pinned by blob id and deleted when the canon uses the room helper',
+  },
   {
     label: 'scripts/lib/git-env.test.mjs',
     expr: 'env || gitEnv(root)',
