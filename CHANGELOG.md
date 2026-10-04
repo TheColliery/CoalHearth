@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+The test runner now bounds every test and runs one file at a time.
+
+### Changed
+
+- **`scripts/test.mjs` carries a per-test timeout, a heap cap, one file at a time and a forced exit** *(test tooling, not in the plugin dist)*. The runner passes `--max-old-space-size=2048`, `--test-concurrency=1`, `--test-force-exit` and `--test-timeout=120000`, so a test that never finishes fails after 120 seconds instead of holding the run, and one runaway test cannot take the machine. The 120-second figure is six times the slowest test measured on a loaded box (about 20 seconds). `--test-force-exit` is needed beside the timeout: without it the hung test's own timer kept its file process alive and the run still hung. It still lists its files explicitly and fails on a listed-but-missing or an unlisted file. Named gap: a test file that hangs at its top level, before any test starts, is not bounded by `--test-timeout`. Serial files make a full run slower on a loaded machine. — test: none (the runner itself; proven by a planted never-finishing test, red on the old runner and green on this one)
+- **The spawned-CLI test helpers no longer pass the operator's environment** *(test only, nothing shipped moved)*. `scripts/verify.test.mjs` `sandboxedEnv()` now drops the parent's `CLAUDE_CONFIG_DIR` and sets it to a folder inside the throwaway sandbox; the helpers in `bin/post-tool-use.test.js`, `bin/user-prompt-submit.test.js`, `scripts/configure.test.mjs` and `scripts/lib/cwk137.test.mjs` do the same, and `hooks.test.mjs`, `bin/session-start.test.js` and `cwk137.test.mjs` add `TMPDIR` to their sandboxes. Before, an operator-style `CLAUDE_CONFIG_DIR` in the parent environment made 11 of 16 `post-tool-use` tests and 4 of 7 `user-prompt-submit` tests read the operator's global config. — test: `scripts/verify.test.mjs`, `scripts/configure.test.mjs`, `scripts/lib/cwk137.test.mjs`
+
 ## [2.6.2] - 2026-10-04
 
 A planted link can no longer make a resume delete project files.
