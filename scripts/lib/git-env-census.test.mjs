@@ -400,3 +400,40 @@ test('CWK-174: a pin is per row, a row without one is unchanged behaviour', () =
   const other = censusGitSpawns([{ label: 'scripts/other.test.mjs', text: NOENV }], { exemptions: NOENV_ROW(blobId(NOENV)) });
   assert.equal(other.findings.length, 1, 'a pin never widens to another file');
 });
+
+// R19 (CodeRabbit PR #19 thread 15): the literal check accepted a BACKTICK string, and `[^\\]` matches `$`, `{` and `}`, so an
+// interpolated template (a computed command) read as a provable literal, matched neither git nor a shell and went unchecked, though the
+// header promises a spawn whose command is neither a string literal nor process.execPath is REFUSED. A template with an interpolation
+// is not a provable literal; one with none (or an escaped dollar-brace) still is. The shell branch (execSync/exec, shell: true) reads the
+// command through the same check.
+const BT = '`'; // the samples are built from parts so this file's own source never holds a literal spawn call
+const interp = (body) => BT + body + BT;
+
+test('census: an INTERPOLATED template-literal command is refused as not a provable literal (spawn form)', () => {
+  const r = census(SP + '(' + interp('${gitBin}') + ", ['init'], { cwd: d });\n");
+  assert.equal(r.findings.length, 1, JSON.stringify(r.findings));
+  assert.match(r.findings[0], /command is not a string literal or process\.execPath/);
+  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:\d+ /);
+});
+
+test('census: an INTERPOLATED template-literal command is refused in the shell branch too (execSync, exec, shell: true)', () => {
+  for (const text of [
+    ES + '(' + interp('${cmd} status') + ', { cwd: d });\n',
+    EX + '(' + interp('${cmd} status') + ', { cwd: d });\n',
+    SP + '(' + interp('${cmd}') + ", ['status'], { cwd: d, shell: true });\n",
+  ]) {
+    const r = census(text);
+    assert.equal(r.findings.length, 1, text + ' -> ' + JSON.stringify(r.findings));
+    assert.match(r.findings[0], /not a string literal/);
+  }
+});
+
+test('census: a template literal with NO interpolation is still a provable literal, and an escaped dollar-brace is not an interpolation', () => {
+  const plain = census(SP + '(' + interp('git') + ", ['status'], { cwd: d });\n");
+  assert.equal(plain.gitSpawns.length, 1, 'git as a plain template is seen as a git spawn');
+  assert.match(plain.findings[0], /carries no 'env:'/, 'and judged on its env, not refused as a non-literal');
+  const escaped = census(SP + '(' + interp('git\\${x}') + ", ['status'], { cwd: d });\n");
+  assert.ok(!/not a string literal/.test(escaped.findings.join(' ')), 'an escaped dollar-brace is text, not an interpolation: ' + JSON.stringify(escaped.findings));
+  const dollar = census(SP + '(' + interp('node $x') + ", ['status'], { cwd: d });\n");
+  assert.deepEqual(dollar.findings, [], 'a lone dollar sign is text too (and node is not this census\'s business)');
+});

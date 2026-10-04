@@ -230,6 +230,17 @@ function envVerdict(callText, fileText) {
   return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)`, expr };
 }
 
+// R19 (CodeRabbit PR #19 thread 15): does a template literal's BODY carry an interpolation, a dollar-brace no backslash escapes? Such a
+// command is computed at run time, so it is not a provable literal (the header's promise: a spawn whose command is neither a string literal
+// nor process.execPath is REFUSED). A template with none, an escaped dollar-brace or a lone dollar sign is plain text and stays a literal.
+function interpolates(body) {
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\\') { i++; continue; } // a backslash escapes the next character
+    if (body[i] === '$' && body[i + 1] === '{') return true;
+  }
+  return false;
+}
+
 // The git blob id of `text`, as `git hash-object` prints it for a file holding exactly these bytes.
 export function blobId(text) {
   const body = Buffer.from(text, 'utf8');
@@ -267,7 +278,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       const end = 1 + rawFirst.length;
       if (first === 'process.execPath') { nodeChildren++; continue; }
       const lit = /^(['"`])((?:(?!\1)[^\\]|\\.)*)\1$/.exec(first);
-      if (!lit) {
+      if (!lit || (lit[1] === '`' && interpolates(lit[2]))) {
         findings.push(`${label}:${line} ${fn}(...) command is not a string literal or process.execPath -- the census cannot prove it is not git; spell the command as a literal`);
         continue;
       }
