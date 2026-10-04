@@ -6,7 +6,7 @@
 // board #64 addition (plugin.json's OWN description vs DESC_CAP) actually gates, by
 // running the real gate against a full tmp copy of the repo, exactly as a user's
 // pre-commit hook would.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -40,8 +40,21 @@ function seed(tmp) {
   for (const f of COPY_FILES) fs.cpSync(path.join(repo, f), path.join(tmp, f));
 }
 
+// hooks-safety.md section 7: the spawned gate gets a throwaway HOME/USERPROFILE/TEMP/TMP/TMPDIR, never the operator's. One directory serves the whole file, removed by a
+// teardown registered the line after it is made (scripts-quality.md section 2). Any key a caller passes in `env`, GIT_DIR included, is kept as given.
+const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-verify-home-'));
+after(() => fs.rmSync(SANDBOX_HOME, { recursive: true, force: true }));
+const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR'];
+function sandboxedEnv(env) {
+  const out = {};
+  // Windows env names are case-insensitive: drop the parent's own spelling of each key before setting ours, so no process sees both.
+  for (const [k, v] of Object.entries(env ?? process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v;
+  for (const k of SANDBOXED_KEYS) out[k] = SANDBOX_HOME;
+  return out;
+}
+
 function run(tmp, env) {
-  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8', ...(env ? { env } : {}) });
+  return spawnSync(process.execPath, [path.join(tmp, 'scripts', 'verify.mjs')], { cwd: tmp, encoding: 'utf8', env: sandboxedEnv(env) });
 }
 
 test('verify.mjs negative path: an over-cap .claude-plugin/plugin.json description FAILs the gate', () => {
@@ -359,4 +372,30 @@ test('L1: a second spawn with the exempted expression in the same file FAILs the
   const r = run(tmp);
   assert.equal(r.status, 1, 'the widened exemption must FAIL, got:\n' + r.stdout);
   assert.match(r.stdout, /FAIL .*git-env\.test\.mjs:\d+ .*allows 1 spawn/);
+});
+
+// R19 (CodeRabbit PR #19 thread 17): hooks-safety.md section 7 says a hermetic spawn test points TEMP/TMP/TMPDIR and USERPROFILE/HOME at a throwaway directory, so the real
+// session state and the operator's real home can never reach the child. run() handed verify.mjs the parent's environment as it was. The stub below stands in for verify.mjs and
+// reports what it was given, so the test needs no repo copy.
+test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP, TMP and TMPDIR, and still passes a caller GIT_DIR through (hooks-safety.md section 7)', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(tmp, 'scripts'));
+  fs.writeFileSync(path.join(tmp, 'scripts', 'verify.mjs'), [
+    "import os from 'node:os';",
+    "const e = process.env;",
+    "console.log(JSON.stringify({ HOME: e.HOME, USERPROFILE: e.USERPROFILE, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, GIT_DIR: e.GIT_DIR, home: os.homedir(), tmp: os.tmpdir() }));",
+    '',
+  ].join('\n'));
+  const r = run(tmp, { ...process.env, GIT_DIR: 'a-caller-git-dir' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const seen = JSON.parse(r.stdout);
+  const sandbox = seen.USERPROFILE;
+  for (const k of ['TMP', 'TMPDIR', 'TEMP', 'HOME', 'USERPROFILE']) assert.equal(seen[k], sandbox, k + ' must be the one throwaway directory');
+  assert.ok(fs.existsSync(sandbox) && fs.statSync(sandbox).isDirectory(), 'the throwaway directory exists');
+  assert.equal(path.resolve(seen.home), path.resolve(sandbox), 'os.homedir() in the child is the throwaway directory');
+  assert.equal(path.resolve(seen.tmp), path.resolve(sandbox), 'os.tmpdir() in the child is the throwaway directory');
+  assert.notEqual(path.resolve(sandbox), path.resolve(os.homedir()), 'and it is not the real home');
+  assert.notEqual(path.resolve(sandbox), path.resolve(os.tmpdir()), 'nor the shared temp directory itself');
+  assert.equal(seen.GIT_DIR, 'a-caller-git-dir', 'a GIT_DIR the caller passes on purpose is kept (the CWK-133 tests rely on it)');
 });
