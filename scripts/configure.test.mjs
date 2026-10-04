@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from './lib/git-env.mjs';
 
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'configure.mjs');
 
@@ -346,4 +347,72 @@ test('L4: a backup that DOES land is unchanged behaviour -- .bak holds the origi
   assert.equal(r.status, 1);
   assert.equal(fs.readFileSync(p + '.bak', 'utf8'), '[1,2]');
   assert.deepEqual(JSON.parse(fs.readFileSync(p, 'utf8')), { language: 'th' });
+});
+
+// ---------------------------------------------------------------- R19 (CodeRabbit PR #19 thread 14): the migration never deletes a file git TRACKS
+// A root `.coalhearth.json` is often a team-shared, committed file. The migrated write used to rmSync it unconditionally, so the next
+// `git commit -a` removed it for the whole team. Now a tracked legacy file is KEPT and the user is told to `git rm` it after review;
+// it is removed only when it is untracked or there is no repository or no git binary (no-external-assumption: git is optional).
+const git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 30000, env: gitEnv() });
+const haveGit = (() => { const r = spawnSync('git', ['--version'], { encoding: 'utf8', timeout: 30000, env: gitEnv() }); return !r.error && r.status === 0; })();
+// A REAL repository (the other sandboxes carry an empty .git directory, which git reads as "not a repository").
+function realRepo(t) {
+  const dir = sandboxProject(t);
+  fs.rmdirSync(path.join(dir, '.git'));
+  assert.equal(git(dir, ['init', '-q']).status, 0, 'fixture: git init');
+  assert.ok(fs.existsSync(path.join(dir, '.git')), 'fixture: the sandbox carries its OWN .git before anything runs against it');
+  return dir;
+}
+
+test('R19: a legacy config that git TRACKS is kept after the migrated write, with a git rm line (exit 0)', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const dir = realRepo(t);
+  const legacy = path.join(dir, '.coalhearth.json');
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  assert.equal(git(dir, ['add', '--', '.coalhearth.json']).status, 0, 'fixture: tracked');
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), true, 'the tracked legacy file is KEPT');
+  assert.equal(JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8')).language, 'zh', 'the canonical config was still written');
+  assert.match(r.stdout, /git rm -- \.coalhearth\.json/, 'the user is told what to run after review: ' + r.stdout);
+  assert.doesNotMatch(r.stdout, /^Migrated the project config from/m, 'and is not told the legacy file was migrated away');
+});
+
+test('R19: a legacy config that is UNTRACKED in a real repository is still removed by the migrated write', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const dir = realRepo(t);
+  const legacy = path.join(dir, '.coalhearth.json');
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' })); // present, never added
+  const r = run(dir, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), false, 'an untracked legacy file is removed, as before');
+  assertMigrationAnnounced(r.stdout, legacy, ownDirConfig(dir));
+});
+
+test('R19: with NO git binary on the PATH the migration degrades to the old behaviour (the legacy file is removed)', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const dir = realRepo(t);
+  const legacy = path.join(dir, '.coalhearth.json');
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  assert.equal(git(dir, ['add', '--', '.coalhearth.json']).status, 0, 'fixture: tracked');
+  const r = run(dir, ['--language', 'zh'], { PATH: path.join(dir, 'no-such-bin'), Path: path.join(dir, 'no-such-bin') });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), false, 'no git to ask: documented degrade, the file is removed as before');
+});
+
+// The project root is not always the repository root: a config FILE is itself a root marker (config-load.mjs ROOT_MARKERS), so a project
+// directory inside a bigger repository is a normal layout. git must be asked as a repository ABOVE the project would answer, with no
+// ceiling at the project root's parent, or a tracked legacy config in a monorepo subdirectory would read as untracked and be deleted.
+test('R19: a tracked legacy config in a SUBDIRECTORY of a bigger repository (the project root is not the repo root) is kept', (t) => {
+  if (!haveGit) { t.skip('git is not available here'); return; }
+  const repo = realRepo(t);
+  const proj = path.join(repo, 'proj');
+  fs.mkdirSync(proj);
+  const legacy = path.join(proj, '.coalhearth.json'); // also the root marker that anchors the project here
+  fs.writeFileSync(legacy, JSON.stringify({ language: 'auto' }));
+  assert.equal(git(repo, ['add', '--', 'proj/.coalhearth.json']).status, 0, 'fixture: tracked by the enclosing repository');
+  const r = run(proj, ['--language', 'zh']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(fs.existsSync(legacy), true, 'kept: the enclosing repository tracks it');
+  assert.match(r.stdout, /git rm -- \.coalhearth\.json/, r.stdout);
 });

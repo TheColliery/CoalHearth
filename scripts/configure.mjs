@@ -70,10 +70,30 @@
 //     — so `parseValue` below adds the one case their files never had reason to write.
 import fs from 'fs';
 import path from 'path';
+import { spawnSync } from 'node:child_process';
 import { CONFIG_SCHEMA, validateValue } from './lib/config-schema.mjs';
 import { parseJsonc } from './lib/jsonc.mjs';
 import { findProjectRoot, projectConfigPath, projectConfigCandidates, globalConfigPath } from './lib/config-load.mjs';
 import { MAX_CONFIG_BYTES, readRepoBytes, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
+import { gitEnv } from './lib/git-env.mjs';
+
+// R19 (CodeRabbit PR #19 thread 14): does git TRACK `file`? 'tracked' | 'untracked' | 'unknown'. The legacy migration removes the old config only
+// when it is untracked or there is nothing to ask: a tracked root `.coalhearth.json` is often a team-shared, committed file, and deleting it here
+// would remove it for the whole team at the next `git commit -a`. NO-EXTERNAL-ASSUMPTION: git is optional. No git binary (ENOENT) or no
+// repository (git exits 128) means there is nothing to protect, so the answer is 'untracked' and the behaviour is exactly what it was before this
+// check. Any OTHER failure (a timeout, a signal, an unexpected status) is 'unknown', which KEEPS the file: the safe side. The spawn takes
+// `env: gitEnv(...)` (the room's census, CWK-133: a hook's absolute GIT_DIR must never steer it), an explicit timeout (coding-style Error
+// Handling 6) and no shell. NO ceiling is passed: the project root is not always the repository root (a config file is itself a root marker, so a
+// project directory inside a bigger repository is normal), and a repository ABOVE the project that tracks the file must be allowed to say so.
+function gitTracks(file, projectRoot) {
+  const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
+    cwd: projectRoot, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'ignore', 'ignore'], env: gitEnv(),
+  });
+  if (r.error) return r.error.code === 'ENOENT' ? 'untracked' : 'unknown'; // no git binary: nothing to ask; a timeout or other spawn error: keep
+  if (r.status === 0) return 'tracked';
+  if (r.status === 1 || r.status === 128) return 'untracked'; // 1: in a repository but not tracked; 128: not a repository (an empty .git dir reads this way)
+  return 'unknown';
+}
 
 // FLATTEN THE NESTED SCHEMA ONCE. Each entry: `flagKey` (the dotted CLI name, or the
 // bare scalar name), `groupKey` (the top-level group this leaf lives under, or `null`
@@ -292,8 +312,16 @@ function main() {
     // correctly-written new config; the stray legacy file is simply not cleaned up
     // this run.
     if (readIsLegacy && writePath !== readPath) {
-      try { fs.rmSync(readPath, { force: true }); } catch {}
-      console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+      const tracking = gitTracks(readPath, projectRoot);
+      if (tracking === 'untracked') {
+        try { fs.rmSync(readPath, { force: true }); } catch {}
+        console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+      } else {
+        // tracked (or unknown): KEEP it. The canonical file is written, so the legacy one is now the loser of the read order; removing it is the
+        // user's decision, taken after reviewing the diff.
+        const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
+        console.log(`Wrote the project config to ${writePath}. The old ${readPath} was KEPT: ${tracking === 'tracked' ? 'git tracks it' : 'git could not be asked whether it tracks it'}. After you review the change, remove it with: git rm -- ${rel}`);
+      }
     }
     if (hadComments) {
       console.warn('Note: inline comments were stripped (this tool writes plain JSON). Every key stays documented in platform-configs/.coalhearth.json.');
