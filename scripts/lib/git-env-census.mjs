@@ -61,6 +61,10 @@ import { createHash } from 'node:crypto';
 // editing it here, so the census cannot be satisfied by routing its spawns through gitEnv(), and the row must not outlive that content.
 // A row whose `expr` is null covers a spawn that carries no env: key at all.
 //
+// NAMED DIVERGENCE (05a FIXBACK 2): scripts/release-notes.test.mjs is HELD at blob d2f5b830, the blob this room carried before the adoption, not the canon's a8f3ba69 (.github 7afc4ef). The
+// canon's test asserts the child env holds nothing but what node needs, which is red on macOS (it injects __CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE); CoalBoard
+// measured it (CI run 37224469491). The held file passes the census with no row. Exit: re-sync the file when the canon fix lands, and skeleton-check then reads equal.
+//
 // The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
 // COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
 // stale. The reason is printed by the gate: keep it free of parentheses.
@@ -86,25 +90,18 @@ export const GIT_ENV_EXEMPTIONS = [
     blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
     reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
   },
-  // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): two byte-equal org carriers from the overlay template at .github 7afc4ef.
+  // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): a byte-equal org carrier from the overlay template at .github 7afc4ef. (The second file adopted with it,
+  // release-notes.test.mjs, is held at the room's previous blob instead and needs no row: see the named divergence above.)
   // release-notes.mjs builds an explicit minimal env (PATH, the temp and home keys, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT; no GIT_ variable passes) and hands it to its one git
   // spawn as the shorthand property `env` (the census reads that as `env: env`, a local const that is an allowlist object and not a gitEnv() call, so it still needs the row; an
-  // earlier wording of this row said the census read it as no env: key, which was a parser defect, fixed in 05a FIXBACK 1). release-notes.test.mjs gives its git children its own sandboxEnv(cwd), an allowlist plus a throwaway home
-  // and a ceiling directory, not gitEnv(). Both are unreachable for the room (the umbrella's parity check forbids editing a carrier), so each row is pinned by blob id and deleted when the
-  // canon carries the room helper and this room re-copies the file.
+  // earlier wording of this row said the census read it as no env: key, which was a parser defect, fixed in 05a FIXBACK 1). The carrier is unreachable for the room (the umbrella's parity check forbids editing it), so the row is pinned by blob id and deleted when the canon
+  // carries the room helper and this room re-copies the file.
   {
     label: 'scripts/release-notes.mjs',
     expr: 'env',
     count: 1,
     blob: '674592e0ff25dbdc14a8a4e21e6a598953b90eaa',
     reason: 'a byte-equal org carrier from the overlay template whose one git spawn takes an explicit minimal env object built from an allowlist with no GIT_ variable in it, pinned by blob id and deleted when the canon uses the room helper',
-  },
-  {
-    label: 'scripts/release-notes.test.mjs',
-    expr: 'sandboxEnv(cwd)',
-    count: 1,
-    blob: 'a8f3ba69d6229b571ce89b4373362e93f074fb7b',
-    reason: 'a byte-equal org carrier from the overlay template whose git children take their own allowlist env with a throwaway home and a ceiling directory, pinned by blob id and deleted when the canon uses the room helper',
   },
   {
     label: 'scripts/lib/git-env.test.mjs',
