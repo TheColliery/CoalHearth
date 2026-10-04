@@ -318,9 +318,25 @@ Verify the above against the working tree, then continue — or restart the task
       return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     };
 
+    // R19 FIXBACK 1 (MEDIUM-P): the OWNERSHIP rule (node/runtime.md 4), not a containment one. contained() above only asks "is this under the project root?", which a link
+    // planted AT an owned sweep directory and aimed at another directory of the project passes, and every resume then deleted matching files there. An allowlist pins the
+    // LITERAL expected location and fails closed: the realpath of the owned directory must EQUAL path.join(root, relDir) (root is already the .native realpath), or
+    // nothing is swept there. Only the untrusted candidate is canonicalised, never the expectation. The residual (a differently-cased existing directory, or a parent
+    // that is itself a link, never matches) is the SAFE direction: nothing is deleted.
+    const ownedDir = (relDir) => {
+      const expected = path.join(root, relDir);
+      let real;
+      try {
+        real = fs.realpathSync.native(expected);
+      } catch {
+        return null; // absent or broken link -> nothing to sweep, never touch it
+      }
+      return real === expected ? expected : null;
+    };
+
     for (const relDir of SCRATCH_DIRS) {
-      const dir = path.join(root, relDir);
-      if (!contained(dir)) continue;
+      const dir = ownedDir(relDir);
+      if (!dir) continue;
       let names;
       try {
         names = fs.readdirSync(dir);
@@ -343,8 +359,8 @@ Verify the above against the working tree, then continue — or restart the task
     }
 
     for (const relDir of WORKTREE_DIRS) {
-      const base = path.join(root, relDir);
-      if (!contained(base)) continue;
+      const base = ownedDir(relDir);
+      if (!base) continue;
       let names;
       try {
         names = fs.readdirSync(base);
