@@ -88,12 +88,13 @@ export const GIT_ENV_EXEMPTIONS = [
   },
   // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): two byte-equal org carriers from the overlay template at .github 7afc4ef.
   // release-notes.mjs builds an explicit minimal env (PATH, the temp and home keys, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT; no GIT_ variable passes) and hands it to its one git
-  // spawn as the shorthand `env`, which the census reads as no env: key at all. release-notes.test.mjs gives its git children its own sandboxEnv(cwd), an allowlist plus a throwaway home
+  // spawn as the shorthand property `env` (the census reads that as `env: env`, a local const that is an allowlist object and not a gitEnv() call, so it still needs the row; an
+  // earlier wording of this row said the census read it as no env: key, which was a parser defect, fixed in 05a FIXBACK 1). release-notes.test.mjs gives its git children its own sandboxEnv(cwd), an allowlist plus a throwaway home
   // and a ceiling directory, not gitEnv(). Both are unreachable for the room (the umbrella's parity check forbids editing a carrier), so each row is pinned by blob id and deleted when the
   // canon carries the room helper and this room re-copies the file.
   {
     label: 'scripts/release-notes.mjs',
-    expr: null,
+    expr: 'env',
     count: 1,
     blob: '674592e0ff25dbdc14a8a4e21e6a598953b90eaa',
     reason: 'a byte-equal org carrier from the overlay template whose one git spawn takes an explicit minimal env object built from an allowlist with no GIT_ variable in it, pinned by blob id and deleted when the canon uses the room helper',
@@ -235,11 +236,28 @@ function aliasVerdict(name, fileText) {
   return null;
 }
 
+// 05a FIXBACK 1 (LOW-1): is there a SHORTHAND property `env` in an object literal of the call: `{ env }`, `{ env, a }`, `{ a, env }`, on one line or several? It means `env: env`. The character
+// before it must be `{`, or a `,` whose nearest enclosing bracket is a `{`: a positional `f(a, env)` or an array element `[a, env]` is not a property.
+function hasShorthandEnv(callText) {
+  const re = /([{,])\s*env\s*(?=[,}])/g;
+  let m;
+  while ((m = re.exec(callText))) {
+    if (m[1] === '{') return true;
+    let depth = 0;
+    for (let i = m.index - 1; i >= 0; i--) {
+      const c = callText[i];
+      if (c === ')' || c === ']' || c === '}') depth++;
+      else if (c === '(' || c === '[' || c === '{') { if (depth === 0) { if (c === '{') return true; break; } depth--; }
+    }
+  }
+  return false;
+}
+
 // null = the env is gitEnv() alone; otherwise { why, expr }.
 function envVerdict(callText, fileText) {
   const m = /\benv\s*:/.exec(callText);
-  if (!m) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
-  const expr = readExpr(callText, m.index + m[0].length, callText.length).trim();
+  if (!m && !hasShorthandEnv(callText)) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
+  const expr = m ? readExpr(callText, m.index + m[0].length, callText.length).trim() : 'env';
   if (/\bprocess\s*(?:\.\s*env\b|\[\s*['"`]env['"`]\s*\])/.test(expr)) {
     return { why: `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)`, expr };
   }
