@@ -45,11 +45,15 @@ function seed(tmp) {
 const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-verify-home-'));
 after(() => fs.rmSync(SANDBOX_HOME, { recursive: true, force: true }));
 const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR'];
+// R20 (thread 20): CLAUDE_CONFIG_DIR names the global config layer's directory and wins over the home directory (globalConfigPath), so it is dropped the same way and set
+// to a folder INSIDE the sandbox (absent there, so the global layer reads as defaults).
+const CONFIG_DIR_KEY = 'CLAUDE_CONFIG_DIR';
 function sandboxedEnv(env) {
   const out = {};
   // Windows env names are case-insensitive: drop the parent's own spelling of each key before setting ours, so no process sees both.
-  for (const [k, v] of Object.entries(env ?? process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v;
+  for (const [k, v] of Object.entries(env ?? process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase()) && k.toUpperCase() !== CONFIG_DIR_KEY) out[k] = v;
   for (const k of SANDBOXED_KEYS) out[k] = SANDBOX_HOME;
+  out[CONFIG_DIR_KEY] = path.join(SANDBOX_HOME, '.claude');
   return out;
 }
 
@@ -384,10 +388,13 @@ test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP
   fs.writeFileSync(path.join(tmp, 'scripts', 'verify.mjs'), [
     "import os from 'node:os';",
     "const e = process.env;",
-    "console.log(JSON.stringify({ HOME: e.HOME, USERPROFILE: e.USERPROFILE, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, GIT_DIR: e.GIT_DIR, home: os.homedir(), tmp: os.tmpdir() }));",
+    "console.log(JSON.stringify({ HOME: e.HOME, USERPROFILE: e.USERPROFILE, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR, GIT_DIR: e.GIT_DIR, home: os.homedir(), tmp: os.tmpdir() }));",
     '',
   ].join('\n'));
-  const r = run(tmp, { ...process.env, GIT_DIR: 'a-caller-git-dir' });
+  // R20 (CodeRabbit PR #19 thread 20): globalConfigPath() (lib/load-config.js:18, scripts/lib/config-load.mjs:17) reads CLAUDE_CONFIG_DIR BEFORE it falls back to the home
+  // directory, so a parent that exports it would still point the spawned gate's global config layer at the operator's real directory, whatever HOME says.
+  const operatorConfigDir = path.join(os.tmpdir(), 'an-operators-real-claude-config-dir');
+  const r = run(tmp, { ...process.env, GIT_DIR: 'a-caller-git-dir', CLAUDE_CONFIG_DIR: operatorConfigDir });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const seen = JSON.parse(r.stdout);
   const sandbox = seen.USERPROFILE;
@@ -398,4 +405,6 @@ test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP
   assert.notEqual(path.resolve(sandbox), path.resolve(os.homedir()), 'and it is not the real home');
   assert.notEqual(path.resolve(sandbox), path.resolve(os.tmpdir()), 'nor the shared temp directory itself');
   assert.equal(seen.GIT_DIR, 'a-caller-git-dir', 'a GIT_DIR the caller passes on purpose is kept (the CWK-133 tests rely on it)');
+  assert.notEqual(seen.CLAUDE_CONFIG_DIR, operatorConfigDir, "the operator's CLAUDE_CONFIG_DIR does not reach the child");
+  assert.equal(path.resolve(seen.CLAUDE_CONFIG_DIR), path.join(path.resolve(sandbox), '.claude'), 'CLAUDE_CONFIG_DIR is set INSIDE the throwaway directory, so the global layer resolves there');
 });
