@@ -676,3 +676,19 @@ test('UMB-174 (b): a NON-OBJECT global config (a JSON array) is reported, and th
   assert.strictEqual(countOf(r.stdout, 'UNREADABLE:'), 1);
   assert.ok(r.stdout.includes('(not a JSON object)'), r.stdout);
 });
+
+// 08a (BB-49 (1), UMB-456): a PROJECT config setting journal.outputDirectory is not used, and SessionStart (the one sanctioned channel) says so, once.
+test('08a: a project config setting journal.outputDirectory is REPORTED on SessionStart, standalone and once', (t) => {
+  const { home, cwd } = sandbox();
+  t.after(() => cleanup(home, cwd));
+  muteUpdate(home);
+  const file = path.join(cwd, '.claude', 'coal', 'coalhearth.json');
+  writeJson(file, { journal: { outputDirectory: 'src' } });
+  const r = runHook(cwd, home);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stderr, '');
+  const lines = r.stdout.split(/\r?\n/).filter(Boolean);
+  assert.strictEqual(lines.length, 1, JSON.stringify(r.stdout));
+  assert.ok(lines[0].startsWith('[CoalHearth] IGNORED: ' + file + ' sets journal.outputDirectory, which only the global config ('), lines[0]);
+  assert.ok(lines[0].endsWith('may set; its value is not used'), lines[0]);
+});

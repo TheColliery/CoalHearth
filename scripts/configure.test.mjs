@@ -92,14 +92,16 @@ test('--language OVER an existing malformed object value still lands as a plain 
 });
 
 // ---------------------------------------------------------------- nested write, no sibling clobber
+// 08a: this test used to write journal.outputDirectory then atomicityRetries into the PROJECT config; the project layer may no longer set outputDirectory (the loader ignores it,
+// configure refuses it, tests below), so the sibling pair is the update group's two project-writable keys. The behaviour under test (no sibling clobbered) is unchanged.
 test('a nested write does NOT clobber a sibling key already in the same group', (t) => {
   const dir = sandboxProject(t);
-  let r = run(dir, ['--journal.outputDirectory', '.claude/coalhearth']);
+  let r = run(dir, ['--update.updateMode', 'remind']);
   assert.equal(r.status, 0);
-  r = run(dir, ['--journal.atomicityRetries', '4']);
+  r = run(dir, ['--update.updateCheckDays', '20']);
   assert.equal(r.status, 0);
   const cfg = JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8'));
-  assert.deepEqual(cfg.journal, { outputDirectory: '.claude/coalhearth', atomicityRetries: 4 });
+  assert.deepEqual(cfg.update, { updateMode: 'remind', updateCheckDays: 20 });
 });
 
 test('two flags in the SAME group in ONE invocation both land, neither drops the other', (t) => {
@@ -144,11 +146,48 @@ test('enum type: a listed value (any case) parsed lowercase, an unlisted value r
   assert.match(r.stderr, /must be one of: ask, auto, remind, off/);
 });
 
+// 08a: the only string key is global-only now, so the string type is exercised through --global (a project run is refused, tests below).
 test('string type: any string value parsed as-is -- the case neither exemplar needed', (t) => {
   const dir = sandboxProject(t);
-  const r = run(dir, ['--journal.outputDirectory', 'somewhere/else']);
+  const homeDir = sandboxHome(t);
+  const r = run(dir, ['--global', '--journal.outputDirectory', 'somewhere/else'], { CLAUDE_CONFIG_DIR: homeDir });
   assert.equal(r.status, 0);
-  assert.equal(JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8')).journal.outputDirectory, 'somewhere/else');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(homeDir, '.coalhearth.json'), 'utf8')).journal.outputDirectory, 'somewhere/else');
+});
+
+// ---------------------------------------------------------------- 08a: journal.outputDirectory is GLOBAL-ONLY (BB-49 (1), UMB-456)
+// The loader IGNORES a project value for this key (hooks-safety.md section 9), so a project write would be a value that does nothing. It is refused, loudly, before anything is written.
+test('08a: --journal.outputDirectory on the PROJECT config is refused, names --global, and writes NOTHING', (t) => {
+  const dir = sandboxProject(t);
+  const r = run(dir, ['--journal.outputDirectory', 'src']);
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes('--journal.outputDirectory'), r.stderr);
+  assert.match(r.stderr, /--global/);
+  assert.equal(fs.existsSync(ownDirConfig(dir)), false, 'no config file was created');
+  assert.equal(fs.existsSync(path.join(dir, '.claude')), false, 'not even the directory');
+});
+
+test('08a: the refusal covers the WHOLE invocation -- a valid flag beside it is not written either, and an existing config is untouched', (t) => {
+  const dir = sandboxProject(t);
+  const p = ownDirConfig(dir);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const before = JSON.stringify({ language: 'en' });
+  fs.writeFileSync(p, before);
+  const r = run(dir, ['--journal.atomicityRetries', '2', '--journal.outputDirectory', 'src']);
+  assert.equal(r.status, 1);
+  assert.equal(fs.readFileSync(p, 'utf8'), before, 'the existing file is byte-exact');
+});
+
+test('08a: --global still writes journal.outputDirectory, and the help names it as global-only', (t) => {
+  const dir = sandboxProject(t);
+  const homeDir = sandboxHome(t);
+  const r = run(dir, ['--global', '--journal.outputDirectory', '.claude/custom'], { CLAUDE_CONFIG_DIR: homeDir });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(homeDir, '.coalhearth.json'), 'utf8')).journal.outputDirectory, '.claude/custom');
+  assert.equal(fs.existsSync(ownDirConfig(dir)), false, 'the project config is untouched');
+  const h = run(dir, ['--help']);
+  const row = h.stdout.split(String.fromCharCode(10)).find((l) => l.includes('--journal.outputDirectory ') && l.includes('Where session_handoff.json'));
+  assert.ok(row && /global/i.test(row), 'the help row says the key is set in the global config only: ' + row);
 });
 
 // ---------------------------------------------------------------- --global

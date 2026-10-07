@@ -909,3 +909,72 @@ test('L2: a directory at a canonical path is STILL reported when root == home (o
     assert.deepEqual(unreadableOf(api, { cwd: home, home }), [unreadableLine(dir, 'a directory')], name);
   }
 });
+
+// ---------------------------------------------------------------------------------------
+// 08a (BB-49 (1), UMB-456): journal.outputDirectory is GLOBAL-ONLY -- both twins, one table. See lib/load-config.test.js for the reasoning;
+// the project layer is IGNORED for this key (hooks-safety.md section 9), the global value stands, the schema default stands in when no
+// global value exists, and every other journal key still merges from the project.
+// ---------------------------------------------------------------------------------------
+const OD_LOCATIONS = [
+  path.join('.claude', 'coal', 'coalhearth.json'), path.join('.agents', 'coal', 'coalhearth.json'),
+  path.join('.gemini', 'coal', 'coalhearth.json'), NESTED, '.coalhearth.json',
+];
+const OD_DEFAULT = '.claude/coalhearth';
+const mergedOf = (api, o) => (api.loadMergedConfig || api.loadConfig)(o);
+
+for (const loc of OD_LOCATIONS) {
+  test('08a: a project config at ' + loc.split(path.sep).join('/') + ' setting journal.outputDirectory is IGNORED (both twins; atomicityRetries still merges)', (t) => {
+    hermetic(t);
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    put(root, loc, { journal: { outputDirectory: 'src', atomicityRetries: 4 } });
+    for (const [name, api] of CJS_ESM) {
+      const cfg = mergedOf(api, { cwd: sub, home });
+      assert.equal(cfg.journal.outputDirectory, OD_DEFAULT, name + ': no global value, the schema default stands in');
+      assert.equal(cfg.journal.atomicityRetries, 4, name);
+    }
+  });
+
+  test('08a: with a GLOBAL value, a project config at ' + loc.split(path.sep).join('/') + ' cannot override it (both twins)', (t) => {
+    hermetic(t);
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal' } });
+    put(root, loc, { journal: { outputDirectory: 'src' } });
+    for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, 'custom/journal', name);
+  });
+}
+
+test('08a: a GLOBAL journal.outputDirectory is still honoured; a project without the key leaves it untouched (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal', atomicityRetries: 2 } });
+  for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, 'custom/journal', name + ': global alone');
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 5 } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(mergedOf(api, { cwd: sub, home }).journal, { outputDirectory: 'custom/journal', atomicityRetries: 5 }, name);
+});
+
+test('08a: configNotices REPORTS a project config that sets journal.outputDirectory; says nothing when the project omits it or only the global sets it (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const gp = path.join(home, '.claude', '.coalhearth.json');
+  const file = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { outputDirectory: 'src' } });
+  const line = 'IGNORED: ' + file + ' sets journal.outputDirectory, which only the global config (' + gp + ') may set; its value is not used';
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [line], name);
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 3 } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [], name + ': project without the key');
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal' } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [], name + ': the global file setting it');
+});
+
+test('08a: a project value of ANY shape for journal.outputDirectory (null, empty, 0, false, array, object) is ignored, not only a non-empty string (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  for (const odd of [null, '', 0, false, ['src'], { a: 1 }]) {
+    put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { outputDirectory: odd } });
+    for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, OD_DEFAULT, name + ' ' + JSON.stringify(odd));
+  }
+});
