@@ -2,6 +2,14 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.7.0] - 2026-10-08
+
+Only your global config can now choose the journal folder.
+
+### Changed
+
+- **`journal.outputDirectory` is read from the global config only** *(shipped: `lib/load-config.js`)*. A project `.coalhearth.json` (in any of its read locations) can no longer set it: the value there is ignored, and the default `.claude/coalhearth` stands, or your global value if you set one. A project config arrives with whatever repository you clone, so it must not choose where CoalHearth writes. If you set it per project, move the key to `~/.claude/.coalhearth.json`, or run `node scripts/configure.mjs --global --journal.outputDirectory <dir>`; `configure.mjs` now refuses the flag without `--global` (exit 1, nothing written). When a project config sets the key, SessionStart prints one `IGNORED` line naming the file and the global path. The global value is still contained to the project root, not pinned to the default folder and not self-ignored. Other `journal` keys such as `atomicityRetries` still merge from the project. — test: `lib/load-config.test.js`, `scripts/lib/config-load.test.mjs`, `bin/post-tool-use.test.js`, `bin/session-start.test.js`, `scripts/configure.test.mjs`
+
 ## [2.6.3] - 2026-10-05
 
 A link planted at the journal folder is refused, not followed.
