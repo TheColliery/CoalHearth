@@ -590,3 +590,23 @@ test('08a: the GLOBAL journal.outputDirectory still moves the journal (contained
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// 08a FIXBACK 1 (INSPECT LOW-1): a project config whose `journal` is not a group (here 5) must not move the journal off the GLOBAL directory.
+test('08a FIXBACK 1: a project journal of 5 does not drop the GLOBAL journal.outputDirectory -- the journal lands where the global config points', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ journal: { outputDirectory: 'custom/journal' } }));
+    fs.mkdirSync(path.join(cwd, '.claude', 'coal'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'coal', 'coalhearth.json'), JSON.stringify({ journal: 5 }));
+    const r = run(cwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(fs.existsSync(path.join(cwd, 'custom', 'journal', 'session_handoff.json')), 'the global directory is honoured');
+    assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json')), 'not the default folder');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

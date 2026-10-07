@@ -251,9 +251,9 @@ function readJsonc(file, root) {
 // lib/load-config.js 1:1. See that file's comments for the full rationale (R2
 // factory-default ranking, R3's separate autoInjectPrompt reasoning, why
 // stashUnsavedChanges stays out of scope).
-// The two groups whose keys are clamped safer-value-wins (updateMode, autoInjectPrompt), and the shape test the
-// merge and the post-clamp both use (CWK-120 #2/#3).
-const CONSENT_GROUPS = new Set(['update', 'recovery']);
+// The groups that carry a clamped key: update and recovery (updateMode, autoInjectPrompt: safer-value-wins) and, since 08a, journal (outputDirectory: global-only). A PRESENT
+// non-group project value for one of them contributes nothing and the global group stands (the merge branch below). Plus the shape test the merge and the post-clamps use (CWK-120 #2/#3).
+const CONSENT_GROUPS = new Set(['update', 'recovery', 'journal']);
 function isGroup(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 const UPDATE_MODE_LOUDNESS = { off: 0, remind: 1, ask: 2, auto: 3 };
 const SCHEMA_DEFAULT_UPDATE_MODE = 'ask';
