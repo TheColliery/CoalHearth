@@ -11,7 +11,7 @@
 ![status](https://img.shields.io/badge/status-stable-brightgreen)
 
 ![Claude Code: validated](https://img.shields.io/badge/Claude_Code-validated-brightgreen)
-![Antigravity: works with](https://img.shields.io/badge/Antigravity-works_with-blue)
+![Antigravity: validated (plugin, headless)](https://img.shields.io/badge/Antigravity-validated_(plugin%2C_headless)-brightgreen)
 ![Gemini CLI: works with](https://img.shields.io/badge/Gemini_CLI-works_with-blue)
 ![Copilot CLI: works with](https://img.shields.io/badge/Copilot_CLI-works_with-blue)
 ![Devin CLI: works with](https://img.shields.io/badge/Devin_CLI-works_with-blue)
@@ -70,7 +70,7 @@ CoalHearth *is* two Phoenix-13 hooks (resume + journal), so it installs wherever
 | Platform | Tier | Events (resume + journal) | Wiring |
 |---|---|---|---|
 | Claude Code | **validated** | `SessionStart` + `PostToolUse` + `UserPromptSubmit` ² | plugin (automatic) |
-| Antigravity 2.0 | **works with** | first `PreInvocation` (once-per-session marker) + `PostToolUse` | [`platform-configs/hooks.json`](platform-configs/hooks.json) |
+| Antigravity 2.0 | **validated** (plugin path, headless `agy -p`; the global and project `hooks.json` paths stay unproven) | first `PreInvocation` (once-per-session marker) + `PostToolUse` | native plugin: [`plugin.json`](plugin.json) + [`hooks.json`](hooks.json) (or [`platform-configs/hooks.json`](platform-configs/hooks.json) for a global or project file) |
 | Gemini CLI ¹ | **works with** | `SessionStart` + `AfterTool` | [`platform-configs/hooks/gemini-settings-hooks.json`](platform-configs/hooks/gemini-settings-hooks.json) |
 | GitHub Copilot CLI | **works with** | `sessionStart` + `postToolUse` | [`platform-configs/hooks/copilot-cli-hooks.json`](platform-configs/hooks/copilot-cli-hooks.json) |
 | Devin CLI | **works with** | `SessionStart` + `PostToolUse` | [`platform-configs/hooks/devin-cli-hooks.json`](platform-configs/hooks/devin-cli-hooks.json) |
@@ -93,7 +93,9 @@ claude plugin install coalhearth@coalhearth
 
 That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
 
-### Antigravity — works with (no observed fire; three negative tests, two of them headless — see below)
+### Antigravity — validated on the plugin path, headless (`agy` 1.3.1, 2026-10-08); the global and project `hooks.json` paths stay unproven
+
+**Observed 2026-10-08 (plugin path):** on `agy` 1.3.1, headless `agy -p`, Windows, a copy of the plugin folder at `<workspace>/.agents/plugins/coalhearth` fired BOTH adapters: the journal was written under Antigravity's own conversation id, the resume block reached the model (it quoted the planted goal and next step), and a copy of the repository root and a `plugins.json` path entry behaved the same. This is the first observed fire of this room's own hook pair, and it is what **validated** asks for, for THIS path only. Limits of the evidence: the interactive IDE was not exercised; a junction to the folder is NOT discovered (copy it); `agy plugin list` does not list a folder-discovered plugin; `ask_question` is auto-skipped under `-p`; `agy plugin install <git url>` was checked by shape only (the repository-root tree), not end to end. The older tests below used a global or project `hooks.json`, never a plugin, and stay recorded as negative with their dates.
 
 **Documented:** Antigravity 2.0 ships a real hook engine (`hooks.json`; antigravity.google/docs/hooks, corroborated against the docs 2026-07-13), which **reopens** CoalHearth to AG — the old "Claude Code only, because no other agent runs hooks" premise no longer holds. The port is **built and hermetically tested** against that documented spec.
 
@@ -105,7 +107,7 @@ That's it — the hooks activate on your next session. No API keys, no network, 
 
 **Scope, stated precisely so this is not read as more disproven than it is:** what has been tested is **headless CLI hook firing**. The 2026-08-22/08-23 probes ran under `agy -p`; the 2026-08-04 test's execution channel was not recorded. **The interactive IDE (GUI-driven) path has never been exercised by any of these probes** — it is a genuinely different execution path, and nothing here says whether the same config fires there. Nor is any of this a claim that AG's hook engine is broken in general (a sibling plugin's `Stop` hook did fire on 2026-07-12, above). **works with** here means "built + tested against the documented spec"; it has never meant "confirmed to fire," and no **validated** claim for Antigravity follows until a real fire is observed.
 
-AG has no plugin manager, so the install is a file copy:
+Install as a native plugin (Antigravity 1.3.1 has `agy plugin install`, but the proven route is a folder copy): copy the plugin folder (the repository, or its `plugin/` dist) to `<project>/.agents/plugins/coalhearth` or `~/.gemini/config/plugins/coalhearth`, or add a path entry to `plugins.json`. It must be a real directory, not a junction. `plugin.json` and `hooks.json` at its root wire the two adapters; nothing else to configure. The older route, a `hooks.json` file copy, is below and is the one the negative tests used:
 
 ```powershell
 git clone https://github.com/TheColliery/CoalHearth.git --depth 1
@@ -115,7 +117,7 @@ Copy-Item -Recurse CoalHearth "$env:USERPROFILE\.gemini\config\skills\coalhearth
 
 Then copy [`platform-configs/hooks.json`](platform-configs/hooks.json) into `<workspace>/.agents/hooks.json` (per project) **or** `~/.gemini/config/hooks.json` (global), and replace `__COALHEARTH_DIR__` with the copied directory. Event mapping (AG never fires `SessionStart`): warm-resume rides the **first `PreInvocation`** of a session — a per-session temp marker keeps it once-per-session, since PreInvocation fires per model call — and the journal rides `PostToolUse`.
 
-Known limits on AG: **no fire has ever been observed for this room's hook pair — three independent negative tests (2026-08-04, plus headless `agy -p` probes on 2026-08-22 and 2026-08-23 against the shared `~/.gemini/config/hooks.json`), across different days and tool-call shapes, with real tool execution confirmed in each** — see above for what was ruled out. **No probe in this series has reached the interactive IDE (GUI-driven) path**, so an IDE user's result is unknown rather than negative. Re-test before relying on this platform · delivery of the injected context (the `injectSteps`/`ephemeralMessage` JSON) is not yet live-validated (above) · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
+Known limits on AG: **no fire was observed through a global or project `hooks.json` — three independent negative tests (2026-08-04, plus headless `agy -p` probes on 2026-08-22 and 2026-08-23 against the shared `~/.gemini/config/hooks.json`), with real tool execution confirmed in each** — see above for what was ruled out; the plugin path above is the one observed to fire. **No probe has reached the interactive IDE (GUI-driven) path**, so an IDE user's result is unknown rather than negative · the injected context (the `injectSteps`/`ephemeralMessage` JSON) was delivered on the plugin path (the model quoted it), on that one headless setup only · the `UserPromptSubmit` nudge and `commands/*.md` do not carry over · the AG tool-name map is best-effort beyond `write_to_file` (an unmapped tool is simply not journaled — never a wrong write) · the once-per-session temp markers are OS-reaped, not hook-deleted (AG has no end-of-session event) · the self-update nudge is deliberately not ported (its payload is a Claude-Code plugin command; on AG, update by re-copying).
 
 ### Gemini CLI · Copilot CLI · Devin CLI · Kiro · Augment — works with (config-only ports)
 
