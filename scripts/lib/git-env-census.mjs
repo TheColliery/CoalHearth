@@ -63,66 +63,59 @@ import { lex, codeTokens, inNonCode, decodeString, decodeIdent } from './js-lex.
 //
 // 08c UNIT 1, the 05a NAMED DIVERGENCE is RELEASED: scripts/release-notes.test.mjs was HELD at blob d2f5b830 because the canon's a8f3ba69 was red on macOS
 // (__CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE). The canon's 8cf7e5fd, re-synced here, names both keys in its CHILD_KEY_NAMES set (UMB-456 (1) i),
-// so the copy is byte-equal again and the divergence is gone from this room. Its two git helpers take sandboxEnv(cwd), which the census does not read: see the row below.
+// so the copy is byte-equal again and the divergence is gone from this room. 08d: its two git helpers take sandboxEnv(cwd), a same-file helper that returns one allowlist literal, which the census now READS (no row).
 //
 // The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
 // COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
 // stale. The reason is printed by the gate: keep it free of parentheses.
 export const GIT_ENV_EXEMPTIONS = [
-  // CWK-174 (R14), moved at 05a and again at 08c: byte-equal org carriers. Each row below was decided at 08c from the census's own output on the NEW bytes, as 05a did.
-  // secret-gate.test.mjs is now .github 690c2de, blob a17ae233 (the nested-run witness pins its reporter to tap). MEASURED: the same line, the same expression and the same count,
-  // because the canon keeps its own GIT_-stripping helper plus the per-call overlay, so the row stays and its pin moves to the new blob.
-  {
-    label: 'scripts/secret-gate.test.mjs',
-    expr: '{ ...gitEnv(), ...extra }',
-    count: 1,
-    blob: 'a17ae233275c05c6d030f7aa7f0654002b310356',
-    reason: 'a byte-equal org carrier at blob a17ae233 from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
-  },
-  // secret-scan.test.mjs is now the Bankfire source, blob 4433fb56 (LWK2-014 moved the scanner there). MEASURED: the old row (three spawns with no env: at all, blob a9cb7145) matches
-  // NOTHING on the new bytes, because the carrier now hands every fixture git call an explicit env, so that row is DELETED. One spawn is still not a gitEnv() call: the decoy-repository
-  // check takes cleanEnv, a copy of the environment with the whole GIT_ family filtered out. It does what gitEnv() does in another spelling, and the census cannot read a filter, so it
-  // gets its own row, pinned.
-  {
-    label: 'scripts/secret-scan.test.mjs',
-    expr: 'cleanEnv',
-    count: 1,
-    blob: '4433fb56bc97d1facc3fb27804e1934c0577115f',
-    reason: 'a byte-equal org carrier at blob 4433fb56 from the Bankfire scanner source whose one decoy repository check takes cleanEnv, a copy of the environment with the whole GIT_ family filtered out, the effect of gitEnv in another spelling, pinned by blob id and deleted when the canon uses the room helper',
-  },
-  // release-notes.test.mjs is now the overlay canon, blob 8cf7e5fd. MEASURED: two spawns, lines 269 and 282, take sandboxEnv(cwd). That is a call to a local function that builds an explicit
-  // allowlist (PATH and SystemRoot from the parent, a scratch HOME and TEMP, a git ceiling, nothing else), so no GIT_DIR can reach the child; but the allowlist rule reads an object literal,
-  // not a function call, and this builder carries no GIT_CONFIG_NOSYSTEM, so it is not that shape and the pin is needed.
-  {
-    label: 'scripts/release-notes.test.mjs',
-    expr: 'sandboxEnv(cwd)',
-    count: 2,
-    blob: '8cf7e5fd58b89d051395efc53cc0a4f6c86848da',
-    reason: 'a byte-equal org carrier at blob 8cf7e5fd from the overlay template whose two git helpers take sandboxEnv, a local function that builds an explicit allowlist of PATH and a scratch HOME with a git ceiling and no GIT_ variable from the parent, pinned by blob id and deleted when the canon uses the room helper',
-  },
-  // 08d (witness F42, the NAME gitEnv is no longer trusted): a file that DEFINES its own gitEnv helper is judged on the helper's body, and these three carriers define one that strips the
-  // GIT_ family from a copy of the environment (a filter, which the census does not read) instead of naming keys. MEASURED on the bytes below: each spawn that reads the local helper is
-  // refused until its file is pinned. The room's own helper is imported from scripts/lib/git-env.mjs and needs no row.
+  // CWK-174 (R14), moved at 05a, 08c and 08d: byte-equal org carriers. Each row below was decided at 08d from the census's own output on the NEW bytes, as 05a and 08c did. A file that defines its
+  // OWN gitEnv helper is judged on the helper's body (witness F42, the NAME gitEnv is trusted only for the room's imported helper), and the three carriers below define one that strips the
+  // GIT_ family from a copy of the environment (a filter, which the census does not read) instead of naming keys, so each is pinned by blob id.
+  // 08d MEASURED, re-copy of the five canon files: scripts/release-notes.test.mjs at blob 7e779ef8 needs NO row any more (its two git helpers now read as clean on the new bytes, the
+  // sandboxEnv(cwd) row and its two spawns are gone from the printed count); scripts/verify-release-shape.test.mjs at fa8a730d has no git spawn the census reads.
+  // scripts/secret-gate.mjs is .github blob 856956a1: its gitEnv keeps GIT_INDEX_FILE (the index a commit is made from), a GIT_ name outside the three the allowlist rule accepts.
   {
     label: 'scripts/secret-gate.mjs',
     expr: 'gitEnv()',
     count: 2,
-    blob: '044ec4464e83895f1a988198c93b73300652bdf2',
-    reason: 'a byte-equal org carrier at blob 044ec446 whose own gitEnv helper strips the GIT_ family from a copy of the environment and keeps GIT_INDEX_FILE and GIT_CEILING_DIRECTORIES, pinned by blob id and deleted when the canon imports the room helper',
+    blob: '856956a1cca6f716e5507f6c23ac90ed34cbbe5f',
+    reason: 'a byte-equal org carrier at blob 856956a1 whose own gitEnv helper strips the GIT_ family from a copy of the environment and keeps GIT_INDEX_FILE and GIT_CEILING_DIRECTORIES, pinned by blob id and deleted when the canon imports the room helper',
+  },
+  // scripts/secret-gate.test.mjs is .github blob 71452210: three spawns at lines 40, 200 and 225. Its own gitEnv (line 28) is an object literal that names GIT_CONFIG_GLOBAL, outside the three
+  // harmless GIT_ names; the line 40 spawn overlays a per-call extra on it.
+  {
+    label: 'scripts/secret-gate.test.mjs',
+    expr: '{ ...gitEnv(), ...extra }',
+    count: 1,
+    blob: '71452210d6a6f793895bc502557fce7e1f3e890c',
+    reason: 'a byte-equal org carrier at blob 71452210 from the published-code template whose env is its own GIT_-stripping helper plus a per-call overlay, pinned by blob id and deleted when the canon uses the room helper',
   },
   {
     label: 'scripts/secret-gate.test.mjs',
     expr: 'gitEnv()',
     count: 2,
-    blob: 'a17ae233275c05c6d030f7aa7f0654002b310356',
-    reason: 'a byte-equal org carrier at blob a17ae233 whose own gitEnv helper strips the GIT_ family from a copy of the environment and sets GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
+    blob: '71452210d6a6f793895bc502557fce7e1f3e890c',
+    reason: 'a byte-equal org carrier at blob 71452210 whose own gitEnv helper names GIT_CONFIG_GLOBAL beside GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
   },
+  // scripts/secret-scan.test.mjs is the Bankfire source, blob d0db994d. MEASURED: the old cleanEnv row is DELETED (the decoy-repository check now takes its env from gitStatus, which reads gitEnv),
+  // and five spawns (lines 547, 548, 715, 820, 825) take the carrier's own gitEnv, an arrow that assigns its object to a witness variable (envSeen = {...}) and spreads a GIT_-stripping filter:
+  // not a literal the census reads, so the file is pinned.
   {
     label: 'scripts/secret-scan.test.mjs',
     expr: 'gitEnv()',
-    count: 4,
-    blob: '4433fb56bc97d1facc3fb27804e1934c0577115f',
-    reason: 'a byte-equal org carrier at blob 4433fb56 from the Bankfire scanner source whose own gitEnv helper strips the GIT_ family from a copy of the environment and sets GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
+    count: 5,
+    blob: 'd0db994df855ccd647f3ded878a6867bb198e196',
+    reason: 'a byte-equal org carrier at blob d0db994d from the Bankfire scanner source whose own gitEnv helper strips the GIT_ family from a copy of the environment and sets GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
+  },
+  // The same file's one NON-LITERAL command (line 561): the 8.3 short-name probe runs the shell named by the ComSpec variable on a generated .cmd file in the sandbox, with the GIT_-stripped environment.
+  // It is not git, but the census cannot prove a computed command is not git, so it is a command row: pinned by blob id, counted, printed.
+  {
+    label: 'scripts/secret-scan.test.mjs',
+    command: "process.env.ComSpec || 'cmd.exe'",
+    count: 1,
+    blob: 'd0db994df855ccd647f3ded878a6867bb198e196',
+    reason: 'a byte-equal org carrier at blob d0db994d whose 8.3 short-name probe runs the shell named by ComSpec on a generated script file in its sandbox and is not git, pinned by blob id and deleted when the canon spells the command as a literal',
   },
   // 08c (UMB-456 (2) rule (a)): the row for scripts/release-notes.mjs (05a, blob 674592e0) is GONE. That file builds its env from an allowlist, and the census
   // now accepts that shape (the paragraph before SAFE_GIT_KEYS), so the carrier needs no pin and its re-syncs cannot spend or strand one.
@@ -796,6 +789,24 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       };
       const cmds = fe0 === fs0 + 1 ? variants(ft) : null;
       if (cmds === null) {
+        // 08d: a COMMAND row (command: the first argument's source) pins ONE non-literal command in one byte-equal carrier, by blob id and count -- never a blanket pass for a file
+        const cmdSrc = normalise(srcOf(F, fs0, fe0));
+        const sameCmd = (e) => e.command !== undefined && e.label === label && normalise(e.command) === cmdSrc;
+        const exC = exemptions.find((e) => sameCmd(e) && (e.blob === undefined || blobId(text) === e.blob));
+        if (exC) {
+          const n = (matched.get(exC) || 0) + 1;
+          matched.set(exC, n);
+          const entry = { label, line, fn, exempt: true };
+          gitSpawns.push(entry);
+          if (n <= (exC.count ?? 1)) { exempt.push({ label, line, expr: `command ${cmdSrc}`, reason: exC.reason }); continue; }
+          findings.push(`${label}:${line} ${fn}(...) command ${cmdSrc} matches the exemption for ${exC.label}, which allows ${exC.count ?? 1} spawn(s) -- this is spawn ${n}; a new spawn needs its own exemption`);
+          continue;
+        }
+        const pinnedC = exemptions.find((e) => sameCmd(e));
+        if (pinnedC) {
+          findings.push(`${label}:${line} ${fn}(...) command ${cmdSrc} is exempt only at blob ${pinnedC.blob}, and this file's blob id is ${blobId(text)}: re-derive the row from the template or drop the pin with its reason`);
+          continue;
+        }
         findings.push(`${label}:${line} ${fn}(...) command is not a string literal or process.execPath -- the census cannot prove it is not git; spell the command as a literal`);
         continue;
       }
@@ -827,7 +838,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
         allowlist.push({ label, line, expr: normalise(v.expr), kind: v.kind });
         continue;
       }
-      const sameSpawn = (e) => e.label === label && (e.expr === null ? v.expr === null : v.expr !== null && normalise(e.expr) === normalise(v.expr));
+      const sameSpawn = (e) => e.command === undefined && e.label === label && (e.expr === null ? v.expr === null : v.expr !== null && normalise(e.expr) === normalise(v.expr));
       const pinOk = (e) => e.blob === undefined || blobId(text) === e.blob;
       const ex = exemptions.find((e) => sameSpawn(e) && pinOk(e));
       if (!ex) {
@@ -856,7 +867,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
   }
   // Stale: fewer spawns than the entry counts (none at all included). More than it counts is already a finding.
   const unusedExemptions = exemptions
-    .map((e) => ({ label: e.label, expr: e.expr, want: e.count ?? 1, matched: matched.get(e) || 0 }))
+    .map((e) => ({ label: e.label, expr: e.command !== undefined ? `command ${e.command}` : e.expr, want: e.count ?? 1, matched: matched.get(e) || 0 }))
     .filter((e) => e.matched < e.want);
   return { findings, gitSpawns, exempt, allowlist, unusedExemptions, nodeChildren };
 }

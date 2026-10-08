@@ -936,3 +936,57 @@ test('08d rules: a comment inside an allowlist literal that names a GIT_ variabl
 test('08d rules: process[env] is a mention of the environment, named so in the finding', () => {
   refused(raw(BINDINGS + R_SPAWN(`process['env']`)), 'process[env]', /mentions process\.env/);
 });
+
+// 08d: the COMMAND row. A command that is not a string literal is a finding no env row can cover; one byte-equal carrier needs it once, so a row may name the command's source,
+// pinned by blob id and counted, exactly as an env row does.
+const C_TEXT = `${R_HEAD}const r = ${SP}(process.env.ComSpec || 'cmd.exe', ['/c', script], { env: other });\n`;
+const C_ROW = (over = {}) => ({ label: 'scripts/carrier.test.mjs', command: "process.env.ComSpec || 'cmd.exe'", count: 1, blob: blobId(C_TEXT), reason: 'a computed shell that is not git', ...over });
+
+test('08d command row: with no row a computed command is a finding; with a pinned row it is exempt, counted and printed', () => {
+  const none = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: C_TEXT }], { exemptions: [] });
+  assert.equal(none.findings.length, 1);
+  assert.match(none.findings[0], /command is not a string literal/);
+  const row = C_ROW();
+  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: C_TEXT }], { exemptions: [row] });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.exempt.length, 1);
+  assert.equal(r.exempt[0].reason, row.reason);
+  assert.match(r.exempt[0].expr, /^command /);
+  assert.equal(r.gitSpawns.length, 1, 'counted with the spawns, so the printed arithmetic adds up');
+  assert.deepEqual(r.unusedExemptions, []);
+});
+
+test('08d command row: a changed file (another blob) is a finding naming the pin', () => {
+  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: C_TEXT + '// edited\n' }], { exemptions: [C_ROW()] });
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0], /exempt only at blob/);
+  assert.equal(r.exempt.length, 0);
+});
+
+test('08d command row: another file, another command, or one spawn too many is a finding', () => {
+  assert.equal(censusGitSpawns([{ label: 'scripts/other.test.mjs', text: C_TEXT }], { exemptions: [C_ROW()] }).findings.length, 1, 'another label');
+  const other = C_TEXT.replace('process.env.ComSpec', 'process.env.Other');
+  assert.equal(censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: other }], { exemptions: [C_ROW({ blob: undefined })] }).findings.length, 1, 'another command');
+  const twice = C_TEXT + C_TEXT.split('\n')[1] + '\n';
+  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: twice }], { exemptions: [C_ROW({ blob: undefined })] });
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0], /allows 1 spawn/);
+});
+
+test('08d command row: a row whose spawn is gone is reported as unused, so it cannot outlive its content', () => {
+  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: `${R_HEAD}const a = 1;\n` }], { exemptions: [C_ROW({ blob: undefined })] });
+  assert.equal(r.unusedExemptions.length, 1);
+  assert.match(r.unusedExemptions[0].expr, /^command /);
+});
+
+test('08d command row: a file with a command row AND an env row judges each spawn by its own row, in either order', () => {
+  const text = `${R_HEAD}const r = ${SP}(process.env.ComSpec || 'cmd.exe', ['/c', script], { env: other });\n${SP}('git', ['x'], { env: wrapped(1) });\n`;
+  const envRow = { label: 'scripts/carrier.test.mjs', expr: 'wrapped(1)', count: 1, reason: 'a wrapper' };
+  const cmdRow = C_ROW({ blob: undefined });
+  for (const rows of [[cmdRow, envRow], [envRow, cmdRow]]) {
+    const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text }], { exemptions: rows });
+    assert.deepEqual(r.findings, []);
+    assert.equal(r.exempt.length, 2);
+    assert.deepEqual(r.unusedExemptions, []);
+  }
+});
