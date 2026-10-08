@@ -441,3 +441,115 @@ test('08b verify.mjs negative path: an AG plugin.json with the wrong name FAILs 
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// 08b AG FIXBACK 1 (INSPECT LOW-1 and LOW-2): the Antigravity block must refuse what AG would load and then fail on. Each case plants the SAME hooks.json at the root and in
+// plugin/ (so dist parity stays clean and only the Antigravity block can speak) inside a room copy that sits in its own box, so a command can name a file ONE LEVEL ABOVE the
+// plugin folder (outside.js, which exists) without touching the shared temp root.
+const SHIPPED_AG = JSON.parse(fs.readFileSync(path.join(repo, 'hooks.json'), 'utf8')).coalhearth;
+const AG_PRE = SHIPPED_AG.PreInvocation;
+const AG_POST = SHIPPED_AG.PostToolUse;
+
+function agBox() {
+  const box = mkTmp();
+  const room = path.join(box, 'room');
+  fs.mkdirSync(room);
+  seed(room);
+  fs.writeFileSync(path.join(box, 'outside.js'), '// exists, but outside the plugin folder\n');
+  return { box, room };
+}
+function plantHooks(room, obj) {
+  const text = JSON.stringify(obj, null, 2) + '\n';
+  fs.writeFileSync(path.join(room, 'hooks.json'), text);
+  fs.writeFileSync(path.join(room, 'plugin', 'hooks.json'), text);
+}
+function agFailLines(r) {
+  return r.stdout.split(/\r?\n/).filter((l) => l.includes('FAIL'));
+}
+
+const AG_FAIL_CASES = [
+  ['LOW-1: a command naming a script OUTSIDE the plugin folder (it exists) FAILs by name', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../outside.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: \.\.\/outside\.js is outside the plugin folder/],
+  ['LOW-2: an event value that is not an array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: { matcher: '*', hooks: AG_POST[0].hooks } } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*not an array/],
+  ['LOW-2: a grouped event whose group has no hooks array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ matcher: '*' }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*hooks/],
+  ['LOW-2: a grouped event whose group has no matcher FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ hooks: AG_POST[0].hooks }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*matcher/],
+  ['LOW-2: a flat event written in the grouped shape (a handler list that is not objects) FAILs', { coalhearth: { PreInvocation: ['node bin/ag-pre-invocation.js PreInvocation'], PostToolUse: AG_POST } }, /FAIL hooks\.json coalhearth\.PreInvocation: .*not a handler object/],
+  ['LOW-2: a named hook with enabled:false FAILs (AG documents enabled:false as "disabled")', { coalhearth: { enabled: false, PreInvocation: AG_PRE, PostToolUse: AG_POST } }, [/FAIL hooks\.json coalhearth: .*disabled/, /FAIL hooks\.json: no PreInvocation handler/, /FAIL hooks\.json: no PostToolUse handler/]],
+  ['an event name that is not one of AG\'s five FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: AG_POST, SessionStart: AG_PRE } }, /FAIL hooks\.json coalhearth\.SessionStart is not one of AG's five events/],
+  ['LOW-2: a named hook with a non-boolean enabled FAILs', { coalhearth: { enabled: 'no', PreInvocation: AG_PRE, PostToolUse: AG_POST } }, /FAIL hooks\.json coalhearth: .*enabled/],
+  ['LOW-2: a missing PreInvocation FAILs (the product is the pair)', { coalhearth: { PostToolUse: AG_POST } }, /FAIL hooks\.json: no PreInvocation handler/],
+  ['LOW-2: a missing PostToolUse FAILs (the product is the pair)', { coalhearth: { PreInvocation: AG_PRE } }, /FAIL hooks\.json: no PostToolUse handler/],
+];
+for (const [name, hooks, expected] of AG_FAIL_CASES) {
+  test('08b AG FIXBACK 1, verify.mjs negative path: ' + name, () => {
+    const { box, room } = agBox();
+    try {
+      plantHooks(room, hooks);
+      const r = run(room);
+      assert.equal(r.status, 1, 'must FAIL, got:\n' + r.stdout + r.stderr);
+      for (const re of [].concat(expected)) assert.match(agFailLines(r).join('\n'), re, 'the FAIL lines name the item and the reason:\n' + r.stdout);
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+}
+
+test('08b AG FIXBACK 1, verify.mjs: a traversal that comes back INSIDE the plugin folder (bin/../bin/x) resolves under it and passes, like the shell AG runs would resolve it', () => {
+  const { box, room } = agBox();
+  try {
+    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/../bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
+    const r = run(room);
+    assert.equal(r.status, 0, 'got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /ok +hooks\.json PreInvocation -> bin\/\.\.\/bin\/ag-pre-invocation\.js/);
+  } finally {
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});
+
+// FIXBACK 1, the cases the mutation table asked for: a named hook that is not an object; a script reached THROUGH A LINK that leaves the folder (realpath containment; a directory
+// junction needs no privilege on Windows, a capability probe skips visibly where a link cannot be made); and a script at the folder root whose name merely STARTS with two dots
+// (it is inside, so the containment test must read path segments, not a string prefix).
+test('08b AG FIXBACK 1, verify.mjs negative path: a named hook that is not an object FAILs', () => {
+  const { box, room } = agBox();
+  try {
+    plantHooks(room, { coalhearth: 5 });
+    const r = run(room);
+    assert.equal(r.status, 1, 'got:\n' + r.stdout + r.stderr);
+    assert.match(agFailLines(r).join('\n'), /FAIL hooks\.json coalhearth: not an object/);
+  } finally {
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});
+
+test('08b AG FIXBACK 1, verify.mjs negative path: a script reached through a link that leaves the plugin folder FAILs (realpath containment)', (t) => {
+  const { box, room } = agBox();
+  try {
+    const outDir = path.join(box, 'out-dir');
+    fs.mkdirSync(outDir);
+    fs.writeFileSync(path.join(outDir, 'x.js'), '// outside\n');
+    try {
+      fs.symlinkSync(outDir, path.join(room, 'bin', 'linkdir'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (e) {
+      t.skip('this volume cannot make a directory link here: ' + (e && e.code));
+      return;
+    }
+    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/linkdir/x.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
+    const r = run(room);
+    assert.equal(r.status, 1, 'got:\n' + r.stdout + r.stderr);
+    assert.match(agFailLines(r).join('\n'), /FAIL hooks\.json PreInvocation: bin\/linkdir\/x\.js resolves through a link to outside the plugin folder/);
+  } finally {
+    try { fs.rmdirSync(path.join(room, 'bin', 'linkdir')); } catch { /* absent, or no link was made */ } // unlink the link itself; the recursive delete below never walks through it
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});
+
+test('08b AG FIXBACK 1, verify.mjs: a script at the folder root whose name starts with two dots is INSIDE the folder (no containment FAIL)', () => {
+  const { box, room } = agBox();
+  try {
+    fs.copyFileSync(path.join(room, 'bin', 'ag-pre-invocation.js'), path.join(room, '..adapter.js'));
+    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ..adapter.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
+    const r = run(room);
+    assert.match(r.stdout, /ok +hooks\.json PreInvocation -> \.\.adapter\.js/);
+    assert.doesNotMatch(r.stdout, /outside the plugin folder/);
+  } finally {
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});

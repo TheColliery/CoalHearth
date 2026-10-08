@@ -70,34 +70,61 @@ try {
 } catch (e) { fail(`plugin manifest: ${e.message}`); }
 
 // 08b (CWK-202 pilot): the Antigravity plugin (agy-customizations/docs/plugins.md + hooks.md). plugin.json names the plugin; hooks.json uses only AG's five events, command
-// handlers with a timeout inside AG's 30 s default, and commands RELATIVE to the directory holding hooks.json (AG runs a hook from there) naming a script that exists.
-// A hooks.json naming a missing adapter would load on AG and fail on every model call, so it is gated here.
+// handlers with a timeout inside AG's 30 s default, and commands RELATIVE to the directory holding hooks.json (AG runs a hook from there) naming a script that exists INSIDE
+// that folder (resolve + relative, then realpath: a `..` that leaves it exists on this clone and not on an install, and every hook then fails on AG). A hooks.json naming a
+// missing adapter would load on AG and fail on every model call, so it is gated here.
+// FIXBACK 1 (INSPECT LOW-1, LOW-2): the block also refuses what AG would silently skip or switch off: an event that is not an array, a PreToolUse/PostToolUse group without its
+// matcher string or hooks array, a handler that is not an object, a named hook with enabled:false (docs/hooks.md: "Set enabled to false to disable"), and a file with no
+// PreInvocation or no PostToolUse handler on an enabled hook (the product is the pair: the resume block and the journal). A path that leaves the folder and comes back
+// (bin/../bin/x) resolves inside it, so it passes: the shell AG runs it through resolves it the same way.
 console.log('Antigravity plugin (plugin.json + hooks.json):');
 try {
   const AG_EVENTS = ['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop'];
+  const AG_GROUPED = ['PreToolUse', 'PostToolUse']; // matcher + hooks wrapper; the other three events take a flat handler list (docs/hooks.md)
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const leaves = (rel) => rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
   const am = JSON.parse(fs.readFileSync(path.join(repo, 'plugin.json'), 'utf8'));
   if (am.name === 'coalhearth') ok("plugin.json name = 'coalhearth'"); else fail(`plugin.json name = '${am.name}' (want 'coalhearth')`);
   const ah = JSON.parse(fs.readFileSync(path.join(repo, 'hooks.json'), 'utf8'));
+  const realRepo = fs.realpathSync.native(repo);
+  const live = { PreInvocation: 0, PostToolUse: 0 }; // handlers on ENABLED named hooks: the pair
   let handlers = 0;
   for (const [hookName, spec] of Object.entries(ah)) {
+    if (!isObj(spec)) { fail(`hooks.json ${hookName}: not an object`); continue; }
+    let enabled = true;
+    if ('enabled' in spec) {
+      if (typeof spec.enabled !== 'boolean') fail(`hooks.json ${hookName}: enabled is '${spec.enabled}' (want true or false)`);
+      else if (spec.enabled === false) { fail(`hooks.json ${hookName}: the hook is disabled (enabled: false), so AG loads none of its handlers`); enabled = false; }
+    }
     for (const [event, entries] of Object.entries(spec)) {
       if (event === 'enabled') continue;
       if (!AG_EVENTS.includes(event)) { fail(`hooks.json ${hookName}.${event} is not one of AG's five events`); continue; }
-      for (const entry of Array.isArray(entries) ? entries : []) {
-        const hs = (event === 'PreToolUse' || event === 'PostToolUse') ? (entry.hooks || []) : [entry];
+      const label = `${hookName}.${event}`;
+      if (!Array.isArray(entries)) { fail(`hooks.json ${label}: not an array`); continue; }
+      for (const entry of entries) {
+        let hs = [entry];
+        if (AG_GROUPED.includes(event)) {
+          if (!isObj(entry) || typeof entry.matcher !== 'string') { fail(`hooks.json ${label}: a group needs a matcher string`); continue; }
+          if (!Array.isArray(entry.hooks)) { fail(`hooks.json ${label}: a group needs a hooks array`); continue; }
+          hs = entry.hooks;
+        }
         for (const h of hs) {
+          if (!isObj(h)) { fail(`hooks.json ${label}: an entry is not a handler object`); continue; }
           handlers++;
           const parts = String(h.command || '').split(' ');
           const script = parts[1];
           if (h.type !== 'command') fail(`hooks.json ${event}: handler type '${h.type}' (AG supports only command)`);
           else if (!(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 30)) fail(`hooks.json ${event}: timeout '${h.timeout}' (want an integer 1-30, AG's default is 30)`);
           else if (parts[0] !== 'node' || !script || path.isAbsolute(script)) fail(`hooks.json ${event}: command '${h.command}' is not 'node <path relative to hooks.json>'`);
-          else if (!fs.existsSync(path.join(repo, script))) fail(`hooks.json ${event}: ${script} does not exist (the command names a missing adapter)`);
-          else ok(`hooks.json ${event} -> ${script}`);
+          else if (leaves(path.relative(repo, path.resolve(repo, script)))) fail(`hooks.json ${event}: ${script} is outside the plugin folder (AG runs the command from the folder holding hooks.json, and on an install that path does not exist)`);
+          else if (!fs.existsSync(path.resolve(repo, script))) fail(`hooks.json ${event}: ${script} does not exist (the command names a missing adapter)`);
+          else if (leaves(path.relative(realRepo, fs.realpathSync.native(path.resolve(repo, script))))) fail(`hooks.json ${event}: ${script} resolves through a link to outside the plugin folder`);
+          else { ok(`hooks.json ${event} -> ${script}`); if (enabled && event in live) live[event]++; }
         }
       }
     }
   }
+  for (const event of Object.keys(live)) if (!live[event]) fail(`hooks.json: no ${event} handler on an enabled hook (the product is the pair: the resume block and the journal)`);
   if (handlers === 0) fail('hooks.json declares no handler');
 } catch (e) { fail(`Antigravity plugin: ${e.message}`); }
 
