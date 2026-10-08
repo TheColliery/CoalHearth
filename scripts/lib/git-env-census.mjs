@@ -53,6 +53,7 @@
 // gate walks (see the wiring there).
 
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { lex, codeTokens, inNonCode, decodeString, decodeIdent } from './js-lex.mjs';
 
 // BLOB-PINNED rows (CWK-174, R14): a row may carry `blob`, a git blob id (git hash-object <file>). It then applies ONLY while the
@@ -217,15 +218,22 @@ export function blobId(text) {
 // call that takes it (`fill(env)`, `Reflect.set(env, ...)`, `Object(env)`) or a method on it (`env.__defineGetter__(...)`) is a finding. The old direct-mutation scan
 // stays beside it as the sharper message.
 //
-// And a NAME is no longer trusted: gitEnv/gitTestEnv are trusted only when the file IMPORTS them from the room's git-env.mjs (F42). A file that defines its own helper of that
+// And a NAME is no longer trusted: gitEnv/gitTestEnv are trusted only when the file IMPORTS it from the room's own scripts/lib/git-env.mjs, the specifier resolved from the importing file's path (F42; the 08d INSPECT LOW). A file that defines its own helper of that
 // name is judged on the helper's body (an allowlist literal passes as a helper), otherwise it needs a blob-pinned row.
 //
 // What this still does not see, named: a callee or an env object reached by a path the tokens do not show (a value returned from a call, a property of another object,
 // a mutation through a function the env is passed to under another spelling), and a hole in the tokenizer's regex-or-division guess (js-lex.mjs states it).
 const SAFE_GIT_KEYS = new Set(['GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'GIT_CEILING_DIRECTORIES']);
 const isSafeGitName = (k) => !/^git_/i.test(k) || SAFE_GIT_KEYS.has(k.toUpperCase());
-const TRUSTED_HELPER_NAMES = new Set(['gitEnv', 'gitTestEnv']);
-const TRUSTED_HELPER_MODULE = /(^|[\\/])git(-test)?-env\.mjs$/;
+// 08c unit 2 (the 08d INSPECT LOW): the trusted helper is ONE file of THIS room, scripts/lib/git-env.mjs, and the import specifier is resolved against the importing file's own path.
+// A basename test trusted a git-env.mjs of any tree, a bare 'git-env.mjs' and a URL; the room has no git-test-env.mjs, so gitTestEnv is not a trusted name here (canon carriers of
+// other rooms that import it are judged as any local helper: by its body, or by a pinned row).
+const TRUSTED_HELPER_NAMES = new Set(['gitEnv']);
+const TRUSTED_HELPER_FILE = 'scripts/lib/git-env.mjs';
+const isRoomHelperSpecifier = (label, spec) => {
+  if (typeof spec !== 'string' || !(spec.startsWith('./') || spec.startsWith('../'))) return false;
+  return path.posix.normalize(path.posix.join(path.posix.dirname(String(label).replace(/\\/g, '/')), spec)) === TRUSTED_HELPER_FILE;
+};
 const OPEN = { '(': ')', '[': ']', '{': '}' };
 
 // Pair every bracket (and template hole) of the code tokens and record the innermost opener before each token; null when the brackets do not balance.
@@ -334,7 +342,31 @@ function statementEnds(F, last) {
 const ok = (kind) => ({ ok: true, kind });
 const no = (reason, extra = {}) => ({ ok: false, reason, ...extra });
 
-// Is `name` bound to the room's own helper by an import? A static import from a git-env.mjs, or a dynamic one whose call names such a module.
+// verify.mjs loads the helper at run time from the room root: `import(pathToFileURL(path.join(ROOT, 'scripts', 'lib', 'git-env.mjs')).href)`. That one idiom is read: the trailing
+// literal segments must spell the room helper's path. Named limit: ROOT is an identifier the census cannot resolve, so it is taken to be the room root (verify.mjs's own `repo`).
+function isRoomHelperJoin(F, a, b) {
+  const ct = F.ct;
+  let k = a;
+  if (!(isId(ct[k], 'pathToFileURL') && isP(ct[k + 1], '('))) return false;
+  const urlClose = F.idx.pair[k + 1];
+  if (!(isP(ct[urlClose + 1], '.') && isId(ct[urlClose + 2], 'href') && urlClose + 3 === b)) return false;
+  k += 2;
+  if (isId(ct[k], 'path') && isP(ct[k + 1], '.')) k += 2;
+  if (!(isId(ct[k], 'join') && isP(ct[k + 1], '('))) return false;
+  if (F.idx.pair[k + 1] !== urlClose - 1) return false;
+  const parts = splitTop(F, k + 2, urlClose - 1);
+  if (parts.length < 2 || !(parts[0][1] === parts[0][0] + 1 && ct[parts[0][0]].t === 'id')) return false;
+  const segs = [];
+  for (const [ps, pe] of parts.slice(1)) {
+    if (!(pe === ps + 1 && ct[ps].t === 'str')) return false;
+    const v = decodeString(ct[ps].v);
+    if (v === null) return false;
+    segs.push(v);
+  }
+  return segs.join('/') === TRUSTED_HELPER_FILE;
+}
+
+// Is `name` bound to the room's own helper by an import? A static import, or a dynamic one whose call names it, of the file scripts/lib/git-env.mjs reached from THIS file's path.
 function importedFromRoomHelper(F, name) {
   const ct = F.ct;
   for (let k = 0; k < ct.length; k++) {
@@ -347,7 +379,7 @@ function importedFromRoomHelper(F, name) {
       if (!(isId(from, 'from') && spec && spec.t === 'str')) continue;
       const names = ids.filter((v, i) => v !== 'as' && ids[i - 1] !== 'as');
       const renamed = ids.some((v, i) => ids[i + 1] === 'as' && v === name);
-      if (names.includes(name) && !renamed && TRUSTED_HELPER_MODULE.test(decodeString(spec.v) || '')) return true;
+      if (names.includes(name) && !renamed && isRoomHelperSpecifier(F.label, decodeString(spec.v))) return true;
     } else if (isP(ct[k + 1], '(')) {
       const close = F.idx.pair[k + 1];
       const prev = ct[k - 1];
@@ -358,7 +390,8 @@ function importedFromRoomHelper(F, name) {
       // 08d mutation finding: `{ other: gitEnv }` BINDS gitEnv to another export, so only the bare shorthand `{ gitEnv }` counts
       const shorthand = splitTop(F, open + 1, k - 3).some(([s, e]) => e === s + 1 && ct[s].t === 'id' && decodeIdent(ct[s].v) === name);
       if (!shorthand) continue;
-      for (let m = k + 2; m < close; m++) if (ct[m].t === 'str' && TRUSTED_HELPER_MODULE.test(decodeString(ct[m].v) || '')) return true;
+      if (close === k + 3 && ct[k + 2].t === 'str' && isRoomHelperSpecifier(F.label, decodeString(ct[k + 2].v))) return true;
+      if (isRoomHelperJoin(F, k + 2, close)) return true;
     }
   }
   return false;

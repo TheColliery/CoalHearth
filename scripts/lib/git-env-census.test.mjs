@@ -119,7 +119,7 @@ test('census: an unreadable file (text null) is a finding, never a silent zero',
 test('census: findings are reported per file across a map, in walk order', () => {
   const r = censusGitSpawns([
     { label: 'scripts/a.mjs', text: `${SP}('git', [], { cwd: d });\n${BINDINGS}` },
-    { label: 'lib/b.js', text: `${SP}('git', [], { env: gitEnv(d) });\n${BINDINGS}` },
+    { label: 'scripts/b.js', text: `${SP}('git', [], { env: gitEnv(d) });\n${BINDINGS}` },
     { label: 'bin/c.js', text: `\n\n${SP}('git', [], { env: process.env });\n${BINDINGS}` },
   ]);
   assert.equal(r.gitSpawns.length, 3);
@@ -143,7 +143,7 @@ test('census: an aliased import (as) is followed to the real function, so an ali
   assert.equal(r.gitSpawns.length, 1);
   assert.equal(r.findings.length, 1);
   assert.match(r.findings[0], /^scripts\/a\.mjs:2 /);
-  const safe = `import { ${SP} as ${alias} } from '${MOD}';\nimport { gitEnv } from './git-env.mjs';\n${alias}('git', ['status'], { env: gitEnv(d) });\n`;
+  const safe = `import { ${SP} as ${alias} } from '${MOD}';\nimport { gitEnv } from './lib/git-env.mjs';\n${alias}('git', ['status'], { env: gitEnv(d) });\n`;
   assert.deepEqual(censusGitSpawns([{ label: 'scripts/a.mjs', text: safe }]).findings, []);
 });
 
@@ -224,7 +224,7 @@ test('M1: a callee reached by alias assignment, an inline require, or cp.default
   assert.equal(raw(`require('${MOD}').${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
   assert.equal(raw(`(await import('${MOD}')).${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
   assert.equal(raw(`import ${CP} from '${MOD}';\n${CP}.default.${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(raw(`import { gitEnv } from './git-env.mjs';\nrequire('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
+  assert.deepEqual(raw(`import { gitEnv } from './lib/git-env.mjs';\nrequire('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
 });
 
 // -- the deliberate hazard fixture: an EXPLICIT, COUNTED, PRINTED exemption, never a silent pass ------------
@@ -815,10 +815,11 @@ const accepted = (r, why) => {
 };
 const withKeys = (head, keysExpr = 'KEYS', tail = '') => raw(BINDINGS + head + R_SPAWN(`{ ${R_FROM(keysExpr, tail)}, ${R_NS} }`));
 
-test('08d rules: gitEnv is trusted from the room git-env.mjs (or git-test-env.mjs) and from no other module', () => {
+test('08d rules: gitEnv is trusted from the room scripts/lib/git-env.mjs and from no other module', () => {
   refused(raw(R_HEAD + `import { gitEnv } from './other.mjs';\n` + R_SPAWN('gitEnv()')), 'another module', /gitEnv/);
   assert.equal(raw(R_HEAD + `import { gitEnv } from './lib/git-env.mjs';\n` + R_SPAWN('gitEnv()')).findings.length, 0);
-  assert.equal(raw(R_HEAD + `import { gitTestEnv } from '../scripts/lib/git-test-env.mjs';\n` + R_SPAWN('gitTestEnv()')).findings.length, 0);
+  // 08c u2: gitTestEnv is not trusted at all -- the room has no git-test-env.mjs
+  refused(raw(R_HEAD + `import { gitTestEnv } from '../scripts/lib/git-test-env.mjs';\n` + R_SPAWN('gitTestEnv()')), 'gitTestEnv');
 });
 
 test('08d rules: a renamed import does not bind the trusted name', () => {
@@ -989,4 +990,75 @@ test('08d command row: a file with a command row AND an env row judges each spaw
     assert.equal(r.exempt.length, 2);
     assert.deepEqual(r.unusedExemptions, []);
   }
+});
+
+// 08c unit 2 (the 08d INSPECT LOW, row import-other-lib): the census trusted gitEnv imported from ANY module whose name ends in git-env.mjs, while its comments said "the room's".
+// The trusted module is the room's own scripts/lib/git-env.mjs, found by resolving the specifier against the IMPORTING file's path. Each leg is red against the basename-only rule.
+const U2_SPAWN = R_SPAWN('gitEnv()');
+const u2 = (imp, label = 'scripts/x.test.mjs') => raw(R_HEAD + imp + U2_SPAWN, label);
+
+test('08c u2: gitEnv imported from another tree git-env.mjs, a bare name, a URL or the test-helper module is NOT the room helper', () => {
+  refused(u2(`import { gitEnv } from '../other/lib/git-env.mjs';\n`), 'a sibling tree helper (the reviewer row import-other-lib)', /gitEnv/);
+  refused(u2(`import { gitEnv } from 'git-env.mjs';\n`), 'a bare specifier');
+  refused(u2(`import { gitEnv } from 'file:///x/lib/git-env.mjs';\n`), 'a URL');
+  refused(u2(`import { gitEnv } from './lib/git-test-env.mjs';\n`), 'the test-helper module is not the room helper');
+  refused(u2(`import { gitEnv } from './lib/other/git-env.mjs';\n`), 'a deeper folder of the same name');
+  refused(u2(`import { gitEnv } from './lib\\git-env.mjs';\n`.replace('\\', R_BS)), 'a backslash separator');
+  refused(raw(R_HEAD + `import { gitTestEnv } from './lib/git-test-env.mjs';\n` + R_SPAWN('gitTestEnv()')), 'gitTestEnv has no module in this room, so the name is not trusted');
+});
+
+test('08c u2: the same dynamic-import rule -- only the room module, resolved from the importing file', () => {
+  refused(u2(`const { gitEnv } = await import('../other/lib/git-env.mjs');\n`), 'a dynamic import of a sibling tree helper');
+  assert.deepEqual(u2(`const { gitEnv } = await import('./lib/git-env.mjs');\n`).findings, []);
+});
+
+test('08c u2: the specifier is resolved against the IMPORTING file, so the same text is the room helper from one folder and not from another', () => {
+  assert.deepEqual(u2(`import { gitEnv } from './lib/git-env.mjs';\n`, 'scripts/x.test.mjs').findings, [], 'scripts/ + ./lib/');
+  assert.deepEqual(u2(`import { gitEnv } from './git-env.mjs';\n`, 'scripts/lib/x.mjs').findings, [], 'scripts/lib/ + ./');
+  assert.deepEqual(u2(`import { gitEnv } from '../scripts/lib/git-env.mjs';\n`, 'bin/x.js').findings, [], 'bin/ + ../scripts/lib/');
+  assert.deepEqual(u2(`import { gitEnv } from './lib/../lib/git-env.mjs';\n`, 'scripts/x.test.mjs').findings, [], 'a normalised path');
+  refused(u2(`import { gitEnv } from './git-env.mjs';\n`, 'scripts/x.test.mjs'), './ from scripts/ is scripts/git-env.mjs, another file');
+  refused(u2(`import { gitEnv } from './lib/git-env.mjs';\n`, 'scripts/lib/x.mjs'), './lib/ from scripts/lib/ is scripts/lib/lib/git-env.mjs');
+  refused(u2(`import { gitEnv } from './lib/git-env.mjs';\n`, 'bin/x.js'), './lib/ from bin/ is bin/lib/git-env.mjs');
+});
+
+// 08c u2: verify.mjs loads the helper through pathToFileURL(path.join(ROOT, 'scripts', 'lib', 'git-env.mjs')).href. That one idiom is read; every neighbour of it is refused.
+const U2_DYN = (arg) => `const { gitEnv } = await import(${arg});\n`;
+const U2_OK = "pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env.mjs')).href";
+
+test('08c u2: the run-time load by pathToFileURL(path.join(root, scripts, lib, git-env.mjs)).href is the room helper', () => {
+  assert.deepEqual(u2(U2_DYN(U2_OK)).findings, []);
+  assert.deepEqual(u2(U2_DYN(U2_OK.replace('path.join', 'join'))).findings, [], 'join without the path. prefix');
+});
+
+test('08c u2: any other path.join shape is not the room helper', () => {
+  refused(u2(U2_DYN(U2_OK.replace("'scripts'", "'other'"))), 'another folder');
+  refused(u2(U2_DYN(U2_OK.replace("'lib', ", ''))), 'a missing segment');
+  refused(u2(U2_DYN(U2_OK.replace("'git-env.mjs'", 'name'))), 'a computed last segment');
+  refused(u2(U2_DYN(U2_OK.replace('repo, ', ''))), 'no root identifier');
+  refused(u2(U2_DYN(U2_OK.replace('repo, ', "'x', "))), 'a literal in the root place');
+  refused(u2(U2_DYN(U2_OK + ' + suffix')), 'something after .href');
+  refused(u2(U2_DYN(U2_OK.replace('.href', '.pathname'))), 'not .href');
+  refused(u2(U2_DYN(U2_OK.replace('pathToFileURL', 'other'))), 'not pathToFileURL');
+  refused(u2(U2_DYN(U2_OK.replace("'git-env.mjs'", "'git-env.mjs', extra"))), 'a further argument');
+  refused(u2(U2_DYN(U2_OK.replace("'git-env.mjs'", String.raw`'git-env.mjs\x'`))), 'a string the census cannot decode');
+});
+
+test('08c u2: a dynamic import of the room helper by a plain literal needs the literal to be the room path, and a call with more than that string is not read', () => {
+  refused(u2(U2_DYN(`'./lib/git-env.mjs', { with: x }`)), 'an import with an options argument');
+});
+
+test('08c u2: a Windows-spelled label (backslash separators) resolves the same way', () => {
+  assert.deepEqual(u2(`import { gitEnv } from './lib/git-env.mjs';\n`, 'scripts' + R_BS + 'x.test.mjs').findings, []);
+  refused(u2(`import { gitEnv } from './lib/git-env.mjs';\n`, 'bin' + R_BS + 'x.js'), 'bin\\ + ./lib/ is bin/lib/git-env.mjs');
+});
+
+// 08c u2, from the mutation wave: a bare package-style specifier that happens to JOIN to the room path, and the second trusted NAME, each need their own leg.
+test('08c u2: a bare specifier such as lib/git-env.mjs is a package name, not the room file, even where joining it to the importing folder would spell the room path', () => {
+  refused(u2(`import { gitEnv } from 'lib/git-env.mjs';\n`, 'scripts/x.test.mjs'), 'bare lib/git-env.mjs from scripts/');
+  refused(u2(`import { gitEnv } from 'git-env.mjs';\n`, 'scripts/lib/x.mjs'), 'bare git-env.mjs from scripts/lib/');
+});
+
+test('08c u2: gitTestEnv is not a trusted name even when it is imported from the room helper path', () => {
+  refused(raw(R_HEAD + `import { gitTestEnv } from './lib/git-env.mjs';\n` + R_SPAWN('gitTestEnv()')), 'gitTestEnv from the room module');
 });
