@@ -217,13 +217,17 @@ class HandoffJournal {
   _acquireLock() {
     const noop = () => {};
     if (!this.outputDir) return noop;
-    if (!this._pinned()) return noop; // 08c unit 2 (LOW-A): no lock file through a swapped folder; the save that follows refuses on the same pin
     const lockPath = path.join(this.outputDir, LOCK_NAME);
     const deadline = Date.now() + LOCK_WAIT_MS;
     for (;;) {
+      // 08c unit 2 FIXBACK 1 (INSPECT LOW-1): the pin is asked at the top of EVERY iteration, not once before the loop -- the poll can run for LOCK_WAIT_MS, and a later create
+      // would otherwise write the lock file through a folder swapped since. A refused pin returns lock-free; the save that follows refuses on the same pin.
+      if (!this._pinned()) return noop;
       try {
         fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' }); // atomic acquire
-        return () => { try { fs.rmSync(lockPath, { force: true }); } catch (_) {} };
+        // The release is a DELETE through lockPath, so it asks the pin too: after a swap made while the lock was held it would remove a file of the link's target (another project's live lock).
+        // A refused release leaves our own lock in the folder that was moved aside, where it goes stale after LOCK_STALE_MS.
+        return () => { if (!this._pinned()) return; try { fs.rmSync(lockPath, { force: true }); } catch (_) {} };
       } catch (err) {
         const contended = err && (err.code === 'EEXIST' || err.code === 'EPERM');
         // A genuinely non-contention error (a real perms/disk issue, NOT EPERM) still
@@ -238,6 +242,7 @@ class HandoffJournal {
         if (err.code === 'EEXIST') {
           try {
             if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
+              if (!this._pinned()) return noop; // 08c unit 2 FIXBACK 1: the steal is a delete through lockPath too
               fs.rmSync(lockPath, { force: true }); // crashed holder -> steal + retry
               continue;
             }
