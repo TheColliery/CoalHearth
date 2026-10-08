@@ -58,38 +58,48 @@ import { createHash } from 'node:crypto';
 
 // BLOB-PINNED rows (CWK-174, R14): a row may carry `blob`, a git blob id (git hash-object <file>). It then applies ONLY while the
 // file's text is exactly those bytes; any edit, or a template re-sync that changes them, spends nothing, reads as UNUSED and adds a
-// finding naming the new id. This is for a byte-equal org carrier (the house secret scan's tests): the umbrella's parity check forbids
+// finding naming the new id. This is for a byte-equal org carrier (the house secret scan's tests and the release overlay's test): the umbrella's parity check forbids
 // editing it here, so the census cannot be satisfied by routing its spawns through gitEnv(), and the row must not outlive that content.
 // A row whose `expr` is null covers a spawn that carries no env: key at all.
 //
-// NAMED DIVERGENCE (05a FIXBACK 2): scripts/release-notes.test.mjs is HELD at blob d2f5b830, the blob this room carried before the adoption, not the canon's a8f3ba69 (.github 7afc4ef). The
-// canon's test asserts the child env holds nothing but what node needs, which is red on macOS (it injects __CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE); CoalBoard
-// measured it (CI run 37224469491). The held file passes the census with no row. Exit: re-sync the file when the canon fix lands, and skeleton-check then reads equal.
+// 08c UNIT 1, the 05a NAMED DIVERGENCE is RELEASED: scripts/release-notes.test.mjs was HELD at blob d2f5b830 because the canon's a8f3ba69 was red on macOS
+// (__CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE). The canon's 8cf7e5fd, re-synced here, names both keys in its CHILD_KEY_NAMES set (UMB-456 (1) i),
+// so the copy is byte-equal again and the divergence is gone from this room. Its two git helpers take sandboxEnv(cwd), which the census does not read: see the row below.
 //
 // The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
 // COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
 // stale. The reason is printed by the gate: keep it free of parentheses.
 export const GIT_ENV_EXEMPTIONS = [
-  // CWK-174 (R14): the canon's two secret-scan tests, byte-equal org carriers from the published-code template at .github 05da36a.
-  // secret-gate.test.mjs builds its env from a LOCAL gitEnv helper that strips every GIT_* variable and then spreads a per-call overlay,
-  // so the census refuses the SHAPE (CWK-136 asks for the room's helper alone); secret-scan.test.mjs spawns git with no env: at all,
-  // so a pathspec or -a commit run from a hook hands those children an absolute GIT_INDEX_FILE (the CWK-133 class in the canon, routed
-  // to the .github deputy). Delete each row when the canon carries the fix and this room re-copies the file.
-  // 05a (UMB-444): secret-gate.test.mjs was re-copied at .github 7afc4ef (blob f61a33e7, was 3fcd3f0d: the explicit test env). Measured on the new bytes: without this row the census
-  // still fails on the same line, because the canon keeps its own GIT_-stripping helper plus the per-call overlay, so the row stays and its pin moves to the new blob.
+  // CWK-174 (R14), moved at 05a and again at 08c: byte-equal org carriers. Each row below was decided at 08c from the census's own output on the NEW bytes, as 05a did.
+  // secret-gate.test.mjs is now .github 690c2de, blob a17ae233 (the nested-run witness pins its reporter to tap). MEASURED: the same line, the same expression and the same count,
+  // because the canon keeps its own GIT_-stripping helper plus the per-call overlay, so the row stays and its pin moves to the new blob.
   {
     label: 'scripts/secret-gate.test.mjs',
     expr: '{ ...gitEnv(), ...extra }',
     count: 1,
-    blob: 'f61a33e75a3a420e0de0116f45d2b1fd44936a50',
-    reason: 'a byte-equal org carrier at blob f61a33e7 from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
+    blob: 'a17ae233275c05c6d030f7aa7f0654002b310356',
+    reason: 'a byte-equal org carrier at blob a17ae233 from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
   },
+  // secret-scan.test.mjs is now the Bankfire source, blob 4433fb56 (LWK2-014 moved the scanner there). MEASURED: the old row (three spawns with no env: at all, blob a9cb7145) matches
+  // NOTHING on the new bytes, because the carrier now hands every fixture git call an explicit env, so that row is DELETED. One spawn is still not a gitEnv() call: the decoy-repository
+  // check takes cleanEnv, a copy of the environment with the whole GIT_ family filtered out. It does what gitEnv() does in another spelling, and the census cannot read a filter, so it
+  // gets its own row, pinned.
   {
     label: 'scripts/secret-scan.test.mjs',
-    expr: null,
-    count: 3,
-    blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
-    reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
+    expr: 'cleanEnv',
+    count: 1,
+    blob: '4433fb56bc97d1facc3fb27804e1934c0577115f',
+    reason: 'a byte-equal org carrier at blob 4433fb56 from the Bankfire scanner source whose one decoy repository check takes cleanEnv, a copy of the environment with the whole GIT_ family filtered out, the effect of gitEnv in another spelling, pinned by blob id and deleted when the canon uses the room helper',
+  },
+  // release-notes.test.mjs is now the overlay canon, blob 8cf7e5fd. MEASURED: two spawns, lines 269 and 282, take sandboxEnv(cwd). That is a call to a local function that builds an explicit
+  // allowlist (PATH and SystemRoot from the parent, a scratch HOME and TEMP, a git ceiling, nothing else), so no GIT_DIR can reach the child; but the allowlist rule reads an object literal,
+  // not a function call, and this builder carries no GIT_CONFIG_NOSYSTEM, so it is not that shape and the pin is needed.
+  {
+    label: 'scripts/release-notes.test.mjs',
+    expr: 'sandboxEnv(cwd)',
+    count: 2,
+    blob: '8cf7e5fd58b89d051395efc53cc0a4f6c86848da',
+    reason: 'a byte-equal org carrier at blob 8cf7e5fd from the overlay template whose two git helpers take sandboxEnv, a local function that builds an explicit allowlist of PATH and a scratch HOME with a git ceiling and no GIT_ variable from the parent, pinned by blob id and deleted when the canon uses the room helper',
   },
   // 08c (UMB-456 (2) rule (a)): the row for scripts/release-notes.mjs (05a, blob 674592e0) is GONE. That file builds its env from an allowlist, and the census
   // now accepts that shape (the paragraph before SAFE_GIT_KEYS), so the carrier needs no pin and its re-syncs cannot spend or strand one.
