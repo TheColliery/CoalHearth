@@ -5,6 +5,7 @@
   "language": "auto",
   // Handoff journal (the recovery core — this is the part that matters).
   "journal": {
+    // outputDirectory is GLOBAL-ONLY (~/.claude/.coalhearth.json, set with --global): a project config's value is ignored.
     "outputDirectory": ".claude/coalhearth",
     "atomicityRetries": 3
   },

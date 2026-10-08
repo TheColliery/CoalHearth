@@ -1,9 +1,9 @@
 // CoalHearth journal-dir containment — the ONE resolver every outputDirectory
 // consumer routes through (HandoffJournal writes/prunes, ResumeEngine reads/
-// quarantine/mark-resumed). `journal.outputDirectory` is merged from the UNTRUSTED
-// project `.coalhearth.json`, so a cloned repo shipping
+// quarantine/mark-resumed). `journal.outputDirectory` was merged from the UNTRUSTED
+// project `.coalhearth.json` until 2.7.0 (it is global-only now, load-config.js), so a cloned repo shipping
 // {"journal":{"outputDirectory":"../../victim"}} must never aim CoalHearth's
-// writes or prunes outside the workspace (audit 2026-07-02 MED — reproduced:
+// writes or prunes outside the workspace (kept as defence in depth: a global value is contained too) (audit 2026-07-02 MED — reproduced:
 // save() wrote and _pruneOldLogs deleted in an arbitrary outside dir).
 //
 // Discipline: realpath-and-contain BOTH sides (node/runtime.md §4 — realpathSync
@@ -29,14 +29,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// NAMED DIVERGENCE from Phoenix #10 (hooks-safety.md §6, row 10), declared here so it is a divergence and not drift (CodeRabbit PR #19, R19). That row lets a hook write only under
-// os.tmpdir() and os.homedir()/.claude/, and this default is neither: it is `<project root>/.claude/coalhearth/`, inside the user's own workspace. Two rules name that place
-// as the right one: hooks-safety.md §8 calls the project root's `.claude/coalhearth/` "the correct location" (state is anchored there, never at a subdirectory), and AGENTS.md,
-// "Well-behaved OS citizen", scope note (2), says project-scoped state stays at the workspace because it is project data, not scatter. Two code paths touch that place, and each
-// is bounded on its own. The journal's writes and prunes (and the resume engine's reads, quarantine and mark-resumed) go through containedOutputDir below: realpath-and-contain on
-// both sides, fail closed, and the default directory carries its own self-ignoring .gitignore. The orphan sweep (ResumeEngine.sweepOrphans) deletes under the `scratch` and
-// `worktrees` directories there (and their `.agents` twins) through its own check, not this function: it pins each owned directory to its literal location, refusing it when
-// its realpath differs (a link planted there), and sweeps nothing in a directory it refuses.
+// The default folder is the AMENDED PHOENIX #10 EXCEPTION, not a divergence (hooks-safety.md §6, row 10, amended 2026-10-04, UMB-427 ruling 1; an earlier note here called it a
+// divergence, before the amendment). The row lets a hook write under os.tmpdir() and os.homedir()/.claude/, and names a third place: a tool's own project-scoped state folder,
+// `<project root>/.<agent-dir>/<tool>/`, written only through a realpath-containment helper that resolves both sides with fs.realpathSync.native, refuses a candidate whose realpath is
+// not inside that folder ITSELF (never merely inside the project root), fails closed, and is named in the room's shipped text. `<project root>/.claude/coalhearth/` is that folder, and
+// containedOutputDir meets the row for it: when the candidate is the default folder and its realpath is not path.join(realRoot, DEFAULT_OUTPUT_DIR) (a link planted at it, or at
+// `.claude` above it), the candidate is refused before anything is created, so the journal has no directory this session. hooks-safety.md §8 calls this folder "the correct location"
+// (state is anchored at the project root, never at a subdirectory) and AGENTS.md, "Well-behaved OS citizen", scope note (2), keeps it at the workspace.
+// Two code paths touch it, each bounded on its own. The journal's writes and prunes (and the resume engine's reads, quarantine and mark-resumed) go through containedOutputDir, and the
+// ENOSPC prune (HandoffJournal._pruneOldLogs) deletes only inside a folder isOwnedDefaultDir accepts. The orphan sweep, ResumeEngine.sweepOrphans, deletes under the `scratch` and
+// `worktrees` directories there (and their `.agents` twins) through its own check: it pins each owned directory to its literal location and sweeps nothing in one it refuses.
+// OUTSIDE the exception: a custom `journal.outputDirectory`. Since 2.7.0 (owner BB-49 (1)) it comes from the user's GLOBAL config only; the loaders ignore a project value, so a cloned repo can no
+// longer choose it. It is still contained to the PROJECT ROOT only, not pinned to the folder above, and not self-ignored; the journal writes where the user's own global config points it.
 const DEFAULT_OUTPUT_DIR = path.join('.claude', 'coalhearth');
 
 // realpath to the PHYSICAL path via the expanding, 8.3/case-correct variant
@@ -214,6 +218,11 @@ function containedOutputDir(configured, root) {
     }
     const rel = path.relative(realRoot, realCandidate);
     if (rel.startsWith('..') || path.isAbsolute(rel)) continue; // escapes -> skip
+    // 05a FIXBACK 1 (HIGH-1): the amended row 10 asks for a candidate that is the owned folder ITSELF, not merely one inside the project root. The default folder is pinned to its
+    // literal location the way ResumeEngine.sweepOrphans pins scratch and worktrees: a link planted at it (or at `.claude` above it) and aimed at another directory of the project
+    // resolves elsewhere, so it is refused here, before mkdir, and the loop falls through to null. Only the candidate is canonicalised, never the expectation; a differently cased
+    // existing spelling never matches, which is the safe direction (no journal).
+    if (candidate === path.join(rootAbs, DEFAULT_OUTPUT_DIR) && realCandidate !== path.join(realRoot, DEFAULT_OUTPUT_DIR)) continue;
     try {
       fs.mkdirSync(candidate, { recursive: true });
     } catch (_) {
@@ -252,9 +261,32 @@ function resolveThroughExisting(p) {
   }
 }
 
+// The project root the way containedOutputDir anchors it: an explicit `root` as given, resolved; with none, the nearest project marker above the physical cwd (findWorkspaceRoot), or null
+// when there is none. HandoffJournal keeps this value from construction so its prune can name the root it was built for, rather than guessing one from the directory it prunes.
+function anchorRoot(root) {
+  if (root !== undefined) return path.resolve(root);
+  const cwdAbs = physicalOrNull(process.cwd());
+  const found = cwdAbs ? findWorkspaceRoot(cwdAbs) : null;
+  return found ? path.resolve(found) : null;
+}
+
+// Is `dir` the OWNED default folder of the project root `root`? Two checks, both against the ROOT the caller passes and never against anything derived from `dir`: (1) `dir` is spelled
+// exactly <root>/.claude/coalhearth (so an alias such as .claude/alias, a nested look-alike such as sub/.claude/coalhearth, or any custom outputDirectory is not it, even when it
+// resolves into the owned folder); (2) its realpath, through realpath.native on both sides, equals path.join(realpath(root), DEFAULT_OUTPUT_DIR) (so a link at the folder, or at `.claude`
+// above it, is not it). A missing argument or any error is false. The ENOSPC prune (HandoffJournal._pruneOldLogs) deletes only where this says yes.
+function isOwnedDefaultDir(dir, root) {
+  try {
+    if (typeof dir !== 'string' || typeof root !== 'string' || !dir || !root) return false;
+    if (path.resolve(dir) !== path.join(path.resolve(root), DEFAULT_OUTPUT_DIR)) return false;
+    return fs.realpathSync.native(dir) === path.join(fs.realpathSync.native(root), DEFAULT_OUTPUT_DIR);
+  } catch (_) {
+    return false;
+  }
+}
+
 // Exported so a caller that wants to WARN on a blocked/escaping outputDir can first
 // check whether a real project exists at all — "no project here" (a stray cwd, or a
 // tool call that drifted into a subdir with nothing above it) is silent-and-expected,
 // never the same "may repeat" class of problem as "a real project's journal dir is
 // blocked by a file". See bin/session-start.js and bin/ag-pre-invocation.js.
-module.exports = { containedOutputDir, findWorkspaceRoot, DEFAULT_OUTPUT_DIR };
+module.exports = { containedOutputDir, findWorkspaceRoot, anchorRoot, isOwnedDefaultDir, DEFAULT_OUTPUT_DIR };

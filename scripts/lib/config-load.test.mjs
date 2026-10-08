@@ -810,15 +810,17 @@ test('CWK-120 #2/#3: with NO global at all a wrong-typed project group is kept a
   }
 });
 
-test('CWK-120 #2/#3: only the two CONSENT groups get this rule -- another group keeps the r29 one-atom project-wins (unchanged)', (t) => {
+// 08a FIXBACK 1: this test used `journal` as its 'another group'. `journal` now carries the global-only outputDirectory and takes the same branch (INSPECT LOW-1, tests above), so the
+// premise moved: the property under test (a group WITHOUT a clamped key keeps the r29 one-atom project-wins) is checked on a group the schema does not clamp. Assertion unchanged in kind.
+test('CWK-120 #2/#3: only the groups that carry a clamped key get this rule -- an unclamped group keeps the r29 one-atom project-wins (unchanged)', (t) => {
   hermetic(t);
   const { root, sub } = project(t);
   const home = mkT(t);
-  put(home, path.join('.claude', '.coalhearth.json'), { journal: { atomicityRetries: 4 } });
-  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: 9 });
+  put(home, path.join('.claude', '.coalhearth.json'), { other: { atomicityRetries: 4 } });
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { other: 9 });
   for (const [name, api] of CJS_ESM) {
     const load = api === twin ? api.loadMergedConfig : api.loadConfig;
-    assert.equal(load({ cwd: sub, home }).journal, 9, name);
+    assert.equal(load({ cwd: sub, home }).other, 9, name);
   }
 });
 
@@ -907,5 +909,87 @@ test('L2: a directory at a canonical path is STILL reported when root == home (o
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, api] of CJS_ESM) {
     assert.deepEqual(unreadableOf(api, { cwd: home, home }), [unreadableLine(dir, 'a directory')], name);
+  }
+});
+
+// ---------------------------------------------------------------------------------------
+// 08a (BB-49 (1), UMB-456): journal.outputDirectory is GLOBAL-ONLY -- both twins, one table. See lib/load-config.test.js for the reasoning;
+// the project layer is IGNORED for this key (hooks-safety.md section 9), the global value stands, the schema default stands in when no
+// global value exists, and every other journal key still merges from the project.
+// ---------------------------------------------------------------------------------------
+const OD_LOCATIONS = [
+  path.join('.claude', 'coal', 'coalhearth.json'), path.join('.agents', 'coal', 'coalhearth.json'),
+  path.join('.gemini', 'coal', 'coalhearth.json'), NESTED, '.coalhearth.json',
+];
+const OD_DEFAULT = '.claude/coalhearth';
+const mergedOf = (api, o) => (api.loadMergedConfig || api.loadConfig)(o);
+
+for (const loc of OD_LOCATIONS) {
+  test('08a: a project config at ' + loc.split(path.sep).join('/') + ' setting journal.outputDirectory is IGNORED (both twins; atomicityRetries still merges)', (t) => {
+    hermetic(t);
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    put(root, loc, { journal: { outputDirectory: 'src', atomicityRetries: 4 } });
+    for (const [name, api] of CJS_ESM) {
+      const cfg = mergedOf(api, { cwd: sub, home });
+      assert.equal(cfg.journal.outputDirectory, OD_DEFAULT, name + ': no global value, the schema default stands in');
+      assert.equal(cfg.journal.atomicityRetries, 4, name);
+    }
+  });
+
+  test('08a: with a GLOBAL value, a project config at ' + loc.split(path.sep).join('/') + ' cannot override it (both twins)', (t) => {
+    hermetic(t);
+    const { root, sub } = project(t);
+    const home = mkT(t);
+    put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal' } });
+    put(root, loc, { journal: { outputDirectory: 'src' } });
+    for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, 'custom/journal', name);
+  });
+}
+
+test('08a: a GLOBAL journal.outputDirectory is still honoured; a project without the key leaves it untouched (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal', atomicityRetries: 2 } });
+  for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, 'custom/journal', name + ': global alone');
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 5 } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(mergedOf(api, { cwd: sub, home }).journal, { outputDirectory: 'custom/journal', atomicityRetries: 5 }, name);
+});
+
+test('08a: configNotices REPORTS a project config that sets journal.outputDirectory; says nothing when the project omits it or only the global sets it (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  const gp = path.join(home, '.claude', '.coalhearth.json');
+  const file = put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { outputDirectory: 'src' } });
+  const line = 'IGNORED: ' + file + ' sets journal.outputDirectory, which only the global config (' + gp + ') may set; its value is not used';
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [line], name);
+  put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { atomicityRetries: 3 } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [], name + ': project without the key');
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal' } });
+  for (const [name, api] of CJS_ESM) assert.deepEqual(api.configNotices({ cwd: sub, home }), [], name + ': the global file setting it');
+});
+
+test('08a: a project value of ANY shape for journal.outputDirectory (null, empty, 0, false, array, object) is ignored, not only a non-empty string (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  for (const odd of [null, '', 0, false, ['src'], { a: 1 }]) {
+    put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: { outputDirectory: odd } });
+    for (const [name, api] of CJS_ESM) assert.equal(mergedOf(api, { cwd: sub, home }).journal.outputDirectory, OD_DEFAULT, name + ' ' + JSON.stringify(odd));
+  }
+});
+
+// 08a FIXBACK 1 (INSPECT LOW-1): a project `journal` that is not a group contributes NOTHING, the global journal group stands (both twins). See lib/load-config.test.js.
+const NON_GROUP_JOURNALS = [5, 'x', ['src'], null, true];
+test('08a FIXBACK 1: a project journal that is NOT a group leaves the global journal group standing, atomicityRetries too (both twins)', (t) => {
+  hermetic(t);
+  const { root, sub } = project(t);
+  const home = mkT(t);
+  put(home, path.join('.claude', '.coalhearth.json'), { journal: { outputDirectory: 'custom/journal', atomicityRetries: 2 } });
+  for (const odd of NON_GROUP_JOURNALS) {
+    put(root, path.join('.claude', 'coal', 'coalhearth.json'), { journal: odd });
+    for (const [name, api] of CJS_ESM) assert.deepEqual(mergedOf(api, { cwd: sub, home }).journal, { outputDirectory: 'custom/journal', atomicityRetries: 2 }, name + ' ' + JSON.stringify(odd));
   }
 });

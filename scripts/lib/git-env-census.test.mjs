@@ -437,3 +437,43 @@ test('census: a template literal with NO interpolation is still a provable liter
   const dollar = census(SP + '(' + interp('node $x') + ", ['status'], { cwd: d });\n");
   assert.deepEqual(dollar.findings, [], 'a lone dollar sign is text too (and node is not this census\'s business)');
 });
+
+// 05a FIXBACK 1, LOW-1 (the 05a INSPECT witness shorthand.mjs): a shorthand property `{ env }` means `env: env`, and the census read it as no env key at all, so a SAFE file (env is a
+// const assigned from exactly gitEnv(...)) was refused with a message that said something false about it. The shorthand is read as env: env and judged like the longhand; the no-env control
+// still fails, and a shorthand of anything but a sound gitEnv() alias still fails.
+const SAFE_HEAD = `const env = gitEnv(process.cwd());\n`;
+
+test('census: the shorthand { env } of a const assigned from gitEnv() is clean, like env: env', () => {
+  const longhand = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8', env: env });\n`);
+  const shorthand = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8', env });\n`);
+  assert.deepEqual(longhand.findings, []);
+  assert.deepEqual(shorthand.findings, [], 'the shorthand is the same property');
+  assert.equal(shorthand.gitSpawns.length, 1);
+});
+
+test('census: the shorthand with env last in a multi-line options object, and env first, are read too', () => {
+  const last = census(SAFE_HEAD + `${SP}('git', ['status'], {\n  encoding: 'utf8',\n  env,\n});\n`);
+  const first = census(SAFE_HEAD + `${SP}('git', ['status'], { env, encoding: 'utf8' });\n`);
+  assert.deepEqual(last.findings, []);
+  assert.deepEqual(first.findings, []);
+});
+
+test('census: a shorthand env that is NOT a sound gitEnv() alias still fails, and names the alias', () => {
+  const notGitEnv = census(`const env = { PATH: process.env.PATH };\n${SP}('git', ['status'], { encoding: 'utf8', env });\n`);
+  assert.equal(notGitEnv.findings.length, 1);
+  assert.match(notGitEnv.findings[0], /env: env is not declared \`const env = gitEnv\(\.\.\.\)\`/);
+  const mutated = census(SAFE_HEAD + `env.GIT_DIR = 'x';\n${SP}('git', ['status'], { env });\n`);
+  assert.equal(mutated.findings.length, 1);
+  assert.match(mutated.findings[0], /is mutated after it is assigned/);
+});
+
+test('census: the no-env control still fails, and an env that is only a positional argument or a variable elsewhere is not a shorthand property', () => {
+  const control = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8' });\n`);
+  assert.equal(control.findings.length, 1);
+  assert.match(control.findings[0], /no 'env:'/);
+  const positional = census(SAFE_HEAD + `${SP}('git', ['status'], opts, env, extra);\n`);
+  assert.equal(positional.findings.length, 1, 'a positional env is not the options object');
+  assert.match(positional.findings[0], /no 'env:'/);
+  const inArray = census(SAFE_HEAD + `${SP}('git', [env, 'status'], { encoding: 'utf8' });\n`);
+  assert.equal(inArray.findings.length, 1, 'env inside the args array is not a property');
+});

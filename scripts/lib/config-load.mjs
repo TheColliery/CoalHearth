@@ -180,6 +180,11 @@ export function configNotices(opts) {
     if (found && !foundReason && candidates.slice(-2).includes(found)) {
       lines.push('LEGACY: ' + found + ' is deprecated but still read; canonical = ' + canonical);
     }
+    // 08a: mirrors lib/load-config.js 1:1 (see its comment).
+    if (found && !foundReason) {
+      const j = readConfigFile(found, root).cfg.journal;
+      if (isGroup(j) && Object.prototype.hasOwnProperty.call(j, 'outputDirectory')) lines.push('IGNORED: ' + found + ' sets journal.outputDirectory, which only the global config (' + globalPath + ') may set; its value is not used');
+    }
     const known = new Set(candidates.map((c) => path.resolve(c)));
     for (const d of ['', ...AGENT_DIR_ORDER]) {
       for (const sub of ['', 'coal']) {
@@ -193,6 +198,16 @@ export function configNotices(opts) {
   } catch {
     return [];
   }
+}
+
+// 08a (owner BB-49 (1), UMB-456; hooks-safety.md section 9, the config-cascade clamp): journal.outputDirectory is GLOBAL-ONLY. A project config ships with a cloned repo and this path
+// decides where the hooks write (and, in the owned folder, delete), so the project layer is IGNORED for the key: the global value stands, and with none the schema default does.
+// Path-typed, so there is no 'safer value' to order; the layer is dropped. ONE guard, called from the end of the merge, so every reader of the merged config gets it.
+const SCHEMA_DEFAULT_OUTPUT_DIR = '.claude/coalhearth';
+function clampOutputDirectory(merged, global, project) {
+  if (!isGroup(project.journal) || !Object.prototype.hasOwnProperty.call(project.journal, 'outputDirectory')) return; // the project never touched it
+  const g = isGroup(global.journal) ? global.journal.outputDirectory : undefined;
+  merged.journal = { ...merged.journal, outputDirectory: g !== undefined ? g : SCHEMA_DEFAULT_OUTPUT_DIR };
 }
 
 // UMB-174 (b): read + classify ONE config file -> { cfg, reason }. `reason` is null when the
@@ -236,9 +251,9 @@ function readJsonc(file, root) {
 // lib/load-config.js 1:1. See that file's comments for the full rationale (R2
 // factory-default ranking, R3's separate autoInjectPrompt reasoning, why
 // stashUnsavedChanges stays out of scope).
-// The two groups whose keys are clamped safer-value-wins (updateMode, autoInjectPrompt), and the shape test the
-// merge and the post-clamp both use (CWK-120 #2/#3).
-const CONSENT_GROUPS = new Set(['update', 'recovery']);
+// The groups that carry a clamped key: update and recovery (updateMode, autoInjectPrompt: safer-value-wins) and, since 08a, journal (outputDirectory: global-only). A PRESENT
+// non-group project value for one of them contributes nothing and the global group stands (the merge branch below). Plus the shape test the merge and the post-clamps use (CWK-120 #2/#3).
+const CONSENT_GROUPS = new Set(['update', 'recovery', 'journal']);
 function isGroup(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 const UPDATE_MODE_LOUDNESS = { off: 0, remind: 1, ask: 2, auto: 3 };
 const SCHEMA_DEFAULT_UPDATE_MODE = 'ask';
@@ -317,5 +332,6 @@ export function loadMergedConfig({ cwd = process.cwd(), home = os.homedir(), own
     const p = project.recovery && project.recovery.autoInjectPrompt;
     if (typeof g === 'boolean' || typeof p === 'boolean') merged.recovery.autoInjectPrompt = quieterAutoInjectPrompt(g, p);
   }
+  clampOutputDirectory(merged, global, project);
   return merged;
 }

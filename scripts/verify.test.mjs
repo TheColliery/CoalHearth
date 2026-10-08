@@ -33,7 +33,8 @@ const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin'
 // the fix working: an incomplete fixture used to look identical to a passing one.
 // CHANGELOG.md added (r31 fixback) so the pointer-drift block's historyOnly row reads cleanly
 // instead of a "could not read" SKIP -- harmless either way, but a clean read matches production.
-const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md'];
+// 08b: plugin.json + hooks.json are the Antigravity plugin's own root files, gated by verify.mjs.
+const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'plugin.json', 'hooks.json'];
 
 function seed(tmp) {
   for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
@@ -45,11 +46,15 @@ function seed(tmp) {
 const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-verify-home-'));
 after(() => fs.rmSync(SANDBOX_HOME, { recursive: true, force: true }));
 const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR'];
+// R20 (thread 20): CLAUDE_CONFIG_DIR names the global config layer's directory and wins over the home directory (globalConfigPath), so it is dropped the same way and set
+// to a folder INSIDE the sandbox (absent there, so the global layer reads as defaults).
+const CONFIG_DIR_KEY = 'CLAUDE_CONFIG_DIR';
 function sandboxedEnv(env) {
   const out = {};
   // Windows env names are case-insensitive: drop the parent's own spelling of each key before setting ours, so no process sees both.
-  for (const [k, v] of Object.entries(env ?? process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v;
+  for (const [k, v] of Object.entries(env ?? process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase()) && k.toUpperCase() !== CONFIG_DIR_KEY) out[k] = v;
   for (const k of SANDBOXED_KEYS) out[k] = SANDBOX_HOME;
+  out[CONFIG_DIR_KEY] = path.join(SANDBOX_HOME, '.claude');
   return out;
 }
 
@@ -384,10 +389,13 @@ test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP
   fs.writeFileSync(path.join(tmp, 'scripts', 'verify.mjs'), [
     "import os from 'node:os';",
     "const e = process.env;",
-    "console.log(JSON.stringify({ HOME: e.HOME, USERPROFILE: e.USERPROFILE, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, GIT_DIR: e.GIT_DIR, home: os.homedir(), tmp: os.tmpdir() }));",
+    "console.log(JSON.stringify({ HOME: e.HOME, USERPROFILE: e.USERPROFILE, TEMP: e.TEMP, TMP: e.TMP, TMPDIR: e.TMPDIR, CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR, GIT_DIR: e.GIT_DIR, home: os.homedir(), tmp: os.tmpdir() }));",
     '',
   ].join('\n'));
-  const r = run(tmp, { ...process.env, GIT_DIR: 'a-caller-git-dir' });
+  // R20 (CodeRabbit PR #19 thread 20): globalConfigPath() (lib/load-config.js:18, scripts/lib/config-load.mjs:17) reads CLAUDE_CONFIG_DIR BEFORE it falls back to the home
+  // directory, so a parent that exports it would still point the spawned gate's global config layer at the operator's real directory, whatever HOME says.
+  const operatorConfigDir = path.join(os.tmpdir(), 'an-operators-real-claude-config-dir');
+  const r = run(tmp, { ...process.env, GIT_DIR: 'a-caller-git-dir', CLAUDE_CONFIG_DIR: operatorConfigDir });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const seen = JSON.parse(r.stdout);
   const sandbox = seen.USERPROFILE;
@@ -398,4 +406,141 @@ test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP
   assert.notEqual(path.resolve(sandbox), path.resolve(os.homedir()), 'and it is not the real home');
   assert.notEqual(path.resolve(sandbox), path.resolve(os.tmpdir()), 'nor the shared temp directory itself');
   assert.equal(seen.GIT_DIR, 'a-caller-git-dir', 'a GIT_DIR the caller passes on purpose is kept (the CWK-133 tests rely on it)');
+  assert.notEqual(seen.CLAUDE_CONFIG_DIR, operatorConfigDir, "the operator's CLAUDE_CONFIG_DIR does not reach the child");
+  assert.equal(path.resolve(seen.CLAUDE_CONFIG_DIR), path.join(path.resolve(sandbox), '.claude'), 'CLAUDE_CONFIG_DIR is set INSIDE the throwaway directory, so the global layer resolves there');
+});
+
+// 08b (CWK-202 pilot): the Antigravity plugin files are a gated surface. A hooks.json whose command names an adapter that does not exist
+// (the plugin would load and every hook would fail on AG) FAILs the gate, by name, and a pristine copy passes.
+test('08b verify.mjs negative path: an AG hooks.json command naming a missing adapter FAILs the gate by name', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    const clean = run(tmp);
+    assert.equal(clean.status, 0, 'pristine copy must PASS, got:\n' + clean.stdout + clean.stderr);
+    assert.match(clean.stdout, /Antigravity plugin/);
+    const hj = path.join(tmp, 'hooks.json');
+    fs.writeFileSync(hj, fs.readFileSync(hj, 'utf8').replace('bin/ag-pre-invocation.js', 'bin/no-such-adapter.js'));
+    const bad = run(tmp);
+    assert.equal(bad.status, 1, 'a hooks.json naming a missing adapter must FAIL, got:\n' + bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /FAIL.*hooks\.json.*no-such-adapter/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('08b verify.mjs negative path: an AG plugin.json with the wrong name FAILs the gate', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.writeFileSync(path.join(tmp, 'plugin.json'), JSON.stringify({ name: 'not-coalhearth' }));
+    const bad = run(tmp);
+    assert.equal(bad.status, 1, 'got:\n' + bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /FAIL.*plugin\.json.*not-coalhearth/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// 08b AG FIXBACK 1 (INSPECT LOW-1 and LOW-2): the Antigravity block must refuse what AG would load and then fail on. Each case plants the SAME hooks.json at the root and in
+// plugin/ (so dist parity stays clean and only the Antigravity block can speak) inside a room copy that sits in its own box, so a command can name a file ONE LEVEL ABOVE the
+// plugin folder (outside.js, which exists) without touching the shared temp root.
+const SHIPPED_AG = JSON.parse(fs.readFileSync(path.join(repo, 'hooks.json'), 'utf8')).coalhearth;
+const AG_PRE = SHIPPED_AG.PreInvocation;
+const AG_POST = SHIPPED_AG.PostToolUse;
+
+function agBox() {
+  const box = mkTmp();
+  const room = path.join(box, 'room');
+  fs.mkdirSync(room);
+  seed(room);
+  fs.writeFileSync(path.join(box, 'outside.js'), '// exists, but outside the plugin folder\n');
+  return { box, room };
+}
+function plantHooks(room, obj) {
+  const text = JSON.stringify(obj, null, 2) + '\n';
+  fs.writeFileSync(path.join(room, 'hooks.json'), text);
+  fs.writeFileSync(path.join(room, 'plugin', 'hooks.json'), text);
+}
+function agFailLines(r) {
+  return r.stdout.split(/\r?\n/).filter((l) => l.includes('FAIL'));
+}
+
+const AG_FAIL_CASES = [
+  ['FIXBACK 2 (RE-INSPECT LOW-3): ../room/bin/x, a `..` that leaves and comes back through the folder\'s OWN NAME, FAILs: that name differs on the dist and on every install', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../room/bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path '\.\.\/room\/bin\/ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['FIXBACK 2: bin/../bin/x, a `..` that comes back inside through a folder of the plugin, FAILs too: the segment is refused wherever it leads, so a path means one thing on the clone, the dist and an install', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/../bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path 'bin\/\.\.\/bin\/ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['FIXBACK 2: a backslash separator FAILs: AG runs the command through sh -c on Unix, where bin\\ag-pre-invocation.js is not a path into bin', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin\\ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path 'bin\\ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['LOW-1: a command naming a script OUTSIDE the plugin folder (it exists) FAILs by name', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../outside.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path '\.\.\/outside\.js' has a '\.\.' segment or a backslash separator/],
+  ['LOW-2: an event value that is not an array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: { matcher: '*', hooks: AG_POST[0].hooks } } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*not an array/],
+  ['LOW-2: a grouped event whose group has no hooks array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ matcher: '*' }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*hooks/],
+  ['LOW-2: a grouped event whose group has no matcher FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ hooks: AG_POST[0].hooks }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*matcher/],
+  ['LOW-2: a flat event written in the grouped shape (a handler list that is not objects) FAILs', { coalhearth: { PreInvocation: ['node bin/ag-pre-invocation.js PreInvocation'], PostToolUse: AG_POST } }, /FAIL hooks\.json coalhearth\.PreInvocation: .*not a handler object/],
+  ['LOW-2: a named hook with enabled:false FAILs (AG documents enabled:false as "disabled")', { coalhearth: { enabled: false, PreInvocation: AG_PRE, PostToolUse: AG_POST } }, [/FAIL hooks\.json coalhearth: .*disabled/, /FAIL hooks\.json: no PreInvocation handler/, /FAIL hooks\.json: no PostToolUse handler/]],
+  ['an event name that is not one of AG\'s five FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: AG_POST, SessionStart: AG_PRE } }, /FAIL hooks\.json coalhearth\.SessionStart is not one of AG's five events/],
+  ['LOW-2: a named hook with a non-boolean enabled FAILs', { coalhearth: { enabled: 'no', PreInvocation: AG_PRE, PostToolUse: AG_POST } }, /FAIL hooks\.json coalhearth: .*enabled/],
+  ['LOW-2: a missing PreInvocation FAILs (the product is the pair)', { coalhearth: { PostToolUse: AG_POST } }, /FAIL hooks\.json: no PreInvocation handler/],
+  ['LOW-2: a missing PostToolUse FAILs (the product is the pair)', { coalhearth: { PreInvocation: AG_PRE } }, /FAIL hooks\.json: no PostToolUse handler/],
+];
+for (const [name, hooks, expected] of AG_FAIL_CASES) {
+  test('08b AG FIXBACK 1, verify.mjs negative path: ' + name, () => {
+    const { box, room } = agBox();
+    try {
+      plantHooks(room, hooks);
+      const r = run(room);
+      assert.equal(r.status, 1, 'must FAIL, got:\n' + r.stdout + r.stderr);
+      for (const re of [].concat(expected)) assert.match(agFailLines(r).join('\n'), re, 'the FAIL lines name the item and the reason:\n' + r.stdout);
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+}
+
+// FIXBACK 1, the cases the mutation table asked for: a named hook that is not an object; a script reached THROUGH A LINK that leaves the folder (realpath containment; a directory
+// junction needs no privilege on Windows, a capability probe skips visibly where a link cannot be made); and a script at the folder root whose name merely STARTS with two dots
+// (it is inside, so the containment test must read path segments, not a string prefix).
+test('08b AG FIXBACK 1, verify.mjs negative path: a named hook that is not an object FAILs', () => {
+  const { box, room } = agBox();
+  try {
+    plantHooks(room, { coalhearth: 5 });
+    const r = run(room);
+    assert.equal(r.status, 1, 'got:\n' + r.stdout + r.stderr);
+    assert.match(agFailLines(r).join('\n'), /FAIL hooks\.json coalhearth: not an object/);
+  } finally {
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});
+
+test('08b AG FIXBACK 1, verify.mjs negative path: a script reached through a link that leaves the plugin folder FAILs (realpath containment)', (t) => {
+  const { box, room } = agBox();
+  try {
+    const outDir = path.join(box, 'out-dir');
+    fs.mkdirSync(outDir);
+    fs.writeFileSync(path.join(outDir, 'x.js'), '// outside\n');
+    try {
+      fs.symlinkSync(outDir, path.join(room, 'bin', 'linkdir'), process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (e) {
+      t.skip('this volume cannot make a directory link here: ' + (e && e.code));
+      return;
+    }
+    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/linkdir/x.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
+    const r = run(room);
+    assert.equal(r.status, 1, 'got:\n' + r.stdout + r.stderr);
+    assert.match(agFailLines(r).join('\n'), /FAIL hooks\.json PreInvocation: bin\/linkdir\/x\.js resolves through a link to outside the plugin folder/);
+  } finally {
+    try { fs.rmdirSync(path.join(room, 'bin', 'linkdir')); } catch { /* absent, or no link was made */ } // unlink the link itself; the recursive delete below never walks through it
+    fs.rmSync(box, { recursive: true, force: true });
+  }
+});
+
+test('08b AG FIXBACK 1, verify.mjs: a script at the folder root whose name starts with two dots is INSIDE the folder (no containment FAIL)', () => {
+  const { box, room } = agBox();
+  try {
+    fs.copyFileSync(path.join(room, 'bin', 'ag-pre-invocation.js'), path.join(room, '..adapter.js'));
+    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ..adapter.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
+    const r = run(room);
+    assert.match(r.stdout, /ok +hooks\.json PreInvocation -> \.\.adapter\.js/);
+    assert.doesNotMatch(r.stdout, /outside the plugin folder/);
+  } finally {
+    fs.rmSync(box, { recursive: true, force: true });
+  }
 });

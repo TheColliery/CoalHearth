@@ -127,6 +127,8 @@ function buildFlagSpecs() {
   return specs;
 }
 const FLAG_SPECS = buildFlagSpecs();
+// Keys only the GLOBAL layer may set (the loaders ignore a project value for them): refused for a project write, see main().
+const GLOBAL_ONLY_FLAGS = ['journal.outputDirectory'];
 
 function printHelp() {
   const lines = [
@@ -196,7 +198,8 @@ function main() {
 
   // --global targets the global layer (globalConfigPath -- honors CLAUDE_CONFIG_DIR);
   // default targets the project config. Hooks merge the two per key, project wins
-  // (loadMergedConfig's safer-value-wins clamp on updateMode/autoInjectPrompt).
+  // (loadMergedConfig's safer-value-wins clamp on updateMode/autoInjectPrompt; journal.outputDirectory is
+  // the one key the project layer cannot set at all, below).
   //
   // READ follows projectConfigPath's own rail (own-dir -> other known agent dirs ->
   // LEGACY nested .claude/.coalhearth.json -> LEGACY root dotfile — see config-load.mjs's
@@ -211,6 +214,14 @@ function main() {
   const globalIdx = args.indexOf('--global');
   const isGlobal = globalIdx !== -1;
   if (isGlobal) args.splice(globalIdx, 1);
+  // 08a (owner BB-49 (1), UMB-456): journal.outputDirectory is GLOBAL-ONLY -- the loader ignores a project value (hooks-safety.md section 9), so writing one would leave a value
+  // that does nothing. Refused here, before the config is read or anything is backed up or written, so the whole invocation writes nothing.
+  const projectOnlyRefused = GLOBAL_ONLY_FLAGS.find((k) => !isGlobal && args.includes('--' + k));
+  if (projectOnlyRefused) {
+    process.exitCode = 1;
+    console.error(`Error: --${projectOnlyRefused} can only be set in the GLOBAL config: a project config's value is ignored (a cloned repo must not choose where the hooks write). Run it with --global to write the global config. Nothing was written.`);
+    return;
+  }
   const projectRoot = findProjectRoot(process.cwd());
   const legacyPaths = [path.join(projectRoot, '.claude', '.coalhearth.json'), path.join(projectRoot, '.coalhearth.json')];
   const readPath = isGlobal ? globalConfigPath() : projectConfigPath(process.cwd());

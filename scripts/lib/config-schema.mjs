@@ -37,7 +37,7 @@ export const CONFIG_SCHEMA = {
   // AND an honest source of real token usage — the hook sees only payload char-slices (a
   // gauge, not a safety device). (Same tombstone-by-removal pattern as CT's rankingMode/hardEnforce.)
   journal: {
-    outputDirectory: { type: 'string', help: 'Where session_handoff.json is written (realpath-contained under the workspace root; an escaping path falls back to the default). Default .claude/coalhearth' },
+    outputDirectory: { type: 'string', help: 'Where session_handoff.json is written (GLOBAL config only, --global: a project config value is ignored; realpath-contained under the workspace root, an escaping path falls back to the default). Default .claude/coalhearth' },
     atomicityRetries: { type: 'int', min: 1, max: 5, help: 'Retries for the atomic tmp-then-rename journal write (clamped 1-5 — save() busy-waits synchronously on the hot-path). Default 3' },
   },
   recovery: {

@@ -5,7 +5,7 @@
 // CLAUDE_CONFIG_DIR (globalConfigPath reads that env var before falling back to
 // os.homedir() -- sandboxing it is enough, no need to fake the OS home directory
 // cross-platform).
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,8 +31,20 @@ function sandboxHome(t) {
   return dir;
 }
 
+// R20 (the same class as CodeRabbit PR #19 thread 20, found by the sweep one file over): a spawned configure.mjs got the parent's environment, so a run that reaches the global
+// layer without its own CLAUDE_CONFIG_DIR would read or WRITE the operator's real global config (globalConfigPath honours CLAUDE_CONFIG_DIR, then HOME). The default is now a throwaway
+// directory for HOME, USERPROFILE, TEMP, TMP and TMPDIR and a CLAUDE_CONFIG_DIR inside it; a caller's own keys (the --global tests pass theirs; one test overrides PATH) still win.
+const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-configure-sandbox-'));
+after(() => fs.rmSync(SANDBOX_HOME, { recursive: true, force: true }));
+const SANDBOXED_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR', 'CLAUDE_CONFIG_DIR'];
+function sandboxedEnv(extra) {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) if (!SANDBOXED_KEYS.includes(k.toUpperCase())) out[k] = v; // Windows names are case-insensitive
+  for (const k of SANDBOXED_KEYS) out[k] = k === 'CLAUDE_CONFIG_DIR' ? path.join(SANDBOX_HOME, '.claude') : SANDBOX_HOME;
+  return { ...out, ...extra };
+}
 function run(cwd, args, envExtra = {}) {
-  return spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...envExtra } });
+  return spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8', env: sandboxedEnv(envExtra) });
 }
 function ownDirConfig(projectDir) {
   return path.join(projectDir, '.claude', 'coal', 'coalhearth.json');
@@ -80,14 +92,16 @@ test('--language OVER an existing malformed object value still lands as a plain 
 });
 
 // ---------------------------------------------------------------- nested write, no sibling clobber
+// 08a: this test used to write journal.outputDirectory then atomicityRetries into the PROJECT config; the project layer may no longer set outputDirectory (the loader ignores it,
+// configure refuses it, tests below), so the sibling pair is the update group's two project-writable keys. The behaviour under test (no sibling clobbered) is unchanged.
 test('a nested write does NOT clobber a sibling key already in the same group', (t) => {
   const dir = sandboxProject(t);
-  let r = run(dir, ['--journal.outputDirectory', '.claude/coalhearth']);
+  let r = run(dir, ['--update.updateMode', 'remind']);
   assert.equal(r.status, 0);
-  r = run(dir, ['--journal.atomicityRetries', '4']);
+  r = run(dir, ['--update.updateCheckDays', '20']);
   assert.equal(r.status, 0);
   const cfg = JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8'));
-  assert.deepEqual(cfg.journal, { outputDirectory: '.claude/coalhearth', atomicityRetries: 4 });
+  assert.deepEqual(cfg.update, { updateMode: 'remind', updateCheckDays: 20 });
 });
 
 test('two flags in the SAME group in ONE invocation both land, neither drops the other', (t) => {
@@ -132,11 +146,48 @@ test('enum type: a listed value (any case) parsed lowercase, an unlisted value r
   assert.match(r.stderr, /must be one of: ask, auto, remind, off/);
 });
 
+// 08a: the only string key is global-only now, so the string type is exercised through --global (a project run is refused, tests below).
 test('string type: any string value parsed as-is -- the case neither exemplar needed', (t) => {
   const dir = sandboxProject(t);
-  const r = run(dir, ['--journal.outputDirectory', 'somewhere/else']);
+  const homeDir = sandboxHome(t);
+  const r = run(dir, ['--global', '--journal.outputDirectory', 'somewhere/else'], { CLAUDE_CONFIG_DIR: homeDir });
   assert.equal(r.status, 0);
-  assert.equal(JSON.parse(fs.readFileSync(ownDirConfig(dir), 'utf8')).journal.outputDirectory, 'somewhere/else');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(homeDir, '.coalhearth.json'), 'utf8')).journal.outputDirectory, 'somewhere/else');
+});
+
+// ---------------------------------------------------------------- 08a: journal.outputDirectory is GLOBAL-ONLY (BB-49 (1), UMB-456)
+// The loader IGNORES a project value for this key (hooks-safety.md section 9), so a project write would be a value that does nothing. It is refused, loudly, before anything is written.
+test('08a: --journal.outputDirectory on the PROJECT config is refused, names --global, and writes NOTHING', (t) => {
+  const dir = sandboxProject(t);
+  const r = run(dir, ['--journal.outputDirectory', 'src']);
+  assert.equal(r.status, 1);
+  assert.ok(r.stderr.includes('--journal.outputDirectory'), r.stderr);
+  assert.match(r.stderr, /--global/);
+  assert.equal(fs.existsSync(ownDirConfig(dir)), false, 'no config file was created');
+  assert.equal(fs.existsSync(path.join(dir, '.claude')), false, 'not even the directory');
+});
+
+test('08a: the refusal covers the WHOLE invocation -- a valid flag beside it is not written either, and an existing config is untouched', (t) => {
+  const dir = sandboxProject(t);
+  const p = ownDirConfig(dir);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const before = JSON.stringify({ language: 'en' });
+  fs.writeFileSync(p, before);
+  const r = run(dir, ['--journal.atomicityRetries', '2', '--journal.outputDirectory', 'src']);
+  assert.equal(r.status, 1);
+  assert.equal(fs.readFileSync(p, 'utf8'), before, 'the existing file is byte-exact');
+});
+
+test('08a: --global still writes journal.outputDirectory, and the help names it as global-only', (t) => {
+  const dir = sandboxProject(t);
+  const homeDir = sandboxHome(t);
+  const r = run(dir, ['--global', '--journal.outputDirectory', '.claude/custom'], { CLAUDE_CONFIG_DIR: homeDir });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(homeDir, '.coalhearth.json'), 'utf8')).journal.outputDirectory, '.claude/custom');
+  assert.equal(fs.existsSync(ownDirConfig(dir)), false, 'the project config is untouched');
+  const h = run(dir, ['--help']);
+  const row = h.stdout.split(String.fromCharCode(10)).find((l) => l.includes('--journal.outputDirectory ') && l.includes('Where session_handoff.json'));
+  assert.ok(row && /global/i.test(row), 'the help row says the key is set in the global config only: ' + row);
 });
 
 // ---------------------------------------------------------------- --global
@@ -480,4 +531,17 @@ test('R19 FIXBACK: the .git entry is looked for ABOVE the project too (a refused
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.existsSync(legacy), true, 'kept: the .git entry sits in the parent, and git refuses it');
   assert.match(r.stdout, /could not be asked/, r.stdout);
+});
+
+// R20 (the sweep for the class of CodeRabbit PR #19 thread 20): run() handed configure.mjs the parent's environment, so a --global run that forgot its own CLAUDE_CONFIG_DIR wrote
+// the OPERATOR's real global config. The parent's value stands in for it here, a throwaway directory; the child must never write there.
+test('R20: a --global run that passes no CLAUDE_CONFIG_DIR of its own never touches the parent\'s (the operator\'s) global config directory', (t) => {
+  const projectDir = sandboxProject(t);
+  const operatorDir = sandboxHome(t);
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved; });
+  process.env.CLAUDE_CONFIG_DIR = operatorDir;
+  const r = run(projectDir, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(fs.readdirSync(operatorDir), [], 'the operator\'s config directory was not written');
 });

@@ -56,7 +56,7 @@ function run(hook, cwd, home, stdin = '') {
     cwd,
     // CLAUDE_CONFIG_DIR emptied: the config loader honors it, so a real machine value
     // would point the "global" config outside the sandbox home (hooks-safety §7).
-    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, CLAUDE_CONFIG_DIR: '' },
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' },
     input: stdin,
     encoding: 'utf8',
     timeout: 20000,

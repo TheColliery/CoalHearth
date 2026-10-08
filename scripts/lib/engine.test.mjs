@@ -20,7 +20,7 @@ const require = createRequire(import.meta.url);
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { HandoffJournal } = require(path.join(REPO, 'lib', 'handoff-journal.js'));
 const { ResumeEngine } = require(path.join(REPO, 'lib', 'resume-engine.js'));
-const { containedOutputDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
+const { containedOutputDir, isOwnedDefaultDir } = require(path.join(REPO, 'lib', 'contained-dir.js'));
 import { validateValue, validateConfig, CONFIG_SCHEMA } from './config-schema.mjs';
 
 function tmp() {
@@ -58,9 +58,12 @@ test('HandoffJournal.save is fail-silent (returns false, no throw) on unserializ
 });
 
 test('HandoffJournal.save prunes non-journal files on ENOSPC then succeeds, keeping the core json', () => {
-  const dir = tmp();
+// 05a FIXBACK 1: the prune deletes only inside the LITERAL owned folder (<root>/.claude/coalhearth), so this test now works there; it used to point outputDirectory at the root itself, a custom directory the prune no longer touches.
+  const root = tmp();
+  const dir = path.join(root, '.claude', 'coalhearth');
+  const journal = new HandoffJournal({ atomicityRetries: 2 }, root);
+  assert.strictEqual(journal.outputDir, dir);
   fs.writeFileSync(path.join(dir, 'error.log'), 'stale\n');
-  const journal = new HandoffJournal({ outputDirectory: dir, atomicityRetries: 2 }, dir);
   const realWrite = fs.writeFileSync;
   let n = 0;
   fs.writeFileSync = (...a) => {
@@ -74,7 +77,7 @@ test('HandoffJournal.save prunes non-journal files on ENOSPC then succeeds, keep
     assert.ok(fs.existsSync(path.join(dir, 'session_handoff.json')), 'core json survives');
   } finally {
     fs.writeFileSync = realWrite;
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -798,5 +801,171 @@ test('ResumeEngine.sweepOrphans: the legitimate sweep of REAL owned directories 
     assert.strictEqual(fs.existsSync(path.join(root, '.agents', 'coalhearth', 'worktrees', 'ch-worker-9')), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 05a FIXBACK 1, HIGH-1 (05a INSPECT witnesses wc1 and wc2). The amended Phoenix #10 row lets a hook write the tool's OWN project folder only when the candidate's realpath is that
+// folder ITSELF, never merely somewhere inside the project root. containedOutputDir contained a candidate to the root only, so a link planted at the default folder (or at its parent
+// .claude) and aimed at another directory of the project was followed: the journal landed there un-ignored, and the ENOSPC prune deleted that directory's error.log and *.tmp files.
+// The default folder is now pinned to its literal location (as ResumeEngine.sweepOrphans pins scratch and worktrees), and the prune deletes only inside that literal folder, whatever
+// outputDir is. Junction on Windows, directory symlink elsewhere; a link this volume cannot make skips VISIBLY, one skippable leg per test.
+function projectWithSrc() {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.git'));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'build.tmp'), 'user file');
+  return root;
+}
+
+test('HandoffJournal: a link at .claude/coalhearth aimed INSIDE the project writes nothing there and fails closed (no journal, no .gitignore planted)', (t) => {
+  const root = projectWithSrc();
+  const link = path.join(root, '.claude', 'coalhearth');
+  try {
+    if (!plantLink(t, path.join(root, 'src'), link)) return;
+    const j = new HandoffJournal({}, root);
+    assert.strictEqual(j.outputDir, null, 'the default folder is refused when its realpath is not the folder itself');
+    assert.strictEqual(j.save({ goal: 'probe', checklist: [] }), false, 'no journal this session');
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'session_handoff.json')), false, 'nothing written into the link target');
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', '.gitignore')), false, 'no .gitignore planted there either');
+  } finally {
+    unlinkQuiet(link);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: a link at the PARENT .claude aimed inside the project is refused too, before the default folder is created', (t) => {
+  const root = projectWithSrc();
+  const link = path.join(root, '.claude');
+  try {
+    if (!plantLink(t, path.join(root, 'src'), link)) return;
+    const j = new HandoffJournal({}, root);
+    assert.strictEqual(j.outputDir, null);
+    assert.strictEqual(j.save({ goal: 'probe', checklist: [] }), false);
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'coalhearth')), false, 'the default folder was not created inside the link target');
+  } finally {
+    unlinkQuiet(link);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: the ENOSPC prune deletes nothing through a link at the default folder (a user\'s src/build.tmp survives)', (t) => {
+  const root = projectWithSrc();
+  const link = path.join(root, '.claude', 'coalhearth');
+  try {
+    if (!plantLink(t, path.join(root, 'src'), link)) return;
+    new HandoffJournal({}, root)._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'build.tmp')), true, 'the user file survives the prune');
+  } finally {
+    unlinkQuiet(link);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: the prune deletes nothing for a custom outputDirectory of src (it is outside the owned folder), and still prunes the real default folder', () => {
+  const root = projectWithSrc();
+  try {
+    new HandoffJournal({ outputDirectory: 'src' }, root)._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'build.tmp')), true, 'a custom directory is never pruned');
+
+    const owned = path.join(root, '.claude', 'coalhearth');
+    const j = new HandoffJournal({}, root);
+    assert.strictEqual(j.outputDir, owned);
+    fs.writeFileSync(path.join(owned, 'error.log'), 'stale');
+    fs.writeFileSync(path.join(owned, 'session_handoff.json.tmp'), 'leftover');
+    fs.writeFileSync(path.join(owned, 'user-notes.md'), 'not ours');
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(owned, 'error.log')), false, 'the owned folder is still pruned: error.log');
+    assert.strictEqual(fs.existsSync(path.join(owned, 'session_handoff.json.tmp')), false, 'the owned folder is still pruned: *.tmp');
+    assert.strictEqual(fs.existsSync(path.join(owned, 'user-notes.md')), true, 'an unrecognised file is kept');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ResumeEngine: a link at the default folder gives it no output directory (reads, quarantine and mark-resumed all fail closed)', (t) => {
+  const root = projectWithSrc();
+  const link = path.join(root, '.claude', 'coalhearth');
+  try {
+    if (!plantLink(t, path.join(root, 'src'), link)) return;
+    assert.strictEqual(new ResumeEngine({}, {}, root).outputDir, null);
+  } finally {
+    unlinkQuiet(link);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: a link swapped in at the owned folder AFTER the journal was built is not pruned through either (the prune re-checks the realpath itself)', (t) => {
+  const root = projectWithSrc();
+  const owned = path.join(root, '.claude', 'coalhearth');
+  try {
+    const j = new HandoffJournal({}, root);
+    assert.strictEqual(j.outputDir, owned, 'built against the real folder');
+    fs.rmSync(owned, { recursive: true, force: true });
+    if (!plantLink(t, path.join(root, 'src'), owned)) return;
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(root, 'src', 'build.tmp')), true, 'the user file survives');
+  } finally {
+    unlinkQuiet(owned);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 05a FIXBACK 3, MEDIUM-2 (05a RE-INSPECT, case G). isOwnedDefaultDir took its anchor from the CANDIDATE (a lexical grandparent), so it never saw the project root: a configured
+// journal.outputDirectory of sub/.claude/coalhearth looked like an owned folder and the ENOSPC prune deleted the *.tmp files in it. The anchor is now the project root the journal was
+// built with: the candidate must be spelled <root>/.claude/coalhearth AND resolve, through realpath.native on both sides, to that literal location under the realpath of the root.
+test('HandoffJournal: the prune leaves a configured nested sub/.claude/coalhearth alone (it is not the owned folder of THIS project root)', () => {
+  const root = projectWithSrc();
+  try {
+    const nested = path.join(root, 'sub', '.claude', 'coalhearth');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'other.tmp'), 'a user file');
+    fs.writeFileSync(path.join(nested, 'error.log'), 'a user file');
+    const j = new HandoffJournal({ outputDirectory: path.join('sub', '.claude', 'coalhearth') }, root);
+    assert.strictEqual(j.outputDir, nested, 'the journal does write there (a custom directory, an open decision), only the prune is closed');
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(nested, 'other.tmp')), true, 'other.tmp survives');
+    assert.strictEqual(fs.existsSync(path.join(nested, 'error.log')), true, 'error.log survives');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('HandoffJournal: an alias .claude/alias linked to the owned folder is a custom outputDirectory, not the owned folder: the prune leaves it alone', (t) => {
+  const root = projectWithSrc();
+  const owned = path.join(root, '.claude', 'coalhearth');
+  const alias = path.join(root, '.claude', 'alias');
+  try {
+    fs.mkdirSync(owned, { recursive: true });
+    fs.writeFileSync(path.join(owned, 'error.log'), 'stale');
+    if (!plantLink(t, owned, alias)) return;
+    const j = new HandoffJournal({ outputDirectory: path.join('.claude', 'alias') }, root);
+    assert.strictEqual(j.outputDir, alias, 'built on the alias spelling');
+    j._pruneOldLogs();
+    assert.strictEqual(fs.existsSync(path.join(owned, 'error.log')), true, 'nothing is pruned through the alias, though it resolves into the owned folder');
+  } finally {
+    unlinkQuiet(alias);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('isOwnedDefaultDir(dir, root): true only for <root>/.claude/coalhearth resolving to itself under that root; any other dir, a wrong or missing root, an absent dir: false', () => {
+  const root = projectWithSrc();
+  const other = projectWithSrc();
+  try {
+    const owned = path.join(root, '.claude', 'coalhearth');
+    fs.mkdirSync(owned, { recursive: true });
+    fs.mkdirSync(path.join(other, '.claude', 'coalhearth'), { recursive: true });
+    assert.strictEqual(isOwnedDefaultDir(owned, root), true, 'the owned folder of its own root');
+    assert.strictEqual(isOwnedDefaultDir(owned, other), false, 'not the owned folder of another root');
+    assert.strictEqual(isOwnedDefaultDir(path.join(root, 'src'), root), false, 'a custom directory');
+    assert.strictEqual(isOwnedDefaultDir(owned, undefined), false, 'no root: fails closed');
+    assert.strictEqual(isOwnedDefaultDir(undefined, root), false, 'no dir: fails closed');
+    assert.strictEqual(isOwnedDefaultDir(path.join(root, 'no', '.claude', 'coalhearth'), root), false, 'an absent directory: fails closed');
+    const nested = path.join(root, 'sub', '.claude', 'coalhearth');
+    fs.mkdirSync(nested, { recursive: true });
+    assert.strictEqual(isOwnedDefaultDir(nested, root), false, 'a nested look-alike is not the root\'s owned folder');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
   }
 });

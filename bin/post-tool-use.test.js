@@ -34,7 +34,9 @@ function mkProject() {
 }
 
 function run(cwd, home, stdin) {
-  const env = { ...process.env, USERPROFILE: home, HOME: home };
+  // R20: the whole sandbox (hooks-safety.md section 7), not only HOME. CLAUDE_CONFIG_DIR is emptied because the config loader honors it before the home directory, so a
+  // real machine value would hand the hook the operator's own global config; TEMP/TMP/TMPDIR keep any tmpdir write inside the throwaway home, on every platform.
+  const env = { ...process.env, USERPROFILE: home, HOME: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' };
   return spawnSync(process.execPath, [HOOK], {
     cwd,
     env,
@@ -546,6 +548,65 @@ test('SELF-CLEAN NO-DRIFT: a non-canonically-spelled cwd is not drift — the jo
       'a pre-existing quarantine must NOT be self-cleaned — there was no drift'
     );
   } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// 08a (BB-49 (1), UMB-456): journal.outputDirectory is GLOBAL-ONLY. A PROJECT config (it ships with a cloned repo) aiming the journal at a real
+// source directory is ignored: the hook still journals, in the DEFAULT folder, and writes nothing under src/. State effects on both sides.
+test('08a: a project config aiming journal.outputDirectory at src/ is ignored -- the journal lands in the default folder, nothing under src/', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    fs.mkdirSync(path.join(cwd, 'src'));
+    fs.writeFileSync(path.join(cwd, 'src', 'keep.txt'), 'mine');
+    fs.mkdirSync(path.join(cwd, '.claude', 'coal'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'coal', 'coalhearth.json'), JSON.stringify({ journal: { outputDirectory: 'src' } }));
+    const r = run(cwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(fs.existsSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json')), 'the journal lands in the default folder');
+    assert.deepStrictEqual(fs.readdirSync(path.join(cwd, 'src')), ['keep.txt'], 'nothing is written under src/');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('08a: the GLOBAL journal.outputDirectory still moves the journal (contained to the project), and a project value cannot undo it', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ journal: { outputDirectory: 'custom/journal' } }));
+    fs.mkdirSync(path.join(cwd, '.claude', 'coal'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'coal', 'coalhearth.json'), JSON.stringify({ journal: { outputDirectory: 'src' } }));
+    const r = run(cwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.ok(fs.existsSync(path.join(cwd, 'custom', 'journal', 'session_handoff.json')), 'the global directory is honoured');
+    assert.ok(!fs.existsSync(path.join(cwd, 'src')), 'the project value is not used');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// 08a FIXBACK 1 (INSPECT LOW-1): a project config whose `journal` is not a group (here 5) must not move the journal off the GLOBAL directory.
+test('08a FIXBACK 1: a project journal of 5 does not drop the GLOBAL journal.outputDirectory -- the journal lands where the global config points', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', '.coalhearth.json'), JSON.stringify({ journal: { outputDirectory: 'custom/journal' } }));
+    fs.mkdirSync(path.join(cwd, '.claude', 'coal'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'coal', 'coalhearth.json'), JSON.stringify({ journal: 5 }));
+    const r = run(cwd, home);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.ok(fs.existsSync(path.join(cwd, 'custom', 'journal', 'session_handoff.json')), 'the global directory is honoured');
+    assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'coalhearth', 'session_handoff.json')), 'not the default folder');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
 });

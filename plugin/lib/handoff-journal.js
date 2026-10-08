@@ -4,7 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { containedOutputDir } = require('./contained-dir.js');
+const { containedOutputDir, anchorRoot, isOwnedDefaultDir } = require('./contained-dir.js');
 const { readRepoFileBounded, writeTempExclusive, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 const { fitJournal } = require('./journal-cap.js');
 
@@ -63,14 +63,15 @@ class HandoffJournal {
    * @param {Object} config journal config ({ outputDirectory, atomicityRetries }).
    * @param {string} [root] workspace root the outputDirectory is realpath-contained
    *   under. OMITTED (what recordStep passes) -> auto-anchored to the resolved project
-   *   root, never raw process.cwd() (hooks-safety.md §8). An untrusted project `.coalhearth.json`
-   *   outputDirectory escaping root clamps to the default owned dir; if even that
+   *   root, never raw process.cwd() (hooks-safety.md §8). A configured outputDirectory (global-only since 2.7.0,
+   *   so never a cloned repo's) escaping root clamps to the default owned dir; if even that
    *   fails containment, outputDir is null and save()/load()/prune no-op
    *   (fail-closed — audit 2026-07-02 MED, see lib/contained-dir.js).
    */
   constructor(config, root) {
     this.config = config || {};
     this.outputDir = containedOutputDir(this.config.outputDirectory, root);
+    this.root = anchorRoot(root); // the project root this journal was built for: the prune's ownership check is anchored to it (05a FIXBACK 3)
     // Clamp to [1, MAX_RETRIES]: a non-positive/absent value -> 3 (default), an
     // over-large one -> MAX_RETRIES, so the synchronous busy-wait backoff stays bounded.
     const wanted = Number.isInteger(this.config.atomicityRetries) && this.config.atomicityRetries > 0
@@ -269,14 +270,17 @@ class HandoffJournal {
   // FMEA "Disk Quota Exceeded": free space for the journal retry by deleting ONLY
   // CoalHearth-owned transient junk (error.log, *.tmp leftovers) — an ALLOW-LIST, not
   // a blind delete-all (audit 2026-07-02 HIGH). Two containment layers: the
-  // constructor already realpath-contains outputDir under the WORKSPACE root (so an
-  // untrusted `{journal:{outputDirectory:"../secrets"}}` never anchors the prune
+  // constructor already realpath-contains outputDir under the WORKSPACE root (so a
+  // `{journal:{outputDirectory:"../secrets"}}`, global-only since 2.7.0, never anchors the prune
   // outside it — audit 2026-07-02 MED, round 2), and every target here is
   // realpath-and-contained inside outputDir (same discipline as resume-engine.js
   // sweepOrphans) so a symlinked FILE inside the dir can't redirect an unlink out.
   // We deliberately KEEP the *.corrupt.json forensic quarantine and any unrecognized file.
   _pruneOldLogs() {
     if (!this.outputDir) return; // fail-closed: no contained dir -> nothing to prune
+    // 05a FIXBACK 1 (HIGH-1), anchored to the project root in FIXBACK 3: delete only inside the LITERAL owned folder (<root>/.claude/coalhearth, realpath equal to that location under THIS root), whatever outputDir is. A custom
+    // outputDirectory such as `src`, or a link at the default folder, is contained to the project root but is not the owned folder, and its *.tmp files may be the user's.
+    if (!isOwnedDefaultDir(this.outputDir, this.root)) return;
     try {
       let root;
       try {

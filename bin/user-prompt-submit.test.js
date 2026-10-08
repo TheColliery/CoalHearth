@@ -42,7 +42,9 @@ function seedJournal(cwd, inFlightAgents) {
 }
 
 function run(cwd, home, stdin) {
-  const env = { ...process.env, USERPROFILE: home, HOME: home };
+  // R20: the whole sandbox (hooks-safety.md section 7), not only HOME. CLAUDE_CONFIG_DIR is emptied because the config loader honors it before the home directory, so a
+  // real machine value would hand the hook the operator's own global config; TEMP/TMP/TMPDIR keep any tmpdir write inside the throwaway home, on every platform.
+  const env = { ...process.env, USERPROFILE: home, HOME: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' };
   return spawnSync(process.execPath, [HOOK], {
     cwd,
     env,

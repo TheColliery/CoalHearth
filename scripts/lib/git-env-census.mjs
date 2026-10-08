@@ -61,6 +61,10 @@ import { createHash } from 'node:crypto';
 // editing it here, so the census cannot be satisfied by routing its spawns through gitEnv(), and the row must not outlive that content.
 // A row whose `expr` is null covers a spawn that carries no env: key at all.
 //
+// NAMED DIVERGENCE (05a FIXBACK 2): scripts/release-notes.test.mjs is HELD at blob d2f5b830, the blob this room carried before the adoption, not the canon's a8f3ba69 (.github 7afc4ef). The
+// canon's test asserts the child env holds nothing but what node needs, which is red on macOS (it injects __CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE); CoalBoard
+// measured it (CI run 37224469491). The held file passes the census with no row. Exit: re-sync the file when the canon fix lands, and skeleton-check then reads equal.
+//
 // The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
 // COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
 // stale. The reason is printed by the gate: keep it free of parentheses.
@@ -70,12 +74,14 @@ export const GIT_ENV_EXEMPTIONS = [
   // so the census refuses the SHAPE (CWK-136 asks for the room's helper alone); secret-scan.test.mjs spawns git with no env: at all,
   // so a pathspec or -a commit run from a hook hands those children an absolute GIT_INDEX_FILE (the CWK-133 class in the canon, routed
   // to the .github deputy). Delete each row when the canon carries the fix and this room re-copies the file.
+  // 05a (UMB-444): secret-gate.test.mjs was re-copied at .github 7afc4ef (blob f61a33e7, was 3fcd3f0d: the explicit test env). Measured on the new bytes: without this row the census
+  // still fails on the same line, because the canon keeps its own GIT_-stripping helper plus the per-call overlay, so the row stays and its pin moves to the new blob.
   {
     label: 'scripts/secret-gate.test.mjs',
     expr: '{ ...gitEnv(), ...extra }',
     count: 1,
-    blob: '3fcd3f0d020ea3b3f369feca01dc770d102ca5b3',
-    reason: 'a byte-equal org carrier from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
+    blob: 'f61a33e75a3a420e0de0116f45d2b1fd44936a50',
+    reason: 'a byte-equal org carrier at blob f61a33e7 from the published-code template whose env is its own GIT_-stripping helper plus an overlay, pinned by blob id and deleted when the canon uses the room helper',
   },
   {
     label: 'scripts/secret-scan.test.mjs',
@@ -83,6 +89,19 @@ export const GIT_ENV_EXEMPTIONS = [
     count: 3,
     blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
     reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
+  },
+  // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): a byte-equal org carrier from the overlay template at .github 7afc4ef. (The second file adopted with it,
+  // release-notes.test.mjs, is held at the room's previous blob instead and needs no row: see the named divergence above.)
+  // release-notes.mjs builds an explicit minimal env (PATH, the temp and home keys, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT; no GIT_ variable passes) and hands it to its one git
+  // spawn as the shorthand property `env` (the census reads that as `env: env`, a local const that is an allowlist object and not a gitEnv() call, so it still needs the row; an
+  // earlier wording of this row said the census read it as no env: key, which was a parser defect, fixed in 05a FIXBACK 1). The carrier is unreachable for the room (the umbrella's parity check forbids editing it), so the row is pinned by blob id and deleted when the canon
+  // carries the room helper and this room re-copies the file.
+  {
+    label: 'scripts/release-notes.mjs',
+    expr: 'env',
+    count: 1,
+    blob: '674592e0ff25dbdc14a8a4e21e6a598953b90eaa',
+    reason: 'a byte-equal org carrier from the overlay template whose one git spawn takes an explicit minimal env object built from an allowlist with no GIT_ variable in it, pinned by blob id and deleted when the canon uses the room helper',
   },
   {
     label: 'scripts/lib/git-env.test.mjs',
@@ -214,11 +233,28 @@ function aliasVerdict(name, fileText) {
   return null;
 }
 
+// 05a FIXBACK 1 (LOW-1): is there a SHORTHAND property `env` in an object literal of the call: `{ env }`, `{ env, a }`, `{ a, env }`, on one line or several? It means `env: env`. The character
+// before it must be `{`, or a `,` whose nearest enclosing bracket is a `{`: a positional `f(a, env)` or an array element `[a, env]` is not a property.
+function hasShorthandEnv(callText) {
+  const re = /([{,])\s*env\s*(?=[,}])/g;
+  let m;
+  while ((m = re.exec(callText))) {
+    if (m[1] === '{') return true;
+    let depth = 0;
+    for (let i = m.index - 1; i >= 0; i--) {
+      const c = callText[i];
+      if (c === ')' || c === ']' || c === '}') depth++;
+      else if (c === '(' || c === '[' || c === '{') { if (depth === 0) { if (c === '{') return true; break; } depth--; }
+    }
+  }
+  return false;
+}
+
 // null = the env is gitEnv() alone; otherwise { why, expr }.
 function envVerdict(callText, fileText) {
   const m = /\benv\s*:/.exec(callText);
-  if (!m) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
-  const expr = readExpr(callText, m.index + m[0].length, callText.length).trim();
+  if (!m && !hasShorthandEnv(callText)) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
+  const expr = m ? readExpr(callText, m.index + m[0].length, callText.length).trim() : 'env';
   if (/\bprocess\s*(?:\.\s*env\b|\[\s*['"`]env['"`]\s*\])/.test(expr)) {
     return { why: `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)`, expr };
   }
