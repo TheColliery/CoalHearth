@@ -2,6 +2,17 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.2] - 2026-10-09
+
+The Antigravity update note no longer spells out a config path.
+
+The plugin dist changes in `commands/update.md` and the version string; the CodeQL fixes below are the room's own test tooling.
+
+### Changed
+
+- **`commands/update.md` names agy's plugins folder instead of spelling its path** *(shipped: `commands/update.md`)*. The Antigravity paragraph added in 2.8.1 now says the install cloned the whole repository "into agy's plugins folder" and points to README's Antigravity section for the exact path, which is unchanged there and was measured. Every fact in the paragraph stays: the command, exit 0, the whole repository cloned, the commands imported as skills, and the hooks firing from that folder not measured. SkillSpector's static stage matched the literal `~/.gemini/config` path in the 2.8.1 text (`AS1`, Agent Config Directory Access); the true reading was benign (a past-tense statement, no instruction), and the wording is changed so the scan reads clean of it. — test: none (text)
+- **Two CodeQL alerts raised on the 2.8.1 push are fixed in test code, not dismissed** *(repo tests, not in the plugin dist)*. #21 `js/incomplete-sanitization` in `scripts/lib/git-env-census.test.mjs`: the backslash-separator fixture was built with a string-pattern `.replace`, which swaps only the first occurrence, and it never presented a backslash separator at all (the census read `\g` as `g`); it now holds two backslash characters. #22 `js/file-system-race` in `lib/handoff-journal.test.js`: the ordinary acquire, release and steal test checked a lock path and then wrote it; it now reads the folder listing. — test: `scripts/lib/git-env-census.test.mjs`, `lib/handoff-journal.test.js`
+
 ## [2.8.1] - 2026-10-09
 
 The journal folder's link check now runs at every write.
