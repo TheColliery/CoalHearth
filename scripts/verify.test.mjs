@@ -467,7 +467,10 @@ function agFailLines(r) {
 }
 
 const AG_FAIL_CASES = [
-  ['LOW-1: a command naming a script OUTSIDE the plugin folder (it exists) FAILs by name', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../outside.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: \.\.\/outside\.js is outside the plugin folder/],
+  ['FIXBACK 2 (RE-INSPECT LOW-3): ../room/bin/x, a `..` that leaves and comes back through the folder\'s OWN NAME, FAILs: that name differs on the dist and on every install', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../room/bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path '\.\.\/room\/bin\/ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['FIXBACK 2: bin/../bin/x, a `..` that comes back inside through a folder of the plugin, FAILs too: the segment is refused wherever it leads, so a path means one thing on the clone, the dist and an install', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/../bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path 'bin\/\.\.\/bin\/ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['FIXBACK 2: a backslash separator FAILs: AG runs the command through sh -c on Unix, where bin\\ag-pre-invocation.js is not a path into bin', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin\\ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path 'bin\\ag-pre-invocation\.js' has a '\.\.' segment or a backslash separator/],
+  ['LOW-1: a command naming a script OUTSIDE the plugin folder (it exists) FAILs by name', { coalhearth: { PreInvocation: [{ type: 'command', command: 'node ../outside.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } }, /FAIL hooks\.json PreInvocation: command path '\.\.\/outside\.js' has a '\.\.' segment or a backslash separator/],
   ['LOW-2: an event value that is not an array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: { matcher: '*', hooks: AG_POST[0].hooks } } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*not an array/],
   ['LOW-2: a grouped event whose group has no hooks array FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ matcher: '*' }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*hooks/],
   ['LOW-2: a grouped event whose group has no matcher FAILs', { coalhearth: { PreInvocation: AG_PRE, PostToolUse: [{ hooks: AG_POST[0].hooks }] } }, /FAIL hooks\.json coalhearth\.PostToolUse: .*matcher/],
@@ -491,18 +494,6 @@ for (const [name, hooks, expected] of AG_FAIL_CASES) {
     }
   });
 }
-
-test('08b AG FIXBACK 1, verify.mjs: a traversal that comes back INSIDE the plugin folder (bin/../bin/x) resolves under it and passes, like the shell AG runs would resolve it', () => {
-  const { box, room } = agBox();
-  try {
-    plantHooks(room, { coalhearth: { PreInvocation: [{ type: 'command', command: 'node bin/../bin/ag-pre-invocation.js PreInvocation', timeout: 10 }], PostToolUse: AG_POST } });
-    const r = run(room);
-    assert.equal(r.status, 0, 'got:\n' + r.stdout + r.stderr);
-    assert.match(r.stdout, /ok +hooks\.json PreInvocation -> bin\/\.\.\/bin\/ag-pre-invocation\.js/);
-  } finally {
-    fs.rmSync(box, { recursive: true, force: true });
-  }
-});
 
 // FIXBACK 1, the cases the mutation table asked for: a named hook that is not an object; a script reached THROUGH A LINK that leaves the folder (realpath containment; a directory
 // junction needs no privilege on Windows, a capability probe skips visibly where a link cannot be made); and a script at the folder root whose name merely STARTS with two dots

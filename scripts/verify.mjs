@@ -75,8 +75,11 @@ try {
 // missing adapter would load on AG and fail on every model call, so it is gated here.
 // FIXBACK 1 (INSPECT LOW-1, LOW-2): the block also refuses what AG would silently skip or switch off: an event that is not an array, a PreToolUse/PostToolUse group without its
 // matcher string or hooks array, a handler that is not an object, a named hook with enabled:false (docs/hooks.md: "Set enabled to false to disable"), and a file with no
-// PreInvocation or no PostToolUse handler on an enabled hook (the product is the pair: the resume block and the journal). A path that leaves the folder and comes back
-// (bin/../bin/x) resolves inside it, so it passes: the shell AG runs it through resolves it the same way.
+// PreInvocation or no PostToolUse handler on an enabled hook (the product is the pair: the resume block and the journal).
+// FIXBACK 2 (RE-INSPECT LOW-3): a command path with a `..` SEGMENT is refused wherever it leads, and so is a backslash separator. A `..` that leaves the folder and comes back
+// (../room/bin/x) resolves inside it only through the folder's own NAME, which differs on the clone, the dist and every install; bin/../bin/x resolves everywhere but means
+// nothing a plain bin/x does not, so there is no reason to allow it. A backslash breaks under `sh -c` on Unix. The check is lexical and comes before the resolve; the
+// containment and realpath checks after it stay (the realpath one is the only defence against a link).
 console.log('Antigravity plugin (plugin.json + hooks.json):');
 try {
   const AG_EVENTS = ['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop'];
@@ -116,6 +119,7 @@ try {
           if (h.type !== 'command') fail(`hooks.json ${event}: handler type '${h.type}' (AG supports only command)`);
           else if (!(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 30)) fail(`hooks.json ${event}: timeout '${h.timeout}' (want an integer 1-30, AG's default is 30)`);
           else if (parts[0] !== 'node' || !script || path.isAbsolute(script)) fail(`hooks.json ${event}: command '${h.command}' is not 'node <path relative to hooks.json>'`);
+          else if (script.split('/').includes('..') || script.includes('\\')) fail(`hooks.json ${event}: command path '${script}' has a '..' segment or a backslash separator (AG runs the command through sh -c from the folder holding hooks.json; a path that goes up and back in names the folder, which differs on the clone, the dist and an install)`);
           else if (leaves(path.relative(repo, path.resolve(repo, script)))) fail(`hooks.json ${event}: ${script} is outside the plugin folder (AG runs the command from the folder holding hooks.json, and on an install that path does not exist)`);
           else if (!fs.existsSync(path.resolve(repo, script))) fail(`hooks.json ${event}: ${script} does not exist (the command names a missing adapter)`);
           else if (leaves(path.relative(realRepo, fs.realpathSync.native(path.resolve(repo, script))))) fail(`hooks.json ${event}: ${script} resolves through a link to outside the plugin folder`);
