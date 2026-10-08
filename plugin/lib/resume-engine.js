@@ -9,7 +9,7 @@
 // always tells the agent to VERIFY against git, never to blind-trust the journal.
 const fs = require('node:fs');
 const path = require('node:path');
-const { containedOutputDir, findWorkspaceRoot } = require('./contained-dir.js');
+const { containedOutputDir, findWorkspaceRoot, anchorRoot, makePinCheck } = require('./contained-dir.js');
 const { readRepoFileBounded, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 // One source of truth for the journal file layout + the atomic writer (H6/H7 one-flock:
 // mark-resumed and quarantine go through the SAME per-pid temp+rename as HandoffJournal.save).
@@ -80,6 +80,7 @@ class ResumeEngine {
     this.config = config || {};
     this.recovery = recovery || {};
     this.outputDir = containedOutputDir(this.config.outputDirectory, root);
+    this._pinned = makePinCheck(this.outputDir, anchorRoot(root)); // 08c unit 2 (LOW-A): asked again at every write (mark-resumed, the quarantine copy)
   }
 
   /**
@@ -113,7 +114,8 @@ class ResumeEngine {
    */
   _quarantine(journalPath, raw) {
     try {
-      atomicWriteJournal(this.outputDir, CORRUPT_FILE, raw); // per-pid temp+rename (H6/H7)
+      if (!this._pinned()) return; // 08c unit 2 (LOW-A): the folder is no longer the one that was checked -> neither the copy nor the removal happens
+      atomicWriteJournal(this.outputDir, CORRUPT_FILE, raw, this._pinned); // per-pid temp+rename (H6/H7)
       fs.rmSync(journalPath, { force: true });
     } catch {
       // ponytail: best-effort cleanup; a stuck corrupt file is still non-fatal,
@@ -133,7 +135,7 @@ class ResumeEngine {
    */
   markResumed(data) {
     if (!this.outputDir) return false;
-    return atomicWriteJournal(this.outputDir, JOURNAL_FILE, JSON.stringify({ ...data, status: 'resumed' }, null, 2));
+    return atomicWriteJournal(this.outputDir, JOURNAL_FILE, JSON.stringify({ ...data, status: 'resumed' }, null, 2), this._pinned);
   }
 
   /**

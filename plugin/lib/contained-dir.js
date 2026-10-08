@@ -284,9 +284,21 @@ function isOwnedDefaultDir(dir, root) {
   }
 }
 
+// 08c unit 2 (LOW-A): containedOutputDir checks the folder ONCE, when the journal is built; a hook run is not instantaneous, and a link swapped in at the folder between that check
+// and a write (SECURITY.md class 6, CHANGELOG [2.6.3] "Not covered") redirected that one run's write. makePinCheck returns the guard every write routes through: it is asked again
+// at each write and answers whether the folder is STILL the one that was checked. The default folder is pinned to its literal location (isOwnedDefaultDir: two realpath.native
+// calls, inside Phoenix #3's budget); a custom folder (global config) cannot be pinned to a literal, so it is pinned to the physical path it had when it was built. Any error or a
+// missing folder is false (fail closed). The window between this check and the write is microseconds and is not closed; it is named in SECURITY.md.
+function makePinCheck(outputDir, root) {
+  if (typeof outputDir !== 'string' || !outputDir) return () => false;
+  if (typeof root === 'string' && root && path.resolve(outputDir) === path.join(path.resolve(root), DEFAULT_OUTPUT_DIR)) return () => isOwnedDefaultDir(outputDir, root);
+  const built = physicalOrNull(outputDir);
+  return () => built !== null && physicalOrNull(outputDir) === built;
+}
+
 // Exported so a caller that wants to WARN on a blocked/escaping outputDir can first
 // check whether a real project exists at all — "no project here" (a stray cwd, or a
 // tool call that drifted into a subdir with nothing above it) is silent-and-expected,
 // never the same "may repeat" class of problem as "a real project's journal dir is
 // blocked by a file". See bin/session-start.js and bin/ag-pre-invocation.js.
-module.exports = { containedOutputDir, findWorkspaceRoot, anchorRoot, isOwnedDefaultDir, DEFAULT_OUTPUT_DIR };
+module.exports = { containedOutputDir, findWorkspaceRoot, anchorRoot, isOwnedDefaultDir, makePinCheck, DEFAULT_OUTPUT_DIR };
