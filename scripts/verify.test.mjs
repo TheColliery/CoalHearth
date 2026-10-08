@@ -33,7 +33,8 @@ const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin'
 // the fix working: an incomplete fixture used to look identical to a passing one.
 // CHANGELOG.md added (r31 fixback) so the pointer-drift block's historyOnly row reads cleanly
 // instead of a "could not read" SKIP -- harmless either way, but a clean read matches production.
-const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md'];
+// 08b: plugin.json + hooks.json are the Antigravity plugin's own root files, gated by verify.mjs.
+const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'plugin.json', 'hooks.json'];
 
 function seed(tmp) {
   for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
@@ -407,4 +408,36 @@ test('hermetic spawn: run() hands verify.mjs a throwaway HOME, USERPROFILE, TEMP
   assert.equal(seen.GIT_DIR, 'a-caller-git-dir', 'a GIT_DIR the caller passes on purpose is kept (the CWK-133 tests rely on it)');
   assert.notEqual(seen.CLAUDE_CONFIG_DIR, operatorConfigDir, "the operator's CLAUDE_CONFIG_DIR does not reach the child");
   assert.equal(path.resolve(seen.CLAUDE_CONFIG_DIR), path.join(path.resolve(sandbox), '.claude'), 'CLAUDE_CONFIG_DIR is set INSIDE the throwaway directory, so the global layer resolves there');
+});
+
+// 08b (CWK-202 pilot): the Antigravity plugin files are a gated surface. A hooks.json whose command names an adapter that does not exist
+// (the plugin would load and every hook would fail on AG) FAILs the gate, by name, and a pristine copy passes.
+test('08b verify.mjs negative path: an AG hooks.json command naming a missing adapter FAILs the gate by name', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    const clean = run(tmp);
+    assert.equal(clean.status, 0, 'pristine copy must PASS, got:\n' + clean.stdout + clean.stderr);
+    assert.match(clean.stdout, /Antigravity plugin/);
+    const hj = path.join(tmp, 'hooks.json');
+    fs.writeFileSync(hj, fs.readFileSync(hj, 'utf8').replace('bin/ag-pre-invocation.js', 'bin/no-such-adapter.js'));
+    const bad = run(tmp);
+    assert.equal(bad.status, 1, 'a hooks.json naming a missing adapter must FAIL, got:\n' + bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /FAIL.*hooks\.json.*no-such-adapter/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('08b verify.mjs negative path: an AG plugin.json with the wrong name FAILs the gate', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.writeFileSync(path.join(tmp, 'plugin.json'), JSON.stringify({ name: 'not-coalhearth' }));
+    const bad = run(tmp);
+    assert.equal(bad.status, 1, 'got:\n' + bad.stdout + bad.stderr);
+    assert.match(bad.stdout, /FAIL.*plugin\.json.*not-coalhearth/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

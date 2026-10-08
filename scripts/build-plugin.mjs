@@ -21,6 +21,11 @@ export const DIST_ITEMS = [
   'config',
   'hooks',
   'commands',
+  // 08b (CWK-202 pilot): the Antigravity plugin. AG registers a FOLDER holding plugin.json + hooks.json at its root (docs/plugins.md), and runs a hook command from the
+  // directory holding hooks.json (docs/hooks.md), so plugin/ is that folder: these two root files sit beside the bin/ + lib/ the hooks run. Claude Code reads
+  // .claude-plugin/plugin.json and hooks/hooks.json, never these two paths.
+  'plugin.json',
+  'hooks.json',
 ];
 
 // TEXT_EXTS grounded in what actually ships: every extension found under

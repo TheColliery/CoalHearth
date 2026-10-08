@@ -50,6 +50,8 @@ for (const [label, p] of [
   ['.claude-plugin/plugin.json', path.join(repo, '.claude-plugin', 'plugin.json')],
   ['.claude-plugin/marketplace.json', path.join(repo, '.claude-plugin', 'marketplace.json')],
   ['platform-configs/.coalhearth.json', path.join(repo, 'platform-configs', '.coalhearth.json')],
+  ['plugin.json', path.join(repo, 'plugin.json')], // 08b: the Antigravity plugin manifest
+  ['hooks.json', path.join(repo, 'hooks.json')], // 08b: the Antigravity hooks
 ]) { try { fs.existsSync(p) ? ok(label) : fail(`${label} missing`); } catch (e) { fail(`${label}: ${e.message}`); } }
 
 console.log('plugin manifest:');
@@ -66,6 +68,38 @@ try {
   if (hj.includes('${CLAUDE_PLUGIN_ROOT}/bin/user-prompt-submit.js')) ok('hooks.json wires UserPromptSubmit via ${CLAUDE_PLUGIN_ROOT}/bin');
   else fail('hooks.json does not wire UserPromptSubmit under ${CLAUDE_PLUGIN_ROOT}/bin');
 } catch (e) { fail(`plugin manifest: ${e.message}`); }
+
+// 08b (CWK-202 pilot): the Antigravity plugin (agy-customizations/docs/plugins.md + hooks.md). plugin.json names the plugin; hooks.json uses only AG's five events, command
+// handlers with a timeout inside AG's 30 s default, and commands RELATIVE to the directory holding hooks.json (AG runs a hook from there) naming a script that exists.
+// A hooks.json naming a missing adapter would load on AG and fail on every model call, so it is gated here.
+console.log('Antigravity plugin (plugin.json + hooks.json):');
+try {
+  const AG_EVENTS = ['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop'];
+  const am = JSON.parse(fs.readFileSync(path.join(repo, 'plugin.json'), 'utf8'));
+  if (am.name === 'coalhearth') ok("plugin.json name = 'coalhearth'"); else fail(`plugin.json name = '${am.name}' (want 'coalhearth')`);
+  const ah = JSON.parse(fs.readFileSync(path.join(repo, 'hooks.json'), 'utf8'));
+  let handlers = 0;
+  for (const [hookName, spec] of Object.entries(ah)) {
+    for (const [event, entries] of Object.entries(spec)) {
+      if (event === 'enabled') continue;
+      if (!AG_EVENTS.includes(event)) { fail(`hooks.json ${hookName}.${event} is not one of AG's five events`); continue; }
+      for (const entry of Array.isArray(entries) ? entries : []) {
+        const hs = (event === 'PreToolUse' || event === 'PostToolUse') ? (entry.hooks || []) : [entry];
+        for (const h of hs) {
+          handlers++;
+          const parts = String(h.command || '').split(' ');
+          const script = parts[1];
+          if (h.type !== 'command') fail(`hooks.json ${event}: handler type '${h.type}' (AG supports only command)`);
+          else if (!(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 30)) fail(`hooks.json ${event}: timeout '${h.timeout}' (want an integer 1-30, AG's default is 30)`);
+          else if (parts[0] !== 'node' || !script || path.isAbsolute(script)) fail(`hooks.json ${event}: command '${h.command}' is not 'node <path relative to hooks.json>'`);
+          else if (!fs.existsSync(path.join(repo, script))) fail(`hooks.json ${event}: ${script} does not exist (the command names a missing adapter)`);
+          else ok(`hooks.json ${event} -> ${script}`);
+        }
+      }
+    }
+  }
+  if (handlers === 0) fail('hooks.json declares no handler');
+} catch (e) { fail(`Antigravity plugin: ${e.message}`); }
 
 console.log('marketplace.json:');
 try {

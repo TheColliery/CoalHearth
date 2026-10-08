@@ -1,0 +1,15 @@
+{
+  "coalhearth": {
+    "PreInvocation": [
+      { "type": "command", "command": "node bin/ag-pre-invocation.js PreInvocation", "timeout": 10 }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node bin/ag-post-tool-use.js PostToolUse", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

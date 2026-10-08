@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildDist, checkDist } from './build-plugin.mjs';
+import { DIST_ITEMS, buildDist, checkDist } from './build-plugin.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -170,5 +170,23 @@ test('checkDist reports a dist entry that is a DIRECTORY where the source is a f
     assert.ok(!drift.some((d) => d.startsWith('stale in plugin/') && d.includes('session-start.js')), 'and it is not ALSO reported as stale: ' + JSON.stringify(drift));
   } finally {
     fs.rmSync(distRoot, { recursive: true, force: true });
+  }
+});
+
+// 08b (CWK-202 pilot): the Antigravity plugin manifest and hooks.json ride the dist like every other item, so the folder AG registers
+// (plugin/) holds plugin.json + hooks.json AND the bin/ + lib/ the hooks run.
+test('08b: DIST_ITEMS carries the Antigravity plugin.json and hooks.json, and the built dist holds them byte-identical to source', () => {
+  assert.ok(DIST_ITEMS.includes('plugin.json'), 'plugin.json is a DIST_ITEM');
+  assert.ok(DIST_ITEMS.includes('hooks.json'), 'hooks.json is a DIST_ITEM');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-build-08b-'));
+  try {
+    buildDist(tmp);
+    for (const f of ['plugin.json', 'hooks.json']) {
+      assert.ok(fs.existsSync(path.join(tmp, f)), f + ' is in the built dist');
+      assert.strictEqual(fs.readFileSync(path.join(tmp, f), 'utf8'), fs.readFileSync(path.join(repoRoot, f), 'utf8'), f + ' matches source');
+    }
+    assert.deepStrictEqual(checkDist(tmp), [], 'the dist is in sync');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

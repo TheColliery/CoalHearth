@@ -715,3 +715,129 @@ test('ptu filecopy: camelCase toolName + toolInput (Copilot-CLI shape) -> record
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// =====================================================================================
+// 08b (CWK-202 pilot): the Antigravity PLUGIN. A plugin folder holds plugin.json + hooks.json at its root
+// (agy-customizations/docs/plugins.md); AG runs a hook command with the cwd set to the directory holding hooks.json
+// (docs/hooks.md), so the shipped commands are RELATIVE to that directory. These tests read the SHIPPED files and run
+// each command the way AG does -- through a shell, from that directory, with AG's full stdin shape (the common fields
+// plus the event's own) -- never only the adapter script directly.
+// =====================================================================================
+const REPO = path.join(__dirname, '..');
+const AG_EVENTS = ['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop']; // docs/hooks.md "Supported Event Types"
+const AG_TOOL_EVENTS = ['PreToolUse', 'PostToolUse']; // the grouped (matcher + hooks) shape; the other three are flat
+
+function readAgPlugin() {
+  return {
+    manifest: JSON.parse(fs.readFileSync(path.join(REPO, 'plugin.json'), 'utf8')),
+    hooks: JSON.parse(fs.readFileSync(path.join(REPO, 'hooks.json'), 'utf8')),
+  };
+}
+// Every handler the shipped hooks.json declares for one event, flattened out of the grouped/flat shapes.
+function agHandlers(hooks, event) {
+  const out = [];
+  for (const named of Object.values(hooks)) {
+    for (const entry of (named && named[event]) || []) {
+      if (AG_TOOL_EVENTS.includes(event)) out.push(...entry.hooks.map((h) => ({ ...h, matcher: entry.matcher })));
+      else out.push(entry);
+    }
+  }
+  return out;
+}
+// AG's common stdin fields (docs/hooks.md "Common Input Fields") + the event's own.
+function agPayload(workspace, convId, extra) {
+  return JSON.stringify({
+    conversationId: convId,
+    workspacePaths: [workspace],
+    transcriptPath: path.join(workspace, '.gemini', 'antigravity-cli', 'transcript.jsonl'),
+    artifactDirectoryPath: path.join(workspace, '.gemini', 'antigravity-cli', 'artifacts'),
+    modelName: 'auto',
+    ...extra,
+  });
+}
+// The directory holding hooks.json is the REPO, not the workspace: the room's own journal there (a Claude Code session working in this repo writes it) must be untouched by a spawn.
+const REPO_JOURNAL = path.join(REPO, JOURNAL_REL);
+const repoJournalBytes = () => { try { return fs.readFileSync(REPO_JOURNAL, 'utf8'); } catch { return null; } };
+
+// Run one shipped handler as AG does, minus the shell: AG runs the command string through `sh -c` / `cmd /c` with the cwd set to the directory holding hooks.json;
+// every shipped command is `node <relative path> <mode>`, so the child is process.execPath with that argv and that cwd (the live proof in the 08b return covers the shell).
+function runAgHandler(handler, home, stdin) {
+  const [bin, ...argv] = handler.command.split(' ');
+  assert.strictEqual(bin, 'node', 'every shipped command starts with node');
+  return spawnSync(process.execPath, argv, {
+    cwd: REPO,
+    env: { ...process.env, HOME: home, USERPROFILE: home, TEMP: home, TMP: home, TMPDIR: home, CLAUDE_CONFIG_DIR: '' },
+    input: stdin,
+    encoding: 'utf8',
+    timeout: (handler.timeout || 30) * 1000,
+  });
+}
+
+test("08b AG plugin: plugin.json names the plugin and hooks.json follows the documented shape (events, handler fields, matcher, relative commands to files that exist)", () => {
+  const { manifest, hooks } = readAgPlugin();
+  assert.deepStrictEqual(manifest, { name: 'coalhearth' }, 'plugin.json carries the name and nothing AG does not read');
+  assert.ok(Object.keys(hooks).length >= 1, 'at least one named hook');
+  for (const [hookName, spec] of Object.entries(hooks)) {
+    for (const [key, value] of Object.entries(spec)) {
+      if (key === 'enabled') continue;
+      assert.ok(AG_EVENTS.includes(key), hookName + ": " + key + " is not one of AG's five events");
+      assert.ok(Array.isArray(value), hookName + '.' + key + ' is an array');
+    }
+  }
+  for (const event of AG_EVENTS) {
+    for (const h of agHandlers(hooks, event)) {
+      assert.strictEqual(h.type, 'command', event + ': only type command exists on AG');
+      assert.ok(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 30, event + ": an explicit timeout within AG's 30 s default");
+      const script = h.command.split(' ')[1];
+      assert.ok(script && !path.isAbsolute(script), event + ': the command path is relative to the directory holding hooks.json');
+      assert.ok(fs.existsSync(path.join(REPO, script)), event + ': ' + script + ' exists next to hooks.json');
+    }
+  }
+  assert.strictEqual(agHandlers(hooks, 'PreInvocation').length, 1, 'the resume block rides PreInvocation');
+  assert.strictEqual(agHandlers(hooks, 'PostToolUse').length, 1, 'the journal rides PostToolUse');
+  assert.strictEqual(agHandlers(hooks, 'Stop').length, 0, 'this room has no Stop hook to adapt');
+});
+
+test("08b AG plugin: the shipped PreInvocation command, run from the hooks.json directory with AG's full stdin, injects the recovery block and marks the journal resumed", () => {
+  const { hooks } = readAgPlugin();
+  const [h] = agHandlers(hooks, 'PreInvocation');
+  const workspace = mkProject();
+  const home = mk();
+  const repoBefore = repoJournalBytes();
+  try {
+    writeJournal(workspace, IN_PROGRESS);
+    const r = runAgHandler(h, home, agPayload(workspace, 'plugin-conv-1', { invocationNum: 1, initialNumSteps: 0 }));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.match(parseInject(r.stdout), /Warm-Resume Recovery/, 'the AG output shape: injectSteps with one ephemeralMessage');
+    assert.strictEqual(readJournal(workspace).status, 'resumed', 'positive state effect: the journal at workspacePaths[0] is marked resumed');
+    assert.strictEqual(repoJournalBytes(), repoBefore, 'nothing was written at the hooks.json directory (it is not the workspace)');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("08b AG plugin: the shipped PostToolUse command, run from the hooks.json directory with AG's full stdin, journals the tool step at the workspace", () => {
+  const { hooks } = readAgPlugin();
+  const [h] = agHandlers(hooks, 'PostToolUse');
+  assert.ok(h.matcher === '*' || h.matcher === '' || new RegExp('^(' + h.matcher + ')$').test('write_to_file'), "the matcher admits AG's file-write tool (docs/hooks.md: '*' or an empty matcher matches all tools)");
+  const workspace = mkProject();
+  const home = mk();
+  const repoBefore = repoJournalBytes();
+  try {
+    const r = runAgHandler(h, home, agPayload(workspace, 'plugin-conv-2', {
+      stepIdx: 5,
+      toolCall: { name: 'write_to_file', args: { TargetFile: path.join(workspace, 'src', 'plugin.js') } },
+    }));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    const j = readJournal(workspace);
+    assert.deepStrictEqual(j.modifiedFiles, [path.join('src', 'plugin.js')], 'positive state effect: the file is journaled relative to workspacePaths[0]');
+    assert.strictEqual(j.sessionId, 'plugin-conv-2');
+    assert.strictEqual(repoJournalBytes(), repoBefore, 'nothing was journaled at the hooks.json directory');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
