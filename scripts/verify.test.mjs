@@ -343,9 +343,11 @@ test('M1: the census line counts the exemption instead of claiming every spawn t
   seed(tmp);
   const r = run(tmp);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\).*: (\d+) take env from gitEnv\(\) alone, (\d+) exempt by name \(([^)]*)\)/);
+  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\).*: (\d+) take env from gitEnv\(\) alone, (\d+) exempt by name \(([^)]*)\)(?:, (\d+) from an allowlist object[^(]*\(([^)]*)\))?/);
   assert.ok(m, 'the ok line must split alone vs exempt, got:\n' + r.stdout);
-  assert.equal(Number(m[3]) + Number(m[4]), Number(m[1]), 'alone + exempt = every counted spawn');
+  assert.equal(Number(m[3]) + Number(m[4]) + Number(m[6] || 0), Number(m[1]), 'alone + exempt + allowlist = every counted spawn');
+  assert.equal(m[6], '1', 'the room has one allowlist spawn (scripts/release-notes.mjs), counted and named, not folded into gitEnv() alone');
+  assert.match(m[7], /scripts\/release-notes\.mjs/, 'the allowlist spawn names its file');
   assert.ok(Number(m[4]) >= 1, 'the hazard fixture is counted as exempt');
   assert.match(m[5], /git-env\.test\.mjs/, 'the exemption names its file');
   assert.doesNotMatch(r.stdout, /every one takes env from gitEnv\(\) alone/, 'the old blanket claim is gone');

@@ -454,16 +454,17 @@ try {
   });
   if (!roots.length || !files.length) fail(`census walked ${files.length} file(s) from ${roots.length} root(s) -- an empty walk proves nothing`);
   else {
-    const { findings, gitSpawns, exempt, unusedExemptions, nodeChildren } = censusGitSpawns(files);
+    const { findings, gitSpawns, exempt, allowlist, unusedExemptions, nodeChildren } = censusGitSpawns(files);
     for (const msg of findings) fail(msg);
     // An exemption whose spawn is gone is a blanket pass waiting to happen: it FAILs the gate (R8 FIXBACK M1).
     for (const e of unusedExemptions) fail(`git-spawn census exemption for ${e.label} (env: ${e.expr === null ? 'none' : e.expr}) no longer matches ${e.want} spawn(s), only ${e.matched} -- remove it or lower its count, or restore the spawn it names`);
     if (!findings.length && !unusedExemptions.length) {
-      // The line states what the instrument PRODUCED: how many spawns take env from gitEnv() alone, and the
-      // named, counted exemptions -- never a blanket "every one" (R8 FIXBACK M1, the r29 class).
-      const alone = gitSpawns.length - exempt.length;
+      // The line states what the instrument PRODUCED: how many spawns take env from gitEnv() alone, the
+      // named, counted exemptions, and (08c) the spawns whose env is a sound allowlist object -- never a blanket "every one" (R8 FIXBACK M1, the r29 class).
+      const alone = gitSpawns.length - exempt.length - allowlist.length;
       const named = exempt.length ? `, ${exempt.length} exempt by name (${exempt.map((e) => `${e.label}: ${e.reason}`).join('; ')})` : '';
-      ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): ${alone} take env from gitEnv() alone${named}`);
+      const listed = allowlist.length ? `, ${allowlist.length} from an allowlist object that reads process.env only by named key and sets GIT_CONFIG_NOSYSTEM=1 (${allowlist.map((e) => e.label).join(', ')})` : '';
+      ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): ${alone} take env from gitEnv() alone${named}${listed}`);
     }
   }
 } catch (e) { fail(`git-spawn census crashed: ${e.message}`); }

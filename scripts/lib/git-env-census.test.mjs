@@ -9,6 +9,7 @@
 // file's own source, the same self-reference hazard the pointer gate's plan comment records.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { censusGitSpawns, blobId } from './git-env-census.mjs';
 
 const SP = 'spawn' + 'Sync';
@@ -476,4 +477,190 @@ test('census: the no-env control still fails, and an env that is only a position
   assert.match(positional.findings[0], /no 'env:'/);
   const inArray = census(SAFE_HEAD + `${SP}('git', [env, 'status'], { encoding: 'utf8' });\n`);
   assert.equal(inArray.findings.length, 1, 'env inside the args array is not a property');
+});
+
+// 08c UNIT 1 (main's ruling UMB-456 (2), rule (a)): the ALLOWLIST env. The canon's release-notes.mjs hands its one git spawn an env built
+// from a NAMED key list (a literal array, read through the one idiom) plus GIT_CONFIG_NOSYSTEM=1, and never spreads process.env whole. The
+// census used to know one safe shape, gitEnv() alone, so this file needed a blob-pinned row. The census now ACCEPTS the allowlist shape and
+// REFUSES every neighbour of it. Each acceptance witness below was RED before the rule (the result has no `allowlist` and the shape was a finding);
+// each refusal witness was green before it by construction (the old census refused everything but gitEnv), so what proves a refusal is not vacuous is
+// the mutation table in the return: every branch of the acceptance has a mutant these rows kill.
+const AL_KEEP = `const keep = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'GIT_CEILING_DIRECTORIES'];\n`;
+const AL_BODY = `...Object.fromEntries(keep.filter((k) => ${PE}[k] !== undefined).map((k) => [k, ${PE}[k]]))`;
+const AL_ENV = `const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };\n`;
+const AL_SPAWN = `${SP}('git', ['config', '--local', '--get', 'remote.origin.url'], { encoding: 'utf8', timeout: 30000, env });\n`;
+const alCensus = (head, spawn = AL_SPAWN) => raw(BINDINGS + head + spawn);
+
+test('08c allowlist: the canon release-notes.mjs shape (a literal key list, one fromEntries, GIT_CONFIG_NOSYSTEM=1) is clean with NO exemption, and is counted as an allowlist spawn', () => {
+  const r = alCensus(AL_KEEP + AL_ENV);
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.gitSpawns.length, 1);
+  assert.equal(r.allowlist.length, 1, 'the report names the spawn as an allowlist one, so the gate can print what it produced');
+  assert.deepEqual(r.exempt, []);
+  assert.deepEqual(r.unusedExemptions, []);
+});
+
+test('08c allowlist: the longhand env: env, an inline object literal, and a key list read without the filter are the same shape and are clean', () => {
+  assert.deepEqual(alCensus(AL_KEEP + AL_ENV, AL_SPAWN.replace('{ encoding', '{ env: env, encoding').replace(', env });', ' });')).findings, []);
+  const inline = alCensus(`${AL_KEEP}`, `${SP}('git', ['status'], { env: { PATH: ${PE}.PATH, HOME: ${PE}.HOME, GIT_CONFIG_NOSYSTEM: '1' } });\n`);
+  assert.deepEqual(inline.findings, []);
+  assert.equal(inline.allowlist.length, 1);
+  const noFilter = alCensus(AL_KEEP + `const env = { ...Object.fromEntries(keep.map((k) => [k, ${PE}[k]])), GIT_CONFIG_NOSYSTEM: '1' };\n`);
+  assert.deepEqual(noFilter.findings, []);
+});
+
+test('08c allowlist: a planted spread of process.env is still a finding, in every spelling', () => {
+  for (const [name, head] of [
+    ['the spread itself', `const env = { ...${PE}, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['the spread beside the canon list (ordering re-adds GIT_DIR)', `${AL_KEEP}const env = { ${AL_BODY}, ...${PE}, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['a spread of an alias of process.env', `const e = ${PE};\nconst env = { ...e, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['Object.assign({}, process.env)', `const env = Object.assign({}, ${PE}, { GIT_CONFIG_NOSYSTEM: '1' });\n`],
+    ['process.env passed whole as a value', `const env = { PATH: ${PE}, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['Object.entries(process.env) as the pairs', `${AL_KEEP}const env = { ...Object.fromEntries(Object.entries(${PE})), GIT_CONFIG_NOSYSTEM: '1' };\n`],
+  ]) {
+    const r = alCensus(head);
+    assert.equal(r.findings.length, 1, name);
+    assert.equal(r.allowlist.length, 0, name);
+  }
+  const inlineSpread = alCensus('', `${SP}('git', [], { env: { ...${PE}, GIT_CONFIG_NOSYSTEM: '1' } });\n`);
+  assert.equal(inlineSpread.findings.length, 1);
+  assert.match(inlineSpread.findings[0], /process\.env/);
+  const inlineAssign = alCensus('', `${SP}('git', [], { env: Object.assign({}, ${PE}) });\n`);
+  assert.equal(inlineAssign.findings.length, 1);
+});
+
+test('08c allowlist: GIT_CONFIG_NOSYSTEM must be set, and set to 1', () => {
+  const missing = alCensus(AL_KEEP + `const env = { ${AL_BODY}, GIT_TERMINAL_PROMPT: '0' };\n`);
+  assert.equal(missing.findings.length, 1);
+  assert.match(missing.findings[0], /GIT_CONFIG_NOSYSTEM/);
+  for (const v of ["'0'", "'true'", 'false', 'flag', "''"]) {
+    const r = alCensus(AL_KEEP + `const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: ${v} };\n`);
+    assert.equal(r.findings.length, 1, v);
+    assert.match(r.findings[0], /GIT_CONFIG_NOSYSTEM/, v);
+  }
+  assert.deepEqual(alCensus(AL_KEEP + `const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: "1" };\n`).findings, [], 'double quotes are the same literal');
+  assert.deepEqual(alCensus(AL_KEEP + `const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: 1 };\n`).findings, [], 'the number 1 too');
+});
+
+test('08c allowlist: a GIT_ name outside the three harmless ones is refused wherever it appears -- a key, a quoted key, a lower-case key, a list entry, a named read', () => {
+  for (const [name, head] of [
+    ['a GIT_DIR key', `${AL_KEEP}const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', GIT_DIR: dir };\n`],
+    ['a quoted GIT_INDEX_FILE key', `${AL_KEEP}const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', 'GIT_INDEX_FILE': idx };\n`],
+    ['a lower-case git_work_tree key', `${AL_KEEP}const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', git_work_tree: wt };\n`],
+    ['a GIT_ name made up tomorrow', `${AL_KEEP}const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', GIT_FUTURE_REDIRECT: x };\n`],
+    ['GIT_DIR in the key list', AL_KEEP.replace("'USERPROFILE'", "'USERPROFILE', 'GIT_DIR'") + AL_ENV],
+    ['a lower-case git_dir in the key list', AL_KEEP.replace("'USERPROFILE'", "'USERPROFILE', 'git_dir'") + AL_ENV],
+    ['a named read of GIT_COMMON_DIR', `${AL_KEEP}const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', X: ${PE}.GIT_COMMON_DIR };\n`],
+  ]) {
+    const r = alCensus(head);
+    assert.equal(r.findings.length, 1, name);
+    assert.match(r.findings[0], /GIT_|git_/i, name);
+  }
+  // the three harmless names are the only GIT_ names that pass, in the list or as keys
+  const harmless = alCensus(AL_KEEP + `const env = { ${AL_BODY}, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_CEILING_DIRECTORIES: ceil };\n`);
+  assert.deepEqual(harmless.findings, []);
+  const lower = alCensus(AL_KEEP + `const env = { ${AL_BODY}, git_config_nosystem: '1', git_terminal_prompt: '0' };\n`);
+  assert.deepEqual(lower.findings, [], 'an env is case-insensitive on Windows: the harmless names pass in any case');
+});
+
+test('08c allowlist: a trailing comma, a literal index, a string holding brackets and an escaped quote, and a multi-line object are read like the plain form', () => {
+  assert.deepEqual(alCensus(`const env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1', };\n`).findings, []);
+  assert.deepEqual(alCensus(`const env = { PATH: ${PE}['PATH'], GIT_CONFIG_NOSYSTEM: '1' };\n`).findings, [], 'a string-literal index is a named key');
+  assert.deepEqual(alCensus(`const env = { NOTE: 'a ) } ] \\' b', GIT_CONFIG_NOSYSTEM: '1' };\n`).findings, [], 'brackets and an escaped quote inside a string do not move the end of the object');
+  assert.deepEqual(alCensus(`const env = { 'PATH': p, "HOME": dir, 'GIT_CONFIG_NOSYSTEM': '1' };\n`).findings, [], 'quoted keys are named keys');
+  assert.deepEqual(alCensus(`const env = {\n  PATH: p,\n  HOME: dir,\n  GIT_CONFIG_NOSYSTEM: '1',\n};\n`).findings, []);
+  assert.equal(alCensus(`const env = { PATH: process['env'].PATH, GIT_CONFIG_NOSYSTEM: '1' };\n`).findings.length, 1, 'process reached by a computed key is refused');
+});
+
+test('08c allowlist: an inline object with something hanging off it is not the object (an undefined env would hand the child the whole environment)', () => {
+  // GIT_CONFIG_NOSYSTEM comes FIRST: the reader's last property is then the one the trailing text sticks to, and only the end-of-object check stops it
+  for (const tail of ['.nothing', '[0]', '.x.y']) {
+    const r = alCensus('', `${SP}('git', [], { env: { GIT_CONFIG_NOSYSTEM: '1', PATH: p }${tail} });\n`);
+    assert.equal(r.findings.length, 1, tail);
+    assert.equal(r.allowlist.length, 0, tail);
+  }
+});
+
+test('08c allowlist: the key list must be ONE literal array of strings, declared once and never changed; the idiom must be the canon one', () => {
+  for (const [name, head] of [
+    ['the list is the process env keys', `const keep = Object.keys(${PE});\n${AL_ENV}`],
+    ['an identifier in the list', AL_KEEP.replace("'HOME'", 'homeKey') + AL_ENV],
+    ['a spread in the list', AL_KEEP.replace("'HOME'", '...more') + AL_ENV],
+    ['the list is declared twice', AL_KEEP + AL_KEEP + AL_ENV],
+    ['the list is not declared in this file', AL_ENV],
+    ['the list gains an entry afterwards', AL_KEEP + "keep.push('GIT_DIR');\n" + AL_ENV],
+    ['the list is edited by index afterwards', AL_KEEP + "keep[0] = 'GIT_DIR';\n" + AL_ENV],
+    ['the list is a let', AL_KEEP.replace('const keep', 'let keep') + AL_ENV],
+    ['the pairs do not come from the list', AL_KEEP + AL_ENV.replace('keep.filter', 'other.filter')],
+    ['the filter reads a different name than the map', AL_KEEP + AL_ENV.replace('.map((k) => [k, ' + PE + '[k]])', '.map((j) => [j, ' + PE + '[k]])')],
+    ['the map renames the key', AL_KEEP + AL_ENV.replace('[k, ' + PE + '[k]]', "[k + '_X', " + PE + '[k]]')],
+    ['an extra call in the chain', AL_KEEP + AL_ENV.replace('.map(', '.concat(extra).map(')],
+  ]) {
+    const r = alCensus(head);
+    assert.equal(r.findings.length, 1, name);
+    assert.equal(r.allowlist.length, 0, name);
+  }
+});
+
+test('08c allowlist: the env object is judged on its own text -- a computed key, an indexed read, an interpolation, a trailing expression and a second declaration are refused', () => {
+  for (const [name, head] of [
+    ['a computed key', `const env = { [name]: value, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['an indexed read of an alias of the environment', `const e = ${PE};\nconst env = { PATH: e[name], GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['a template interpolation', `const env = { HOME: \`\${dir}\`, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['a method', `const env = { f() { return 1; }, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['something after the literal', `const env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1' } || fallback;\n`],
+    ['declared twice', `const env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1' };\nfunction f() { const env = { ...${PE} }; }\n`],
+    ['declared with let', `let env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1' };\n`],
+    ['not declared here', ''],
+  ]) {
+    const r = alCensus(head);
+    assert.equal(r.findings.length, 1, name);
+    assert.equal(r.allowlist.length, 0, name);
+  }
+  // and the same literal, with plain named values, is clean
+  assert.deepEqual(alCensus(`const env = { PATH: p, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' };\n`).findings, []);
+});
+
+test('08c allowlist: an allowlist env that is changed after it is declared is refused, like a gitEnv() alias', () => {
+  for (const mutation of ["env.GIT_DIR = hookDir;", "env['GIT_DIR'] = hookDir;", 'env[k] = v;', `Object.assign(env, ${PE});`, 'delete env.GIT_CONFIG_NOSYSTEM;', 'env.X ||= 1;']) {
+    const r = alCensus(AL_KEEP + AL_ENV + mutation + '\n');
+    assert.equal(r.findings.length, 1, mutation);
+    assert.match(r.findings[0], /mutated/, mutation);
+  }
+});
+
+test('08c allowlist: a gitEnv() alias, an unsound alias and a bare literal keep their old verdicts and their old wording', () => {
+  assert.deepEqual(alCensus(`const env = gitEnv(r);\n`).findings, []);
+  assert.equal(alCensus(`const env = gitEnv(r);\n`).allowlist.length, 0, 'a gitEnv() spawn is not an allowlist one');
+  const notSound = alCensus(`const env = { PATH: ${PE}.PATH };\n`);
+  assert.equal(notSound.findings.length, 1);
+  assert.match(notSound.findings[0], /env: env is not declared `const env = gitEnv\(\.\.\.\)`/, 'the old reason stays first');
+  assert.match(notSound.findings[0], /GIT_CONFIG_NOSYSTEM/, 'and the allowlist reason follows it, so the reader knows what to add');
+  const bare = alCensus('', `${SP}('git', [], { env: { PATH: '/x' } });\n`);
+  assert.equal(bare.findings.length, 1);
+});
+
+test('08c allowlist: the room\'s own release-notes.mjs passes the census with NO exemption row (it builds its env from an allowlist)', () => {
+  const file = fs.readFileSync(new URL('../release-notes.mjs', import.meta.url), 'utf8');
+  const r = censusGitSpawns([{ label: 'scripts/release-notes.mjs', text: file }], { exemptions: [] });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.gitSpawns.length, 1);
+  assert.equal(r.allowlist.length, 1);
+});
+
+test('08c allowlist: an exemption row for a spawn the allowlist rule now accepts is reported UNUSED, so the old pin cannot linger', () => {
+  const row = { label: 'scripts/x.test.mjs', expr: 'env', count: 1, reason: 'old pin' };
+  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: BINDINGS + AL_KEEP + AL_ENV + AL_SPAWN }], { exemptions: [row] });
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.unusedExemptions.length, 1);
+});
+
+test('08c allowlist: a write to process.env.X in the same file is not a mutation of a local env (a name preceded by a dot is someone else\'s object)', () => {
+  const r = alCensus(AL_KEEP + AL_ENV + `${PE}.TZ = 'UTC';\n${PE}['LANG'] = 'C';\n${PE}.NODE_ENV ||= 'test';\n`);
+  assert.deepEqual(r.findings, []);
+  assert.equal(r.allowlist.length, 1);
+  const g = alCensus(`const env = gitEnv(r);\n${PE}.TZ = 'UTC';\n`);
+  assert.deepEqual(g.findings, [], 'the gitEnv() alias gets the same fix');
+  // the real thing is still caught, dotted or not
+  assert.equal(alCensus(AL_KEEP + AL_ENV + "env.GIT_DIR = x;\n").findings.length, 1);
 });

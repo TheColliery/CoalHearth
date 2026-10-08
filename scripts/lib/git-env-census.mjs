@@ -1,5 +1,5 @@
 // CWK-136 -- the git-spawn census. Does every `git` child this room spawns take its environment
-// from gitEnv() (scripts/lib/git-env.mjs), and only from it?
+// from gitEnv() (scripts/lib/git-env.mjs), and only from it? (Or, since 08c, from an ALLOWLIST object: see the paragraph before SAFE_GIT_KEYS.)
 //
 // It proves SAFETY, not presence. CoalTipple's census (the exemplar) only tested that an `env:` key
 // existed in the call, which passes `env: process.env` -- the exact hole CWK-133 closes: inside a
@@ -7,7 +7,8 @@
 // enclosing repository. Here a git spawn is refused when
 //   (a) it carries no `env:` key at all, or
 //   (b) its `env:` text mentions process.env AT ALL (a spread, a bare pass-through, a helper call
-//       beside it), or
+//       beside it) -- except inside an ALLOWLIST object (08c, below), where process.env is read only by
+//       named key, or
 //   (c) its `env:` is anything but gitEnv(...) ALONE: the WHOLE expression is a call to it, or a
 //       bare identifier declared `const NAME = gitEnv(...)` in the same file, exactly that call
 //       and not mutated afterwards. An expression that merely CONTAINS `gitEnv(` -- a spread beside
@@ -90,19 +91,8 @@ export const GIT_ENV_EXEMPTIONS = [
     blob: 'a9cb7145e31139ec3c490dd7714df8fa7dc6cf86',
     reason: 'a byte-equal org carrier from the published-code template whose git children inherit the environment, so a pathspec or -a commit hands them an absolute GIT_INDEX_FILE, pinned by blob id and deleted when the canon fixes it',
   },
-  // 05a (the .github canon adoption, overlay set of create-release.yml, UMB-444): a byte-equal org carrier from the overlay template at .github 7afc4ef. (The second file adopted with it,
-  // release-notes.test.mjs, is held at the room's previous blob instead and needs no row: see the named divergence above.)
-  // release-notes.mjs builds an explicit minimal env (PATH, the temp and home keys, GIT_CONFIG_NOSYSTEM, GIT_TERMINAL_PROMPT; no GIT_ variable passes) and hands it to its one git
-  // spawn as the shorthand property `env` (the census reads that as `env: env`, a local const that is an allowlist object and not a gitEnv() call, so it still needs the row; an
-  // earlier wording of this row said the census read it as no env: key, which was a parser defect, fixed in 05a FIXBACK 1). The carrier is unreachable for the room (the umbrella's parity check forbids editing it), so the row is pinned by blob id and deleted when the canon
-  // carries the room helper and this room re-copies the file.
-  {
-    label: 'scripts/release-notes.mjs',
-    expr: 'env',
-    count: 1,
-    blob: '674592e0ff25dbdc14a8a4e21e6a598953b90eaa',
-    reason: 'a byte-equal org carrier from the overlay template whose one git spawn takes an explicit minimal env object built from an allowlist with no GIT_ variable in it, pinned by blob id and deleted when the canon uses the room helper',
-  },
+  // 08c (UMB-456 (2) rule (a)): the row for scripts/release-notes.mjs (05a, blob 674592e0) is GONE. That file builds its env from an allowlist, and the census
+  // now accepts that shape (the paragraph before SAFE_GIT_KEYS), so the carrier needs no pin and its re-syncs cannot spend or strand one.
   {
     label: 'scripts/lib/git-env.test.mjs',
     expr: 'env || gitEnv(root)',
@@ -222,16 +212,175 @@ function aliasVerdict(name, fileText) {
   const open = decl.index + decl[0].length - 1;
   const close = findMatchingClose(fileText, open);
   if (close === -1 || !/^\s*(?:;|\n|,|$)/.test(fileText.slice(close + 1))) return 'is assigned from more than the bare gitEnv(...) call';
-  const n = escapeRegex(name);
-  const mutation = new RegExp([
-    String.raw`\b${n}\s*\.\s*[\w$]+\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
-    String.raw`\b${n}\s*\[[^\]\n]*\]\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
-    String.raw`\bObject\s*\.\s*(?:assign|defineProperty|defineProperties)\s*\(\s*${n}\b`,
-    String.raw`\bdelete\s+${n}\b`,
-  ].join('|')).exec(fileText);
+  const mutation = mutationOf(name, fileText);
   if (mutation) return 'is mutated after it is assigned (line ' + lineOf(fileText, mutation.index) + ')';
   return null;
 }
+
+// The first statement that changes NAME after its declaration: a property write, an index write, Object.assign/defineProperty on it, a delete; for a
+// key list (array = true) also the array methods that grow or rewrite it. A write to `process.env.X` is a write to someone else's object, so a name
+// preceded by a dot never counts (08c: a local `env` and `process.env.TZ = 'UTC'` in one file are two things).
+function mutationOf(name, fileText, array = false) {
+  const n = escapeRegex(name);
+  const forms = [
+    String.raw`(?<![.\w$])${n}\s*\.\s*[\w$]+\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
+    String.raw`(?<![.\w$])${n}\s*\[[^\]\n]*\]\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
+    String.raw`\bObject\s*\.\s*(?:assign|defineProperty|defineProperties)\s*\(\s*${n}\b`,
+    String.raw`\bdelete\s+${n}\b`,
+  ];
+  if (array) forms.push(String.raw`(?<![.\w$])${n}\s*\.\s*(?:push|unshift|splice|fill|copyWithin)\s*\(`);
+  return new RegExp(forms.join('|')).exec(fileText);
+}
+
+// The index of the bracket that closes the one at openIdx, skipping string literals; -1 when the text is unbalanced (fail closed).
+function closeOf(text, openIdx) {
+  const pair = { '(': ')', '{': '}', '[': ']' };
+  const stack = [];
+  for (let i = openIdx; i < text.length; i++) {
+    const c = text[i];
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c) j += text[j] === '\\' ? 2 : 1;
+      if (j >= text.length) return -1;
+      i = j;
+    } else if (pair[c]) stack.push(pair[c]);
+    else if (c === ')' || c === '}' || c === ']') {
+      if (stack.pop() !== c) return -1;
+      if (!stack.length) return i;
+    }
+  }
+  return -1;
+}
+
+// 08c UNIT 1 (main's ruling UMB-456 (2), rule (a)) -- the ALLOWLIST env, the second shape a git child's env may take.
+// An env is an allowlist when it is a POSITIVE list of named keys, never a copy of the ambient environment with things taken out:
+//   - one object literal (inline in the call, or `const NAME = { ... };` declared exactly once in the file and never changed after);
+//   - no spread but `...Object.fromEntries(KEYS[.filter((k) => process.env[k] !== undefined)].map((k) => [k, process.env[k]]))`, the one idiom the
+//     canon's release-notes.mjs uses, where KEYS is a `const` array of string literals declared once and never changed; any other spread is refused,
+//     and so is a computed key, a computed index into a value, a template interpolation, and any read of process.env that is not `process.env.NAME`;
+//   - GIT_CONFIG_NOSYSTEM set to 1 (git reads the system config file whatever else the env holds, so the list must switch it off);
+//   - no GIT_ name anywhere in the object or in KEYS except the three harmless ones in SAFE_GIT_KEYS. The check is a POSITIVE list, never "delete the
+//     bad ones": GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and a GIT_ variable git invents tomorrow are all refused the same way, in any letter case.
+//     The three, by what each does to git: GIT_CONFIG_NOSYSTEM skips the system config file, GIT_TERMINAL_PROMPT=0 forbids a credential prompt,
+//     GIT_CEILING_DIRECTORIES only NARROWS where git looks for a repository. None of them points git at a repository, which is the hazard of CWK-133.
+// This is a reading of TEXT. What it does not see, named: a value that is a call returning part of the environment (`pick()`), a name bound to
+// process.env elsewhere and read as a dotted member (`e.GIT_X` is caught by the name; `e.PATH` is a plain named read and passes), and a helper that
+// takes the finished object and changes it (`tweak(env)`); only direct mutation of the declared name is seen.
+const SAFE_GIT_KEYS = new Set(['GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'GIT_CEILING_DIRECTORIES']);
+const isSafeGitName = (k) => !/^git_/i.test(k) || SAFE_GIT_KEYS.has(k.toUpperCase());
+const blankStrings = (s) => s.replace(STRING_RE, (m) => m[0] + ' '.repeat(m.length - 2) + m[m.length - 1]);
+// KEYS.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]), whitespace-normalised; the filter is optional.
+const ALLOW_CHAIN_RE = /^([A-Za-z_$][\w$]*)(?:\.filter\(\(?([A-Za-z_$][\w$]*)\)? => process\.env\[\2\] !== undefined\))?\.map\(\(?([A-Za-z_$][\w$]*)\)? => \[\3, process\.env\[\3\]\]\)$/;
+
+function topLevelParts(masked) {
+  const parts = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    else if (c === ',' && depth === 0) { parts.push([from, i]); from = i + 1; }
+  }
+  parts.push([from, masked.length]);
+  return parts;
+}
+
+// null when NAME is a const array of string literals, declared once, never changed, naming no GIT_ variable but the harmless three; else the reason.
+function keyListVerdict(name, fileText) {
+  const esc = escapeRegex(name);
+  const decls = fileText.match(new RegExp(String.raw`\b(?:const|let|var)\s+${esc}\b`, 'g')) || [];
+  if (decls.length !== 1) return `the key list ${name} is declared ${decls.length} times in this file, and it must be exactly once`;
+  const d = new RegExp(String.raw`\bconst\s+${esc}\s*=\s*\[`).exec(fileText);
+  if (!d) return `the key list ${name} is not declared \`const ${name} = [...]\``;
+  const open = d.index + d[0].length - 1;
+  const close = closeOf(fileText, open);
+  if (close === -1) return `the key list ${name} is not a balanced array literal`;
+  const body = fileText.slice(open + 1, close);
+  if (body.includes('${') || !/^[\s,]*$/.test(blankStrings(body).replace(/(['"`]) *\1/g, ''))) return `the key list ${name} holds more than plain string literals`;
+  for (const s of body.match(STRING_RE) || []) {
+    if (!isSafeGitName(s.slice(1, -1))) return `the key list ${name} names ${s.slice(1, -1)}, which is not one of the harmless GIT_ names (${[...SAFE_GIT_KEYS].join(', ')})`;
+  }
+  const changed = mutationOf(name, fileText, true);
+  if (changed) return `the key list ${name} is changed after it is declared (line ${lineOf(fileText, changed.index)})`;
+  return null;
+}
+
+// null when `rest` (the text after `...`) is Object.fromEntries(<the canon idiom over a sound key list>), else the reason.
+function spreadVerdict(rest, fileText) {
+  const f = /^Object\s*\.\s*fromEntries\s*\(/.exec(rest);
+  if (!f) return `spreads ${rest.slice(0, 30)}, which is not a list of named keys: the only spread read is ...Object.fromEntries(KEYS.filter(...).map(...))`;
+  const open = f[0].length - 1;
+  const chain = rest.slice(open + 1, -1).replace(/\s+/g, ' ').trim();
+  const m = ALLOW_CHAIN_RE.exec(chain);
+  if (!m) return `its Object.fromEntries(${chain.slice(0, 50)}) is not the canon idiom KEYS[.filter((k) => process.env[k] !== undefined)].map((k) => [k, process.env[k]])`;
+  return keyListVerdict(m[1], fileText);
+}
+
+// null when one property's VALUE reads the environment only by a named key and indexes nothing by a computed key, else the reason.
+function valueVerdict(value, masked) {
+  for (const m of masked.matchAll(/\bprocess\b/g)) {
+    const tail = masked.slice(m.index + m[0].length);
+    if (/^\s*\.\s*env\b/.test(tail) && !/^\s*\.\s*env\s*(?:\.\s*[A-Za-z_$]|\[\s*['"`])/.test(tail)) return 'reads process.env other than by a named key (process.env.NAME or process.env["NAME"])';
+    if (/^\s*\[/.test(tail)) return 'reaches process by a computed key';
+  }
+  for (const m of masked.matchAll(/[\w$)\]]\s*\[/g)) {
+    if (!/^\s*['"`]/.test(value.slice(m.index + m[0].length))) return 'indexes a value by a computed key, which could name any variable of the environment';
+  }
+  return null;
+}
+
+// null when `obj` is a sound allowlist env object literal, else the reason it is not.
+function allowlistObjectVerdict(obj, fileText) {
+  const text = obj.trim();
+  if (text[0] !== '{' || closeOf(text, 0) !== text.length - 1) return 'is not exactly one object literal';
+  if (text.includes('${')) return 'holds a template interpolation, which cannot be read as a list of keys';
+  for (const m of text.matchAll(/\bgit_[\w$]*/gi)) {
+    if (!isSafeGitName(m[0])) return `names ${m[0]}, which is not one of the harmless GIT_ names (${[...SAFE_GIT_KEYS].join(', ')})`;
+  }
+  const masked = blankStrings(text);
+  let noSystem = false;
+  for (const [a, b] of topLevelParts(masked.slice(1, -1))) {
+    const part = text.slice(1 + a, 1 + b).trim();
+    const pm = masked.slice(1 + a, 1 + b).trim();
+    if (!part) continue; // a trailing comma
+    if (pm.startsWith('...')) {
+      const bad = spreadVerdict(part.slice(3).trim(), fileText);
+      if (bad) return bad;
+      continue;
+    }
+    const k = /^(?:([A-Za-z_$][\w$]*)|'([^']*)'|"([^"]*)")\s*(?::|$)/.exec(part);
+    if (!k) return `has a property the census cannot read (${part.slice(0, 40)})`;
+    const key = k[1] ?? k[2] ?? k[3];
+    const value = part.slice(k[0].length).trim();
+    if (key.toUpperCase() === 'GIT_CONFIG_NOSYSTEM') {
+      if (!/^(?:'1'|"1"|1)$/.test(value)) return `sets GIT_CONFIG_NOSYSTEM to ${value || '(nothing)'}, and it must be 1`;
+      noSystem = true;
+    }
+    const bad = valueVerdict(value, pm.slice(pm.length - value.length));
+    if (bad) return bad;
+  }
+  if (!noSystem) return 'does not set GIT_CONFIG_NOSYSTEM to 1 (git reads the system config file whatever the env holds, so the list must switch it off)';
+  return null;
+}
+
+// null when NAME is a sound allowlist env in this file; else { reason, attempted } with attempted = the declaration IS an object literal.
+function allowlistAliasVerdict(name, fileText) {
+  const esc = escapeRegex(name);
+  const d = new RegExp(String.raw`\bconst\s+${esc}\s*=\s*\{`).exec(fileText);
+  if (!d) return { reason: `is not declared \`const ${name} = { ... }\` in this file`, attempted: false };
+  const decls = fileText.match(new RegExp(String.raw`\b(?:const|let|var)\s+${esc}\b`, 'g')) || [];
+  if (decls.length !== 1) return { reason: `is declared ${decls.length} times in this file, so the census cannot tell which one the spawn reads`, attempted: true };
+  const open = d.index + d[0].length - 1;
+  const close = closeOf(fileText, open);
+  if (close === -1 || !/^\s*(?:;|\n|$)/.test(fileText.slice(close + 1))) return { reason: 'is assigned from more than the bare object literal', attempted: true };
+  const bad = allowlistObjectVerdict(fileText.slice(open, close + 1), fileText);
+  if (bad) return { reason: bad, attempted: true };
+  const changed = mutationOf(name, fileText);
+  if (changed) return { reason: `is mutated after it is assigned (line ${lineOf(fileText, changed.index)})`, attempted: true };
+  return null;
+}
+
 
 // 05a FIXBACK 1 (LOW-1): is there a SHORTHAND property `env` in an object literal of the call: `{ env }`, `{ env, a }`, `{ a, env }`, on one line or several? It means `env: env`. The character
 // before it must be `{`, or a `,` whose nearest enclosing bracket is a `{`: a positional `f(a, env)` or an array element `[a, env]` is not a property.
@@ -250,20 +399,29 @@ function hasShorthandEnv(callText) {
   return false;
 }
 
-// null = the env is gitEnv() alone; otherwise { why, expr }.
+// null = the env is gitEnv() alone; { allowlist: true, expr } = a sound allowlist object (08c); otherwise { why, expr }.
 function envVerdict(callText, fileText) {
   const m = /\benv\s*:/.exec(callText);
   if (!m && !hasShorthandEnv(callText)) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
   const expr = m ? readExpr(callText, m.index + m[0].length, callText.length).trim() : 'env';
+  let allowWhy = '';
+  if (expr.startsWith('{')) {
+    const bad = allowlistObjectVerdict(expr, fileText);
+    if (!bad) return { allowlist: true, expr };
+    allowWhy = `; as an allowlist env it fails: ${bad}`;
+  }
   if (/\bprocess\s*(?:\.\s*env\b|\[\s*['"`]env['"`]\s*\])/.test(expr)) {
     return { why: `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)`, expr };
   }
   if (isWholeGitEnvCall(expr)) return null;
   if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
     const bad = aliasVerdict(expr, fileText);
-    return bad ? { why: `env: ${expr} ${bad} -- take env from gitEnv(...) alone (CWK-136)`, expr } : null;
+    if (!bad) return null;
+    const al = allowlistAliasVerdict(expr, fileText);
+    if (!al) return { allowlist: true, expr };
+    return { why: `env: ${expr} ${bad}${al.attempted ? `; as an allowlist env it fails: ${al.reason}` : ''} -- take env from gitEnv(...) alone (CWK-136)`, expr };
   }
-  return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)`, expr };
+  return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)${allowWhy}`, expr };
 }
 
 // R19 (CodeRabbit PR #19 thread 15): does a template literal's BODY carry an interpolation, a dollar-brace no backslash escapes? Such a
@@ -287,6 +445,7 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
   const findings = [];
   const gitSpawns = [];
   const exempt = [];
+  const allowlist = [];
   const matched = new Map(); // exemption -> how many spawns it has been spent on
   let nodeChildren = 0;
   for (const { label, text } of files) {
@@ -335,6 +494,10 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
       gitSpawns.push(entry);
       const v = envVerdict(callText, text);
       if (!v) continue;
+      if (v.allowlist) {
+        allowlist.push({ label, line, expr: normalise(v.expr) });
+        continue;
+      }
       const sameSpawn = (e) => e.label === label && (e.expr === null ? v.expr === null : v.expr !== null && normalise(e.expr) === normalise(v.expr));
       const pinOk = (e) => e.blob === undefined || blobId(text) === e.blob;
       const ex = exemptions.find((e) => sameSpawn(e) && pinOk(e));
@@ -366,5 +529,5 @@ export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {})
   const unusedExemptions = exemptions
     .map((e) => ({ label: e.label, expr: e.expr, want: e.count ?? 1, matched: matched.get(e) || 0 }))
     .filter((e) => e.matched < e.want);
-  return { findings, gitSpawns, exempt, unusedExemptions, nodeChildren };
+  return { findings, gitSpawns, exempt, allowlist, unusedExemptions, nodeChildren };
 }
