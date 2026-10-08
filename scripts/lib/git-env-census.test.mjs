@@ -1003,7 +1003,7 @@ test('08c u2: gitEnv imported from another tree git-env.mjs, a bare name, a URL 
   refused(u2(`import { gitEnv } from 'file:///x/lib/git-env.mjs';\n`), 'a URL');
   refused(u2(`import { gitEnv } from './lib/git-test-env.mjs';\n`), 'the test-helper module is not the room helper');
   refused(u2(`import { gitEnv } from './lib/other/git-env.mjs';\n`), 'a deeper folder of the same name');
-  refused(u2(`import { gitEnv } from './lib\\git-env.mjs';\n`.replace('\\', R_BS)), 'a backslash separator');
+  refused(u2(`import { gitEnv } from './lib${R_BS}${R_BS}git-env.mjs';\n`), 'a backslash separator (the source holds two backslashes, which decode to one)');
   refused(raw(R_HEAD + `import { gitTestEnv } from './lib/git-test-env.mjs';\n` + R_SPAWN('gitTestEnv()')), 'gitTestEnv has no module in this room, so the name is not trusted');
 });
 
