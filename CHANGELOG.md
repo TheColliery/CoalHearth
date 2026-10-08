@@ -2,6 +2,17 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.0] - 2026-10-08
+
+CoalHearth now installs as a native Antigravity plugin.
+
+### Added
+
+- **A native Antigravity plugin** *(shipped: `plugin.json` and `hooks.json`, at the repository root and in the `plugin/` dist)*. `plugin.json` names the plugin; `hooks.json` wires `PreInvocation` to `bin/ag-pre-invocation.js` (resume) and `PostToolUse` to `bin/ag-post-tool-use.js` (journal), each with a 10-second timeout. The two adapters are unchanged. Install it by copying the plugin folder to `<project>/.agents/plugins/coalhearth` or `~/.gemini/config/plugins/coalhearth`, or by adding a path entry to `plugins.json`. A junction (symlink to the folder) is not discovered: copy the folder. Claude Code does not read either new file. — test: `bin/ag-hooks.test.js`, `scripts/build-plugin.test.mjs`, `scripts/verify.test.mjs`
+  - **How it was measured:** Antigravity (`agy`) 1.3.1, headless `agy -p`, Windows, 2026-10-08. From a plugin folder copied to `.agents/plugins/coalhearth` both hooks fired: the journal was written under Antigravity's own conversation id, and the model quoted the planted goal and next step from the resume block. The interactive IDE was not exercised. `agy plugin list` does not list a folder-discovered plugin. `agy plugin install <git url>` was checked by shape only (the repository-root tree), not end to end.
+  - **What does not carry over:** the `UserPromptSubmit` subagent-death nudge (Antigravity has no such event) and `commands/*.md` (no CoalHearth command or skill appeared at run time in a folder-discovered plugin).
+- **`scripts/verify.mjs` checks the Antigravity plugin files** *(repo gate)*: the plugin name, only Antigravity's five event names, `type: command`, an integer timeout of 1 to 30, and a `node <relative path>` command naming a script that exists. — test: `scripts/verify.test.mjs`
+
 ## [2.7.0] - 2026-10-08
 
 Only your global config can now choose the journal folder.
