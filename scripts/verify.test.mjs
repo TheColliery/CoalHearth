@@ -269,7 +269,8 @@ test('CWK-133: verify.mjs asks git about ITS OWN repo when an absolute GIT_DIR i
 const PLANT_FN = 'spawn' + 'Sync';
 function plantSpawn(tmp, envText) {
   const call = PLANT_FN + "('git', ['status'], { cwd: '.'" + (envText ? ', env: ' + envText : '') + ' });';
-  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, ''].join('\n');
+  // 08d: the NAME gitEnv is trusted only when the file imports it from the room's git-env.mjs (witness F42). The import goes AFTER the call so the call stays on line 3.
+  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, "import { gitEnv } from './lib/git-env.mjs';", ''].join('\n');
   fs.writeFileSync(path.join(tmp, 'scripts', 'zz-planted.test.mjs'), body);
 }
 

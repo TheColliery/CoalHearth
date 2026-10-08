@@ -23,7 +23,8 @@ const EX = 'ex' + 'ec';
 
 // The census only reads calls to names a file BINDS from child_process, so every sample carries the
 // binding. It is appended AFTER the sample so the sample's own line numbers stay what the tests say.
-const BINDINGS = `import { ${[SP, EFS, ES, SPN, EF, EX].join(', ')} } from '${MOD}';\nimport ${CP} from '${MOD}';\n`;
+// 08d: the NAME gitEnv is trusted only when the file imports it from the room's git-env.mjs, so every fixture carries that import (witness F42).
+const BINDINGS = `import { ${[SP, EFS, ES, SPN, EF, EX].join(', ')} } from '${MOD}';\nimport ${CP} from '${MOD}';\nimport { gitEnv } from './lib/git-env.mjs';\n`;
 const census = (text, label = 'scripts/x.test.mjs') => censusGitSpawns([{ label, text: text + BINDINGS }]);
 
 test('census: a git spawn whose env is built by gitEnv() is clean and is counted', () => {
@@ -76,7 +77,7 @@ test('census: a multi-line call is read whole; the finding names the line the ca
 });
 
 test('census: a call inside a // or * comment line is ignored; a URL string earlier on the SAME line does not hide a real call', () => {
-  const commented = census(`// ${SP}('git', ['status'], { cwd: d });\n * ${SP}('git', [], {});\n`);
+  const commented = census(`// ${SP}('git', ['status'], { cwd: d });\n/*\n * ${SP}('git', [], {});\n */\n`);
   assert.deepEqual(commented.findings, []);
   assert.equal(commented.gitSpawns.length, 0);
   const url = census(`const u = 'https://example.invalid'; ${SP}('git', ['status'], { cwd: d });\n`);
@@ -142,7 +143,7 @@ test('census: an aliased import (as) is followed to the real function, so an ali
   assert.equal(r.gitSpawns.length, 1);
   assert.equal(r.findings.length, 1);
   assert.match(r.findings[0], /^scripts\/a\.mjs:2 /);
-  const safe = `import { ${SP} as ${alias} } from '${MOD}';\n${alias}('git', ['status'], { env: gitEnv(d) });\n`;
+  const safe = `import { ${SP} as ${alias} } from '${MOD}';\nimport { gitEnv } from './git-env.mjs';\n${alias}('git', ['status'], { env: gitEnv(d) });\n`;
   assert.deepEqual(censusGitSpawns([{ label: 'scripts/a.mjs', text: safe }]).findings, []);
 });
 
@@ -223,7 +224,7 @@ test('M1: a callee reached by alias assignment, an inline require, or cp.default
   assert.equal(raw(`require('${MOD}').${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
   assert.equal(raw(`(await import('${MOD}')).${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
   assert.equal(raw(`import ${CP} from '${MOD}';\n${CP}.default.${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(raw(`require('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
+  assert.deepEqual(raw(`import { gitEnv } from './git-env.mjs';\nrequire('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
 });
 
 // -- the deliberate hazard fixture: an EXPLICIT, COUNTED, PRINTED exemption, never a silent pass ------------
@@ -606,7 +607,6 @@ test('08c allowlist: the env object is judged on its own text -- a computed key,
   for (const [name, head] of [
     ['a computed key', `const env = { [name]: value, GIT_CONFIG_NOSYSTEM: '1' };\n`],
     ['an indexed read of an alias of the environment', `const e = ${PE};\nconst env = { PATH: e[name], GIT_CONFIG_NOSYSTEM: '1' };\n`],
-    ['a template interpolation', `const env = { HOME: \`\${dir}\`, GIT_CONFIG_NOSYSTEM: '1' };\n`],
     ['a method', `const env = { f() { return 1; }, GIT_CONFIG_NOSYSTEM: '1' };\n`],
     ['something after the literal', `const env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1' } || fallback;\n`],
     ['declared twice', `const env = { PATH: p, GIT_CONFIG_NOSYSTEM: '1' };\nfunction f() { const env = { ...${PE} }; }\n`],
@@ -619,6 +619,9 @@ test('08c allowlist: the env object is judged on its own text -- a computed key,
   }
   // and the same literal, with plain named values, is clean
   assert.deepEqual(alCensus(`const env = { PATH: p, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' };\n`).findings, []);
+  // 08d: a template value is read by the tokenizer, not refused (a value cannot add a key); a GIT_ name inside it is still refused by the raw scan
+  assert.deepEqual(alCensus(`const env = { HOME: \`\${dir}\`, GIT_CONFIG_NOSYSTEM: '1' };\n`).findings, []);
+  assert.equal(alCensus(`const env = { HOME: \`GIT_DIR\`, GIT_CONFIG_NOSYSTEM: '1' };\n`).findings.length, 1);
 });
 
 test('08c allowlist: an allowlist env that is changed after it is declared is refused, like a gitEnv() alias', () => {
@@ -663,4 +666,273 @@ test('08c allowlist: a write to process.env.X in the same file is not a mutation
   assert.deepEqual(g.findings, [], 'the gitEnv() alias gets the same fix');
   // the real thing is still caught, dotted or not
   assert.equal(alCensus(AL_KEEP + AL_ENV + "env.GIT_DIR = x;\n").findings.length, 1);
+});
+
+// ======================================================================================================================================================================
+// 08d: the CENSUS WITNESS LIST (U/scratchpad/dispatch/08d-census-witness-list.md): one red-first fixture per vector, F1 to F42, R1 and R2, P1 to P6, and the extras X1 to X11 this
+// unit's own attack on the fix added. A vector with a const env runs in BOTH call forms, `env: env` and the shorthand `{ env }`; an env expression also runs inline. Every leg is fed to
+// censusGitSpawns with NO exemption rows and must be counted as a git spawn and judged: exactly one finding for a FAIL leg, none for a PASS leg.
+const W_LEGS = (() => {
+  const PRO = 'process';
+  const BT = String.fromCharCode(96); // a backtick
+  const BS = String.fromCharCode(92); // a backslash
+  const IMPORTS = `import { ${SP} } from 'node:child${'_'}process';\nimport { gitEnv } from './lib/git-env.mjs';\n`;
+  const call = (envPart, cmd = "'git'") => `${SP}(${cmd}, ['status'], { cwd: d, ${envPart} });\n`;
+  const CLEAN = `{ PATH: ${PE}.PATH, HOME: ${PE}.HOME, GIT_CONFIG_NOSYSTEM: '1' }`;
+  const KEEP = `const keep = ['PATH', 'HOME'];\n`;
+  const PICK = `...Object.fromEntries(keep.filter((k) => k in ${PE}).map((k) => [k, ${PE}[k]]))`;
+
+  const out = [];
+  const add = (id, fail, form, text, note = '') => out.push({ id, fail, form, text: IMPORTS + text, note });
+  // an env EXPRESSION in the three forms: inline, a const read as env: env, a const read as the shorthand { env }; `post` lines run after the declaration
+  function expr(id, fail, e, { pre = '', post = '', note = '' } = {}) {
+    if (!post) add(id, fail, 'inline', `${pre}${call('env: ' + e)}`, note); // a mutation line needs a name to act on
+    add(id, fail, 'env: env', `${pre}const env = ${e};\n${post}${call('env: env')}`, note);
+    add(id, fail, '{ env }', `${pre}const env = ${e};\n${post}${call('env')}`, note);
+  }
+  // a const-env vector with its own text, both call forms
+  function constForms(id, fail, textFor, note = '') {
+    add(id, fail, 'env: env', textFor('env: env'), note);
+    add(id, fail, '{ env }', textFor('env'), note);
+  }
+
+  // ---- MUST FAIL ----
+  expr('F1a', true, `{ ...base, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const base = { ...${PE} };\n` });
+  expr('F1b', true, `{ ...extra, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const extra = ${PE};\n` });
+  expr('F1c', true, `{ ...Object.fromEntries(Object.entries(e)), GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const e = ${PE};\n` });
+  expr('F2', true, `{ ...Object.fromEntries(Object.entries(${PE})), GIT_CONFIG_NOSYSTEM: '1' }`);
+  expr('F3', true, `{ ...Object.fromEntries(Object.entries(${PE}).filter(() => true)), GIT_CONFIG_NOSYSTEM: '1' }`);
+  expr('F4', true, `{ ...${PRO}['env'], GIT_CONFIG_NOSYSTEM: '1' }`);
+  expr('F5', true, `{ ...penv, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `import { env as penv } from 'node:process';\n` });
+  expr('F6', true, `{ ...gitEnv(d), ...${PE} }`);
+  expr('F7', true, `{ ...gitEnv(d), ...base }`, { pre: `const base = { ...${PE} };\n` });
+  expr('F8', true, `{ GIT_CONFIG_NOSYSTEM: '1', extra: { ...${PE} } }`);
+  expr('F9', true, `{ ...Object.fromEntries(keep.filter(Boolean).map((k) => [k, ${PE}[k]]).concat(Object.entries(${PE}))), GIT_CONFIG_NOSYSTEM: '1' }`, { pre: KEEP });
+  expr('F10', true, `{ ...Object.fromEntries(keep.filter(Boolean).flatMap(() => Object.entries(${PE}))), GIT_CONFIG_NOSYSTEM: '1' }`, { pre: KEEP });
+  expr('F11', true, `{ GIT_CONFIG_NOSYSTEM: '1', all: ${PE} }`);
+  expr('F12', true, `{ ...Object.fromEntries(Object.entries(all())), GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `function all() { return ${PE}; }\n` });
+  add('F13', true, 'env: mk(d)', `function mk(x) { if (x) return { PATH: ${PE}.PATH, GIT_CONFIG_NOSYSTEM: '1' }; return ${PE}; }\n${call('env: mk(d)')}`);
+  add('F14', true, 'env: sandboxEnv(cwd)', call('env: sandboxEnv(cwd)'));
+  expr('F15', true, CLEAN, { post: `Object.assign(env, ${PE});\n` });
+  expr('F16', true, `{ GIT_CONFIG_NOSYSTEM: '1' }`, { post: `for (const k of Object.keys(${PE})) env[k] = ${PE}[k];\n` });
+  expr('F17', true, CLEAN, { post: `env.GIT_DIR = '/elsewhere/.git';\n` });
+  expr('F18', true, `{ ...Object.fromEntries(KEYS.filter((k) => k in ${PE}).map((k) => [k, ${PE}[k]])), GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const KEYS = ['PATH'];\nKEYS.push('GIT_DIR');\n` });
+  expr('F19', true, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const keep = ['PATH', 'GIT_DIR'];\n` });
+  expr('F20', true, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const k2 = ['GIT_DIR'];\nconst keep = ['PATH', ...k2];\n` });
+  expr('F21', true, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const keep = ['PATH', 'GIT_' + 'DIR'];\n` });
+  expr('F22', true, `{ GIT_CONFIG_NOSYSTEM: '1', ['GIT' + '_DIR']: ${PE}['GIT' + '_DIR'] }`);
+  expr('F23', true, `{ PATH: ${PE}.PATH, GIT_CONFIG_NOSYSTEM: '0' }`);
+  expr('F24', true, `{ PATH: ${PE}.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_NOSYSTEM: '0' }`);
+  expr('F25', true, `{ GIT_CONFIG_NOSYSTEM: '1', ${PICK}, ...over }`, { pre: `${KEEP}const over = { GIT_CONFIG_NOSYSTEM: '0' };\n` });
+  expr('F26', true, `{ PATH: ${PE}.PATH }`);
+  expr('F27', true, `{ PATH: ${PE}.PATH, GIT_CONFIG_NOSYSTEM: flag }`);
+  expr('F28a', true, `{ PATH: ${PE}.PATH /* GIT_CONFIG_NOSYSTEM: '1' */ }`);
+  expr('F28b', true, `{ PATH: ${PE}.PATH }`, { pre: `// GIT_CONFIG_NOSYSTEM: '1'\n` });
+  expr('F28c', true, `{ // GIT_CONFIG_NOSYSTEM: '1'\n  PATH: ${PE}.PATH }`);
+  expr('F29', true, `{ PATH: ${PE}.PATH, git_dir: d, GIT_CONFIG_NOSYSTEM: '1' }`);
+  expr('F30', true, `{ PATH: ${PE}.PATH, GIT_DIR: x, GIT_CONFIG_NOSYSTEM: '1' }`);
+  // scope and binding
+  constForms('F31a', true, (form) => `function a() { const env = ${CLEAN}; return env; }\nfunction b() { ${call(form).trim()} }\n`, 'the spawn is not in the scope of the clean declaration');
+  constForms('F31b', true, (form) => `function a() { const env = ${CLEAN}; return env; }\nfunction b() { const env = { ...${PE} }; ${call(form).trim()} }\n`, 'a second declaration in b()');
+  add('F31c', true, 'inline', `function a() { const env = ${CLEAN}; return env; }\nfunction b() { ${call('env: { ...' + PE + ' }').trim()} }\n`);
+  constForms('F32', true, (form) => `const env = ${CLEAN};\nfunction f() { let env = { ...${PE} }; ${call(form).trim()} }\n`);
+  constForms('F33', true, (form) => `const env = ${CLEAN};\nfunction run(env) { ${call(form).trim()} }\n`, 'env is a parameter at the spawn');
+  add('F34', true, 'env: e2', `function one() { const e2 = ${CLEAN}; return e2; }\nfunction two() { const e2 = { ...${PE} }; ${call('env: e2').trim()} }\n`);
+  // round 2
+  expr('F35', true, CLEAN, { post: `const alias = env;\nfor (const k in ${PE}) alias[k] = ${PE}[k];\n` });
+  expr('F36', true, CLEAN, { post: `function fill(o) { for (const k in ${PE}) o[k] = ${PE}[k]; }\nfill(env);\n` });
+  expr('F37', true, CLEAN, { post: `Reflect.set(env, 'GIT_DIR', d);\n` });
+  expr('F38', true, CLEAN, { post: `const alias = env;\nalias.GIT_DIR = d;\n` });
+  expr('F39', true, CLEAN, { post: `Object.assign(Object(env), { GIT_DIR: d });\n` });
+  expr('F40', true, CLEAN, { post: `env.__defineGetter__('GIT_DIR', () => d);\n` });
+  expr('F41a', true, `{ A: /'/.source, GIT_DIR: d, B: 'x', GIT_CONFIG_NOSYSTEM: '1' }`, { note: 'a regex literal holding a quote before the GIT_DIR entry' });
+  expr('F41b', true, `{ A: ${BT}${BS}${BT}${BT}, GIT_DIR: d, GIT_CONFIG_NOSYSTEM: '1' }`, { note: 'a template value holding an escaped backtick before the GIT_DIR entry' });
+  expr('F41c', true, `{ A: /"/.test(x) ? '${BS}x47IT_DIR' : 1, B: 'GIT_', GIT_DIR: d, GIT_CONFIG_NOSYSTEM: '1' }`);
+  add('F41d', true, 'env: env', `const re = /'/;\nconst env = { GIT_DIR: d, ${'PATH: ' + PE + '.PATH'}, GIT_CONFIG_NOSYSTEM: '1' };\n${call('env: env')}`, 'a regex with a quote in the file region before the declaration');
+  add('F41e', true, 'inline', `const r = /'${BS}//; ${call('env: ' + PE).trim()}\n`, 'a regex ending in // on the line before the spawn: the old comment test read the call as a comment');
+  add('F42a', true, 'env: gitEnv()', `function gitEnv() { return { ...${PE} }; }\n${call('env: gitEnv()')}`.replace("import { gitEnv } from './lib/git-env.mjs';\n", ''));
+  add('F42b', true, 'env: gitEnv()', `const gitEnv = (d) => ({ ...${PE}, GIT_CEILING_DIRECTORIES: d });\n${call('env: gitEnv(d)')}`);
+  add('F42c', true, 'env: gitEnv()', `const gitEnv = () => ${PE};\n${call('env: gitEnv()')}`);
+  add('R1', true, 'template command', call('env: ' + PE, BT + 'git' + BT), 'a counted spawn WITH a finding');
+  add('R2', true, "'git.exe'", call('env: ' + PE, "'git.exe'"), 'a counted spawn WITH a finding');
+  // extras found while building this unit (candidate rows for the list)
+  expr('X1', true, `{ PATH: ${PE}.PATH, '${BS}x47IT_DIR': d, GIT_CONFIG_NOSYSTEM: '1' }`, { note: 'a hex escape inside a quoted key: the raw text holds no GIT_ at all' });
+  expr('X2', true, `{ PATH: ${PE}.PATH, ${BS}u0047IT_DIR: d, GIT_CONFIG_NOSYSTEM: '1' }`, { note: 'a unicode escape in an unquoted key' });
+  expr('X3', true, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: `const keep = ['PATH', 'GIT_${BS}x44IR'];\n`, note: 'an escaped GIT_ name in the key list' });
+  add('X4', true, 'options spread', `const opts = {};\n${SP}('git', ['status'], { env: gitEnv(), ...opts });\n`, 'a later spread can carry env:');
+  expr('X5', true, `{ GIT_CONFIG_NOSYSTEM: '1', ${PICK} }`, { pre: `const keep = ['PATH', 'GIT_CONFIG_NOSYSTEM'];\n`, note: 'the key list names NOSYSTEM and the spread comes after the literal 1: the ambient value wins' });
+  add('X6', true, 'quoted env key', `${SP}('git', ['status'], { cwd: d, 'env': ${PE} });\n`, 'a quoted env key');
+  add('X7', true, 'second env key', `${SP}('git', ['status'], { cwd: d, env: gitEnv(), env: ${PE} });\n`, 'the last env: wins');
+
+  // ---- MUST PASS ----
+  expr('P3', false, 'gitEnv(d)');
+  expr('P4', false, CLEAN);
+  expr('P5', false, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1' }`, { pre: KEEP });
+  expr('P6', false, `{ ${PICK}, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_CEILING_DIRECTORIES: d }`, { pre: KEEP });
+  add('P7', false, 'helper', `const sandboxEnv = (dir) => ({ PATH: ${PE}.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' });\n${call('env: sandboxEnv(cwd)')}`, 'a same-file arrow helper whose body is one allowlist literal');
+  add('P8', false, 'helper function', `function sandboxEnv(dir) { return { PATH: ${PE}.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: '1' }; }\n${call('env: sandboxEnv(cwd)')}`, 'a same-file function whose only statement is the return of one allowlist literal');
+  add('P9', false, 'regex in a value', `const env = { HOME: d, X: d.replace(/[${BS}${BS}/]+$/, ''), GIT_CONFIG_NOSYSTEM: '1' };\n${call('env')}`, 'a regex literal in a value is read, not refused');
+  // extras 2 (attack on the fix): the env: property must be the spawn's own, single, plainly-spelled one
+  add('X8', true, "['env']: key", `${SP}('git', ['status'], { cwd: d, env: gitEnv(), ['env']: ${PE} });\n`, 'a computed key spelled out wins over the plain one');
+  add('X9', true, 'getter env', `${SP}('git', ['status'], { cwd: d, env: gitEnv(), get env() { return ${PE}; } });\n`, 'a getter named env');
+  add('X10', true, 'nested object', `${SP}('git', ['status'], Object.assign({}, { env: gitEnv() }, opts));\n`, 'another argument can override the env: of a wrapped object');
+  add('X11', true, 'computed key', `${SP}('git', ['status'], { cwd: d, env: gitEnv(), [k]: ${PE} });\n`, 'a computed key can be env');
+  return out;
+
+})();
+const W_BY_ID = new Map();
+for (const leg of W_LEGS) { if (!W_BY_ID.has(leg.id)) W_BY_ID.set(leg.id, []); W_BY_ID.get(leg.id).push(leg); }
+for (const [id, legs] of W_BY_ID) {
+  const fail = legs[0].fail;
+  const note = legs.map((l) => l.note).find(Boolean) || '';
+  test(`08d witness ${id}: ${fail ? 'a finding' : 'clean, no row'} in ${legs.map((l) => l.form).join(' and ')}${note ? ' (' + note + ')' : ''}`, () => {
+    for (const leg of legs) {
+      const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: leg.text }], { exemptions: [] });
+      assert.ok(r.gitSpawns.length >= 1, `${id} [${leg.form}]: the spawn is counted`);
+      if (fail) assert.equal(r.findings.length, 1, `${id} [${leg.form}] must be a finding: ${leg.text}`);
+      else assert.deepEqual(r.findings, [], `${id} [${leg.form}] must be clean with no row`);
+    }
+  });
+}
+
+// ======================================================================================================================================================================
+// 08d: one fixture per branch of the rewrite that the witness table alone left unkilled. The 08d mutation wave (return, ## 08d BUILD) listed each of these as a SURVIVOR
+// before the leg existed; each leg below is the red-first proof for it. A refusal leg asserts exactly one finding and that the spawn is NOT counted as an allowlist spawn;
+// an acceptance leg asserts no finding and one allowlist spawn.
+const R_BS = String.fromCharCode(92); // a backslash, built from its code point
+const R_NS = "GIT_CONFIG_NOSYSTEM: '1'";
+const R_HEAD = `import { ${SP} } from '${MOD}';\n`; // a file that binds the spawn and NOTHING else (no gitEnv import)
+const R_SPAWN = (env) => `${SP}('git', ['x'], { env: ${env} });\n`;
+const R_FROM = (keys, tail = '') => `...Object.fromEntries(${keys}.map((k) => [k, ${PE}[k]])${tail})`;
+const refused = (r, why, re) => {
+  assert.equal(r.findings.length, 1, `${why}: ${JSON.stringify(r.findings)}`);
+  assert.equal(r.allowlist.length, 0, `${why}: not an allowlist spawn`);
+  if (re) assert.match(r.findings[0], re, why);
+};
+const accepted = (r, why) => {
+  assert.deepEqual(r.findings, [], why);
+  assert.equal(r.allowlist.length, 1, `${why}: counted as an allowlist spawn`);
+};
+const withKeys = (head, keysExpr = 'KEYS', tail = '') => raw(BINDINGS + head + R_SPAWN(`{ ${R_FROM(keysExpr, tail)}, ${R_NS} }`));
+
+test('08d rules: gitEnv is trusted from the room git-env.mjs (or git-test-env.mjs) and from no other module', () => {
+  refused(raw(R_HEAD + `import { gitEnv } from './other.mjs';\n` + R_SPAWN('gitEnv()')), 'another module', /gitEnv/);
+  assert.equal(raw(R_HEAD + `import { gitEnv } from './lib/git-env.mjs';\n` + R_SPAWN('gitEnv()')).findings.length, 0);
+  assert.equal(raw(R_HEAD + `import { gitTestEnv } from '../scripts/lib/git-test-env.mjs';\n` + R_SPAWN('gitTestEnv()')).findings.length, 0);
+});
+
+test('08d rules: a renamed import does not bind the trusted name', () => {
+  refused(raw(R_HEAD + `import { gitEnv as other } from './lib/git-env.mjs';\n` + R_SPAWN('gitEnv()')), 'import ... as other');
+  refused(raw(R_HEAD + `import { gitEnv as other, thing as gitEnv } from './lib/git-env.mjs';\n` + R_SPAWN('gitEnv()')), 'another export renamed to gitEnv');
+});
+
+test('08d rules: a dynamic import binds the trusted name only by the bare shorthand (MUTATION FINDING: { other: gitEnv } bound it to another export and was trusted)', () => {
+  refused(raw(R_HEAD + `const { other: gitEnv } = await import('./lib/git-env.mjs');\n` + R_SPAWN('gitEnv()')), 'a rename in a dynamic import');
+  assert.equal(raw(R_HEAD + `const { gitEnv } = await import('./lib/git-env.mjs');\n` + R_SPAWN('gitEnv()')).findings.length, 0);
+  assert.equal(raw(R_HEAD + `const { x, gitEnv } = await import('./lib/git-env.mjs');\n` + R_SPAWN('gitEnv()')).findings.length, 0);
+});
+
+test('08d rules: a mention of the trusted helper other than a call may be a rebinding, so it is refused', () => {
+  refused(raw(BINDINGS + 'const copy = gitEnv;\n' + R_SPAWN('gitEnv()')), 'gitEnv copied', /mentioned other than as a call/);
+});
+
+test('08d rules: brackets that do not balance are a finding, whatever the mismatch', () => {
+  const spawn = R_SPAWN('gitEnv()');
+  assert.match(raw(BINDINGS + spawn + 'x = 1);\n').findings.join('\n'), /do not balance/);
+  assert.match(raw(BINDINGS + spawn + 'x = [1, 2);\n').findings.join('\n'), /do not balance/);
+  assert.match(raw(BINDINGS + spawn + 'x = (1, 2;\n').findings.join('\n'), /do not balance/);
+});
+
+test('08d rules: a file the lexer cannot read whole is a finding, not a guess', () => {
+  assert.match(raw(BINDINGS + R_SPAWN('gitEnv()') + "const s = 'oops;\n").findings.join('\n'), /could not be tokenized/);
+});
+
+test('08d rules: scope -- a binding declared in another block is not the binding the spawn reads', () => {
+  refused(raw(BINDINGS + `if (a) { const KEYS = ['PATH']; }\nconst env = { ${R_FROM('KEYS')}, ${R_NS} };\n` + R_SPAWN('env')), 'a key list in another block', /block/);
+  refused(raw(BINDINGS + `if (a) { const env = { ${R_NS} }; }\n` + R_SPAWN('env')), 'an env alias in another block', /block/);
+  accepted(raw(BINDINGS + `{ const env = { ${R_NS} };\n${R_SPAWN('env')}}\n`), 'the same block');
+});
+
+test('08d rules: a statement that goes on after the literal is not the bare literal', () => {
+  refused(raw(BINDINGS + `const env = { ${R_NS} }\n${BT}x${BT};\n` + R_SPAWN('env')), 'a tagged template on the next line');
+  refused(raw(BINDINGS + `const env = { ${R_NS} }\n  .x;\n` + R_SPAWN('env')), 'a member access on the next line');
+  accepted(raw(BINDINGS + `const env = { ${R_NS} }\nconst z = 1;\n` + R_SPAWN('env')), 'a plain next statement');
+  refused(raw(BINDINGS + `const KEYS = ['PATH'].concat(['GIT_DIR']);\nconst env = { ${R_FROM('KEYS')}, ${R_NS} };\n` + R_SPAWN('env')), 'a key list with a call after the array');
+});
+
+test('08d rules: a same-file helper is read only when it is one plain declaration that returns one literal', () => {
+  const lit = `{ ${R_NS} }`;
+  accepted(raw(BINDINGS + `const mk = () => (${lit});\n` + R_SPAWN('mk()')), 'an arrow helper');
+  accepted(raw(BINDINGS + `function mk() { return ${lit}; }\n` + R_SPAWN('mk()')), 'a function helper');
+  refused(raw(BINDINGS + `const mk = () => (${lit});\nconst other = mk;\n` + R_SPAWN('mk()')), 'the helper is mentioned other than as a call', /other than as a call/);
+  refused(raw(BINDINGS + `const mk = () => (${lit});\nfunction mk() { return ${lit}; }\n` + R_SPAWN('mk()')), 'declared twice', /declared 2 times/);
+  refused(raw(BINDINGS + `const mk = async () => (${lit});\n` + R_SPAWN('mk()')), 'async', /async/);
+  refused(raw(BINDINGS + `function mk() { return ${lit}; mutate(); }\n` + R_SPAWN('mk()')), 'more than the return', /does more than return/);
+  refused(raw(BINDINGS + `const mk = () => (${lit}).x;\n` + R_SPAWN('mk()')), 'more after the object', /more after the object/);
+});
+
+test('08d rules: the key list is declared once with const, holds only literals of harmless names, is used only as the head of the chain, and ends its statement', () => {
+  accepted(withKeys(`const KEYS = ['PATH', 'GIT_CEILING_DIRECTORIES'];\n`), 'the canon shape');
+  refused(withKeys(`const KEYS = ['PATH'];\nlet KEYS = ['GIT_DIR'];\n`), 'declared twice', /declared 2 times/);
+  refused(withKeys(`let KEYS = ['PATH'];\n`), 'declared with let', /not declared with const/);
+  refused(withKeys(`const KEYS = ['PATH', other];\n`), 'a non-literal entry', /more than plain string literals/);
+  refused(withKeys(`const KEYS = ['PATH', 'GIT_DIR'];\n`), 'a GIT_ name', /GIT_DIR/);
+  refused(withKeys(`const KEYS = ['PATH'];\nconsole.log(KEYS.length);\n`), 'used another way', /used other than as the head/);
+});
+
+test('08d rules: the one spread read is Object.fromEntries(KEYS[.filter(canon)].map(canon)) and nothing wraps or follows it', () => {
+  accepted(withKeys(`const KEYS = ['PATH'];\n`, 'KEYS.filter((k) => ' + PE + '[k] !== undefined)'), 'with the canon filter');
+  accepted(withKeys(`const KEYS = ['PATH'];\n`, 'KEYS.filter((k) => k in ' + PE + ')'), 'with the in-form filter');
+  refused(withKeys(`const KEYS = ['PATH'];\n`, 'KEYS.filter((k) => keep(k))'), 'a filter that is not the canon predicate', /\.filter/);
+  refused(raw(BINDINGS + `const KEYS = ['PATH'];\n` + R_SPAWN(`{ ...evil(KEYS.map((k) => [k, ${PE}[k]])), ${R_NS} }`)), 'a wrapper that is not Object.fromEntries', /spreads/);
+  refused(raw(BINDINGS + `const KEYS = ['PATH'];\n` + R_SPAWN(`{ ...Object.fromEntries(KEYS.map((k) => [k, ${PE}[k]]).concat(more)), ${R_NS} }`)), 'a chain that goes on after .map', /after \.map|more after/);
+});
+
+test('08d rules: a literal property is a name or a string with a plain value, never a computed key, __proto__ or a bare expression', () => {
+  refused(raw(BINDINGS + R_SPAWN(`{ [name]: 'x', ${R_NS} }`)), 'a computed key', /computed key/);
+  refused(raw(BINDINGS + R_SPAWN(`{ __proto__: evil, ${R_NS} }`)), '__proto__', /__proto__/);
+  refused(raw(BINDINGS + R_SPAWN(`{ A: 'x', ${R_NS}, wat }`).replace(', wat', ', 1 + 2')), 'a property that is no key');
+});
+
+test('08d rules: GIT_CONFIG_NOSYSTEM is the literal 1, set once, after every spread', () => {
+  accepted(raw(BINDINGS + R_SPAWN(`{ ${R_NS}, A: 'x' }`)), 'a plain literal');
+  accepted(raw(BINDINGS + R_SPAWN(`{ GIT_CONFIG_NOSYSTEM: 1 }`)), 'the number 1');
+  refused(raw(BINDINGS + R_SPAWN(`{ GIT_CONFIG_NOSYSTEM: '1' + other }`)), 'an expression starting with 1', /must be the literal 1/);
+  refused(raw(BINDINGS + R_SPAWN(`{ GIT_CONFIG_NOSYSTEM: 0 }`)), 'the number 0', /must be the literal 1/);
+  refused(raw(BINDINGS + R_SPAWN(`{ GIT_CONFIG_NOSYSTEM: 2 }`)), 'the number 2', /must be the literal 1/);
+  refused(raw(BINDINGS + R_SPAWN(`{ ${R_NS}, A: 'x', ${R_NS} }`)), 'set twice', /more than once/);
+  refused(raw(BINDINGS + R_SPAWN(`{ A: 'x' }`)), 'missing', /does not set GIT_CONFIG_NOSYSTEM/);
+  refused(raw(BINDINGS + `const KEYS = ['PATH'];\n` + R_SPAWN(`{ ${R_NS}, ${R_FROM('KEYS')} }`)), 'before a spread', /before a spread/);
+});
+
+test('08d rules: an env alias is used only as the env value of a child_process call, and is declared once', () => {
+  accepted(raw(BINDINGS + `const env = { ${R_NS} };\n${SP}('git', ['x'], { env });\n`), 'the shorthand');
+  refused(raw(BINDINGS + `const env = { ${R_NS} };\nconst other = { env };\n${SP}('git', ['x'], { env });\n`), 'the shorthand outside a call', /used outside its declaration/);
+  refused(raw(BINDINGS + `const e = { ${R_NS} };\n${SP}('git', ['x'], { env: e, input: { e } });\n`), 'a shorthand of another name inside the call', /used outside its declaration/);
+  accepted(raw(BINDINGS + `const env = { ${R_NS} };\nconst p = cfg?.env;\n${SP}('git', ['x'], { env });\n`), 'a property named env after ?. is not a use');
+  accepted(raw(BINDINGS + `const ${R_BS}u0065nv = { ${R_NS} };\n${SP}('git', ['x'], { env });\n`), 'a declaration spelled with a unicode escape is still env');
+});
+
+test('08d rules: the options object has ONE env property, spelled env:, in the spawn own object, with nothing after it that can override', () => {
+  refused(raw(BINDINGS + `${SP}('git', ['x'], { ['env']: gitEnv() });\n`), 'a computed key', /computed key/);
+  refused(raw(BINDINGS + `${SP}('git', ['x'], { env: gitEnv(), env: gitEnv() });\n`), 'twice', /2 env properties/);
+  refused(raw(BINDINGS + `${SP}('git', ['x'], merge({ env: gitEnv() }, other));\n`), 'inside a call that another argument can override', /not an argument of the spawn itself/);
+  refused(raw(BINDINGS + `${SP}('git', ['x'], { env: gitEnv(), [k]: 1 });\n`), 'a computed key beside it', /computed key/);
+  refused(raw(BINDINGS + `${SP}('git', ['x'], { env: gitEnv(), ...other });\n`), 'a spread after it', /spreads another object after env/);
+  accepted(raw(BINDINGS + `${SP}('git', ['x'], { ...base, ${'env'}: { ${R_NS} } });\n`), 'a spread BEFORE it is overridden by it');
+});
+
+test('08d rules: a command written with escapes is read as written AND as decoded', () => {
+  const r = raw(BINDINGS + `${SP}('g${R_BS}x69t', ['x'], {});\n`);
+  assert.equal(r.gitSpawns.length, 1, 'g\\x69t is git');
+  assert.equal(r.findings.length, 1);
+});
+
+test('08d rules: a comment inside an allowlist literal that names a GIT_ variable is a comment, not a key', () => {
+  accepted(raw(BINDINGS + R_SPAWN(`{ /* GIT_DIR is dropped */ ${R_NS} }`)), 'a block comment');
+  accepted(raw(BINDINGS + R_SPAWN(`{ ${R_NS} // GIT_INDEX_FILE too\n}`)), 'a line comment');
+});
+
+test('08d rules: process[env] is a mention of the environment, named so in the finding', () => {
+  refused(raw(BINDINGS + R_SPAWN(`process['env']`)), 'process[env]', /mentions process\.env/);
 });
