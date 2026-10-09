@@ -116,11 +116,16 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
     // path we built from the already-physical cwd. A link anywhere in the path (the leaf or any ancestor) makes them
     // differ, and the dir is left alone, untouched and unlisted. (An lstat directory check would add nothing: a link
     // never resolves to itself.) Unresolvable -> the catch below, nothing to clean.
-    if (fs.realpathSync.native(legacyDir) !== legacyDir) return;
+    // 08e FIXBACK 2: that ONE question used to cover every unlink and the rmdir below, so a link swapped in after it redirected the deletes into the link's target (the quarantine's shape).
+    // The question is asked again before EACH delete and before the rmdir; a no-longer-true answer stops the whole mop-up (fail closed). Unresolvable counts as no longer true.
+    const stillLegacy = () => { try { return fs.realpathSync.native(legacyDir) === legacyDir; } catch (_) { return false; } };
+    if (!stillLegacy()) return;
     for (const name of fs.readdirSync(legacyDir)) {
       if (name !== '.gitignore' && !name.startsWith('session_handoff')) continue; // never a foreign file
+      if (!stillLegacy()) return;
       try { fs.unlinkSync(path.join(legacyDir, name)); } catch (_) {}
     }
+    if (!stillLegacy()) return;
     fs.rmdirSync(legacyDir); // fails harmlessly (ENOTEMPTY) if a foreign file remains
   } catch (_) {
     // absent / not a dir / permission -> nothing to clean, non-fatal
@@ -228,6 +233,15 @@ function containedOutputDir(configured, root) {
     } catch (_) {
       continue; // blocked by a file / perms -> fall through to default / null
     }
+    // 08e FIXBACK 2: the check above covered the mkdir; the self-ignore write below is a second act, so the candidate is resolved again and must still be the very path that was
+    // checked. A link swapped in between the two makes this candidate refuse (fail closed, the loop falls through to the default or to null) and no file is written through it.
+    let afterMkdir;
+    try {
+      afterMkdir = resolveThroughExisting(candidate);
+    } catch (_) {
+      continue;
+    }
+    if (afterMkdir !== realCandidate) continue;
     // Self-ignore ONLY when the PHYSICALLY-RESOLVED candidate is exactly the default
     // owned dir (main's ruling, 2026-07-27) — realCandidate/realRoot are the SAME
     // values the containment check just trusted a few lines up; reusing them means

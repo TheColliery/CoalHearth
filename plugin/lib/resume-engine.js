@@ -350,6 +350,8 @@ Verify the above against the working tree, then continue — or restart the task
         if (!SCRATCH_FILE_RE.test(name)) continue;
         const file = path.join(dir, name);
         if (!contained(file)) continue;
+        // 08e FIXBACK 2: the ownership pin of this directory is asked again before EACH delete (one question used to cover them all); a changed answer stops the directory (fail closed)
+        if (ownedDir(relDir) !== dir) break;
         try {
           if (fs.statSync(file).isFile()) {
             fs.rmSync(file, { force: true });
@@ -374,6 +376,7 @@ Verify the above against the working tree, then continue — or restart the task
         if (!STALE_WORKTREE_RE.test(name)) continue;
         const wt = path.join(base, name);
         if (!contained(wt)) continue;
+        if (ownedDir(relDir) !== base) break; // 08e FIXBACK 2: as for the scratch files, asked again before each (recursive) delete
         try {
           if (fs.statSync(wt).isDirectory()) {
             fs.rmSync(wt, { recursive: true, force: true });

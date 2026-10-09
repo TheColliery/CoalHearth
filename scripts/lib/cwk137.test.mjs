@@ -635,3 +635,159 @@ test('R20: a --global configure run that passes no CLAUDE_CONFIG_DIR never write
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(fs.readdirSync(operatorHome), [], 'the operator\'s home was not written');
 });
+
+// ---- 08e FIXBACK 2: the same class at the two remaining delete sites -------------------------------------------------------------------------------------------------------------------
+// selfCleanLegacyPhantom (lib/contained-dir.js) asked ONE realpath question and then unlinked every matching name and removed the folder; sweepOrphans (lib/resume-engine.js) pinned each
+// owned directory ONCE and then deleted many files or worktrees under it. A link swapped in after that one check redirected the deletes into the link's target. Each delete now re-asks the
+// pin. The swap is placed by wrapping fs.realpathSync.native for the ONE path the code asks about: it can land right after an answer (the window between a check and the act) or right
+// before the Nth answer (so the Nth check is the one that must see it). A directory link is a junction on Windows; a volume that refuses one is a visible skip.
+function watchRealpath(target, { swap, swapBefore = 0, swapAfter = 0 }) {
+  const real = fs.realpathSync.native;
+  const want = path.resolve(target);
+  let k = 0;
+  let swapped = false;
+  fs.realpathSync.native = function (p, ...a) {
+    const hit = typeof p === 'string' && path.resolve(p) === want;
+    if (hit) { k += 1; if (k === swapBefore) swapped = swap(); }
+    const r = real.call(this, p, ...a);
+    if (hit && k === swapAfter) swapped = swap();
+    return r;
+  };
+  return { calls: () => k, swapped: () => swapped, restore() { fs.realpathSync.native = real; } };
+}
+// Replace `dir` by a directory link to `target`; the real folder is moved aside so its own files stay readable.
+function swapDirForLink(dir, target) {
+  fs.renameSync(dir, dir + '.aside');
+  if (link(target, dir, true)) return true;
+  fs.renameSync(dir + '.aside', dir);
+  return false;
+}
+function canLinkDirs(t) {
+  const d = mk(t, 'ch-fb2-probe-');
+  fs.mkdirSync(path.join(d, 'a'));
+  const ok = link(path.join(d, 'a'), path.join(d, 'l'), true);
+  if (ok) removeLink(path.join(d, 'l'), d, path.join(d, 'a'));
+  return ok;
+}
+const LEGACY_NAMES = ['.gitignore', 'session_handoff.json'];
+function phantomFixture(t) {
+  const cwd0 = process.cwd();
+  t.after(() => process.chdir(cwd0)); // registered FIRST so it runs before the fixture folders are removed (Windows cannot remove the folder a process stands in)
+  const root = project(t);
+  const sub = path.join(root, 'sub');
+  const legacy = path.join(sub, '.claude', 'coalhearth');
+  fs.mkdirSync(legacy, { recursive: true });
+  for (const f of LEGACY_NAMES) fs.writeFileSync(path.join(legacy, f), f);
+  const other = mk(t, 'ch-fb2-other-');
+  for (const f of [...LEGACY_NAMES, 'keep.txt']) fs.writeFileSync(path.join(other, f), 'other-' + f);
+  const { containedOutputDir } = require('../../lib/contained-dir.js');
+  process.chdir(sub);
+  return { legacy, other, run: () => containedOutputDir() };
+}
+const otherSurvives = (other) => ['.gitignore', 'session_handoff.json', 'keep.txt'].every((f) => fs.readFileSync(path.join(other, f), 'utf8') === 'other-' + f);
+
+test('FB2 phantom: a link swapped in right after the one check does not let the unlinks remove the target files', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const { legacy, other, run } = phantomFixture(t);
+  const w = watchRealpath(legacy, { swapAfter: 1, swap: () => swapDirForLink(legacy, other) });
+  try { run(); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the swap happened');
+  assert.ok(otherSurvives(other), 'the files of the swap target are untouched');
+});
+
+test('FB2 phantom: a link swapped in between two unlinks stops the later ones (the check is asked per file)', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const { legacy, other, run } = phantomFixture(t);
+  const w = watchRealpath(legacy, { swapBefore: 3, swap: () => swapDirForLink(legacy, other) }); // answers: 1 the top check, 2 before the first unlink, 3 before the second
+  try { run(); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the third answer was asked, i.e. a check stood before the second unlink');
+  assert.ok(otherSurvives(other), 'the files of the swap target are untouched');
+});
+
+test('FB2 phantom: the pin is asked before every delete and before the rmdir (top check + one per matching file + one before the rmdir)', (t) => {
+  const { legacy, run } = phantomFixture(t);
+  const w = watchRealpath(legacy, {});
+  try { run(); } finally { w.restore(); }
+  assert.equal(w.calls(), 1 + LEGACY_NAMES.length + 1);
+  assert.deepEqual(fs.existsSync(legacy), false, 'an ordinary phantom is still mopped and its folder removed');
+});
+
+function sweepFixture(t, relDir, names, asDirs) {
+  const root = project(t);
+  const owned = path.join(root, relDir);
+  fs.mkdirSync(owned, { recursive: true });
+  for (const n of names) { if (asDirs) fs.mkdirSync(path.join(owned, n)); else fs.writeFileSync(path.join(owned, n), n); }
+  const other = mk(t, 'ch-fb2-sweep-other-');
+  const otherRoot = path.join(root, 'otherdir'); // another directory OF THE SAME PROJECT: the per-file containment check cannot tell it from the owned one
+  fs.mkdirSync(otherRoot);
+  for (const n of [...names, 'keep.mjs']) { if (asDirs && n !== 'keep.mjs') { fs.mkdirSync(path.join(otherRoot, n)); fs.writeFileSync(path.join(otherRoot, n, 'f.txt'), 'x'); } else fs.writeFileSync(path.join(otherRoot, n), n); }
+  const e = new ResumeEngine({}, {}, root);
+  return { root, owned, otherRoot, run: () => e.sweepOrphans(root) };
+}
+const SCRATCH_REL = path.join('.claude', 'coalhearth', 'scratch');
+const WT_REL = path.join('.claude', 'coalhearth', 'worktrees');
+
+test('FB2 sweep: a link swapped in at the owned scratch dir right after its pin does not let the deletes sweep the target', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const f = sweepFixture(t, SCRATCH_REL, ['probe_a.mjs', 'probe_b.mjs'], false);
+  const w = watchRealpath(f.owned, { swapAfter: 1, swap: () => swapDirForLink(f.owned, f.otherRoot) });
+  try { f.run(); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the swap happened');
+  assert.deepEqual(fs.readdirSync(f.otherRoot).sort(), ['keep.mjs', 'probe_a.mjs', 'probe_b.mjs'], 'nothing was deleted in the swap target');
+});
+
+test('FB2 sweep: a link swapped in between two scratch deletes stops the later one (the ownership pin is asked per delete)', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const f = sweepFixture(t, SCRATCH_REL, ['probe_a.mjs', 'probe_b.mjs'], false);
+  const w = watchRealpath(f.owned, { swapBefore: 3, swap: () => swapDirForLink(f.owned, f.otherRoot) }); // 1 the first pin, 2 before the first delete, 3 before the second
+  try { f.run(); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the third answer was asked, i.e. a pin stood before the second delete');
+  assert.deepEqual(fs.readdirSync(f.otherRoot).sort(), ['keep.mjs', 'probe_a.mjs', 'probe_b.mjs'], 'nothing was deleted in the swap target');
+});
+
+test('FB2 sweep: the same for the stale worktrees (a recursive delete)', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const f = sweepFixture(t, WT_REL, ['ch-worker-1', 'ch-worker-2'], true);
+  const w = watchRealpath(f.owned, { swapBefore: 3, swap: () => swapDirForLink(f.owned, f.otherRoot) });
+  try { f.run(); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the third answer was asked, i.e. a pin stood before the second delete');
+  assert.deepEqual(fs.readdirSync(f.otherRoot).sort(), ['ch-worker-1', 'ch-worker-2', 'keep.mjs'], 'no worktree was deleted in the swap target');
+});
+
+test('FB2 sweep: an ordinary sweep still removes the owned scratch files and worktrees, and asks the pin once per directory plus once per delete', (t) => {
+  const f = sweepFixture(t, SCRATCH_REL, ['probe_a.mjs', 'probe_b.mjs'], false);
+  const w = watchRealpath(f.owned, {});
+  let counts;
+  try { counts = f.run(); } finally { w.restore(); }
+  assert.equal(counts.scratch, 2);
+  assert.equal(w.calls(), 1 + 2, 'the first pin plus one per delete');
+  assert.deepEqual(fs.readdirSync(f.owned), []);
+});
+
+test('FB2 construct: a link swapped in between the mkdir and the self-ignore write gets no .gitignore, and the journal has no folder', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const root = project(t);
+  const folder = path.join(root, '.claude', 'coalhearth');
+  fs.mkdirSync(folder, { recursive: true });
+  const other = mk(t, 'ch-fb2-ign-');
+  const { containedOutputDir } = require('../../lib/contained-dir.js');
+  const w = watchRealpath(folder, { swapBefore: 2, swap: () => swapDirForLink(folder, other) }); // 1 the check before the mkdir, 2 the re-check before the self-ignore write
+  let got;
+  try { got = containedOutputDir(undefined, root); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the second answer was asked, i.e. a re-check stood between the mkdir and the write');
+  assert.equal(got, null, 'fail closed: no journal folder this session');
+  assert.deepEqual(fs.readdirSync(other), [], 'no self-ignore file in the swap target');
+});
+
+test('FB2 construct (control): an ordinary construction asks twice and still plants the self-ignore file', (t) => {
+  const root = project(t);
+  const folder = path.join(root, '.claude', 'coalhearth');
+  fs.mkdirSync(folder, { recursive: true });
+  const { containedOutputDir } = require('../../lib/contained-dir.js');
+  const w = watchRealpath(folder, {});
+  let got;
+  try { got = containedOutputDir(undefined, root); } finally { w.restore(); }
+  assert.equal(got, folder);
+  assert.equal(w.calls(), 2);
+  assert.equal(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8'), '*\n');
+});
