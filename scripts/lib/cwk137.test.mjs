@@ -717,7 +717,6 @@ function sweepFixture(t, relDir, names, asDirs) {
   const owned = path.join(root, relDir);
   fs.mkdirSync(owned, { recursive: true });
   for (const n of names) { if (asDirs) fs.mkdirSync(path.join(owned, n)); else fs.writeFileSync(path.join(owned, n), n); }
-  const other = mk(t, 'ch-fb2-sweep-other-');
   const otherRoot = path.join(root, 'otherdir'); // another directory OF THE SAME PROJECT: the per-file containment check cannot tell it from the owned one
   fs.mkdirSync(otherRoot);
   for (const n of [...names, 'keep.mjs']) { if (asDirs && n !== 'keep.mjs') { fs.mkdirSync(path.join(otherRoot, n)); fs.writeFileSync(path.join(otherRoot, n, 'f.txt'), 'x'); } else fs.writeFileSync(path.join(otherRoot, n), n); }
