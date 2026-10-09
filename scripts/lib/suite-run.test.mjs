@@ -8,9 +8,9 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { STATUS } from './wave-run.mjs';
-import { expectProblems, judgeNames, applyFloor, testTotals, runSuite, runPinned, cli } from './suite-run.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { STATUS, runWaves } from './wave-run.mjs';
+import { expectProblems, judgeNames, applyFloor, testTotals, withStdoutSync, runSuite, runPinned, cli } from './suite-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -34,6 +34,31 @@ const FIXTURES = {
   // a hang BEFORE the first test: --test-timeout never applies; it starts a grandchild, records its pid, and keeps its own event loop alive for ever
   'top-hang.fixture.mjs': "import { spawn } from 'node:child_process'; import fs from 'node:fs';\nconst c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });\nfs.writeFileSync(process.env.GRANDCHILD_PID_FILE, String(c.pid));\nsetInterval(() => {}, 1000);\nawait new Promise(() => {});\n",
 };
+// A POSIX pipe, simulated (a Windows pipe is blocking, so the loss cannot happen there): the first 32 KiB a file process writes go through at once (the kernel buffer), the rest is queued and
+// dies with process.exit() -- unless the stream was switched to blocking, which is what scripts/lib/stdout-sync.mjs does. Installed only in the test FILE's own process (the runner's child).
+const SIM = [
+  "if (process.env.NODE_TEST_CONTEXT === 'child-v8') {",
+  '  const out = process.stdout;',
+  '  let written = 0;',
+  '  let blocking = false;',
+  '  const h = out._handle;',
+  "  if (h && typeof h.setBlocking === 'function') { const real = h.setBlocking.bind(h); h.setBlocking = (v) => { blocking = !!v; return real(v); }; }",
+  '  const realWrite = out.write.bind(out);',
+  '  out.write = function (chunk, enc, cb) {',
+  "    const n = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;",
+  '    const direct = blocking || written + n <= 32768;',
+  '    written += n;',
+  '    if (direct) return realWrite(chunk, enc, cb);',
+  '    setTimeout(() => realWrite(chunk, enc, cb), 400);',
+  '    return true;',
+  '  };',
+  '}',
+  '',
+].join(String.fromCharCode(10));
+fs.writeFileSync(path.join(SANDBOX, 'async-pipe.sim.mjs'), SIM);
+const SIM_NODE_OPTIONS = '--import ' + pathToFileURL(path.join(SANDBOX, 'async-pipe.sim.mjs')).href;
+const MANY = 300;
+fs.writeFileSync(path.join(SANDBOX, 'many.fixture.mjs'), "import { test } from 'node:test';" + String.fromCharCode(10) + 'for (let i = 0; i < ' + MANY + "; i++) test('t' + i, () => {});" + String.fromCharCode(10));
 for (const [name, text] of Object.entries(FIXTURES)) fs.writeFileSync(path.join(SANDBOX, name), text);
 const fx = (...names) => names.map((n) => `${n}.fixture.mjs`);
 const byName = (run, file) => run.results.find((r) => r.file === file);
@@ -77,6 +102,59 @@ test('testTotals: sums tests, passes and skipped TESTS over the files that repor
   const r = (counts) => ({ file: 'x', counts });
   assert.deepEqual(testTotals([]), { tests: 0, pass: 0, skipped: 0 });
   assert.deepEqual(testTotals([r({ tests: 5, pass: 4, skipped: 1 }), r({ tests: 3, pass: 3, skipped: 0 }), r(null), undefined, r({ tests: 2, pass: 0, skipped: 2 })]), { tests: 10, pass: 7, skipped: 3 });
+});
+
+// ---- the loss at the end of a file process on a POSIX pipe (08e RUNNER RED FIX) ------------------------------------------------------------------------------------------
+test('the simulation bites: through the canon wave-run alone, a file of 300 tests reports fewer than 300 when its stdout queues writes and the process is force-exited', async () => {
+  const r = await runWaves({ files: ['many.fixture.mjs'], cwd: SANDBOX, env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, ...LIMITS, serial: true });
+  const res = r.results[0];
+  assert.ok(!(res.status === STATUS.PASS && res.counts && res.counts.tests === MANY), 'the control must lose events, or the legs below prove nothing: ' + res.status + ' ' + JSON.stringify(res.counts));
+});
+
+test('a file of 300 tests whose stdout would queue writes (a POSIX pipe) still reports all 300 to the floors lane -- RED before the RED FIX (counts differed from leg to leg on the CI of 4744791)', async () => {
+  const r = await run({ files: ['many.fixture.mjs'], env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, expect: { floors: { 'many.fixture.mjs': MANY }, names: {} } });
+  const res = byName(r, 'many.fixture.mjs');
+  assert.equal(res.status, STATUS.PASS, res.reason);
+  assert.equal(res.counts.tests, MANY);
+  assert.equal(r.exitCode, 0);
+});
+
+test('the same for the names lane: every one of the 300 listed names is reported -- RED before the RED FIX', async () => {
+  const names = Array.from({ length: MANY }, (_, i) => 't' + i);
+  const r = await run({ files: ['many.fixture.mjs'], env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, expect: { floors: {}, names: { 'many.fixture.mjs': names } } });
+  const res = byName(r, 'many.fixture.mjs');
+  assert.equal(res.status, STATUS.PASS, res.reason);
+  assert.equal(r.exitCode, 0);
+});
+
+test('withStdoutSync: the preload goes AFTER what the caller already set in NODE_OPTIONS, once, and the other variables are kept', () => {
+  const url = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
+  assert.equal(withStdoutSync({ A: '1' }).NODE_OPTIONS, '--import ' + url);
+  assert.equal(withStdoutSync({ A: '1' }).A, '1');
+  const mine = '--import file:///sim.mjs --max-old-space-size=512';
+  assert.equal(withStdoutSync({ NODE_OPTIONS: mine }).NODE_OPTIONS, mine + ' --import ' + url);
+  const once = withStdoutSync({ NODE_OPTIONS: mine });
+  assert.equal(withStdoutSync(once), once, 'a second call adds nothing');
+});
+
+test('the stdout preload is silent and harmless: with stdout a pipe, a file or nothing it exits 0 and says nothing', () => {
+  const url = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
+  const out = path.join(SANDBOX, 'preload-out.txt');
+  const fd = fs.openSync(out, 'w');
+  try {
+    const piped = spawnSync(process.execPath, ['--import', url, '-e', "process.stdout.write('hello'); process.stderr.write('')"], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(piped.status, 0);
+    assert.equal(piped.stdout, 'hello');
+    assert.equal(piped.stderr, '');
+    const toFile = spawnSync(process.execPath, ['--import', url, '-e', "process.stdout.write('hello')"], { stdio: ['ignore', fd, 'pipe'], encoding: 'utf8', timeout: 30000 });
+    assert.equal(toFile.status, 0);
+    assert.equal(toFile.stderr, '');
+    const none = spawnSync(process.execPath, ['--import', url, '-e', '1'], { stdio: 'ignore', timeout: 30000 });
+    assert.equal(none.status, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  assert.equal(fs.readFileSync(out, 'utf8'), 'hello');
 });
 
 // ---- the waved files: floors ----------------------------------------------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 // suite-run.mjs -- how scripts/test.mjs judges the enumerated suite (08e RUNNER BUILD; testing.md: a gate judges a run by the TAP test names it EXPECTS, never by an exit code).
 //
+// LAYER 0, under the three below: every child gets scripts/lib/stdout-sync.mjs as a preload (withStdoutSync). On a POSIX pipe a force-exited file process drops the tail of its report,
+// so the runner counts fewer tests than ran (the CI of 4744791); without this the layers below would be judging a truncated stream.
 // THREE LAYERS, each one a different way a green exit code can lie:
 //   1. wave-run.mjs (the canon, adopted byte for byte) runs each file as its own `node --test --test-reporter=tap` child, admitted by the live machine reading, and reads
 //      a PASS from the TAP: a file that exits 0 before its tests registered is VACUOUS, never a pass. Its whole-run deadline kills the TREE of every running child.
@@ -22,6 +24,15 @@ import path from 'node:path';
 import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, runWaves } from './wave-run.mjs';
 
 const MAX_LISTED = 5;
+
+// The preload that keeps a force-exited file process from losing what it has written (see stdout-sync.mjs: a POSIX pipe queues writes and process.exit() drops them).
+const STDOUT_SYNC = new URL('./stdout-sync.mjs', import.meta.url).href;
+
+// The env every child of the run gets: the caller's own NODE_OPTIONS first (their preloads run before ours), then the stdout preload. Idempotent.
+export function withStdoutSync(env) {
+  const have = String(env.NODE_OPTIONS || '');
+  return have.includes(STDOUT_SYNC) ? env : { ...env, NODE_OPTIONS: (have + ' --import ' + STDOUT_SYNC).trim() };
+}
 
 const listSome = (items) => items.slice(0, MAX_LISTED).join(', ') + (items.length > MAX_LISTED ? ` (+${items.length - MAX_LISTED} more)` : '');
 
@@ -78,7 +89,8 @@ function killTree(child) { // wave-run.mjs does not export its own; the same two
 
 export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs }) {
   return new Promise((resolve) => {
-    const childEnv = { ...env, NODE_OPTIONS: nodeOptionsWithHeap(env.NODE_OPTIONS, heapMb) };
+    const syncEnv = withStdoutSync(env);
+    const childEnv = { ...syncEnv, NODE_OPTIONS: nodeOptionsWithHeap(syncEnv.NODE_OPTIONS, heapMb) };
     delete childEnv.NODE_TEST_CONTEXT; // a parent runner's variable switches a nested `node --test` to a binary format with no TAP
     const child = spawn(process.execPath, ['--test', '--test-reporter=tap', `--test-timeout=${fileTimeoutMs}`, '--test-force-exit', file], {
       cwd, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
@@ -118,7 +130,7 @@ export async function runSuite(opts) {
   const waved = files.filter((f) => !Object.hasOwn(expect.names, f));
   const byFile = new Map();
   if (waved.length) {
-    const wave = await runWaves({ files: waved, cwd, env, heapMb, fileTimeoutMs, deadlineMs, read, serial, onEvent });
+    const wave = await runWaves({ files: waved, cwd, env: withStdoutSync(env), heapMb, fileTimeoutMs, deadlineMs, read, serial, onEvent });
     for (const r of wave.results) byFile.set(r.file, applyFloor(r, expect.floors[r.file]));
   }
   const extras = {};
