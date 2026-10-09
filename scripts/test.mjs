@@ -1,12 +1,27 @@
 #!/usr/bin/env node
-// CoalHearth test runner — the canonical gate suite. Enumerates EVERY test file
-// explicitly and FAILS LOUD on drift in BOTH directions (listed-but-missing,
-// on-disk-but-unlisted). Mirrors CoalTipple's scripts/test.mjs. Run by
-// pre-commit / pre-push alongside verify.mjs.
-import fs from 'node:fs';
+// CoalHearth test runner -- the canonical gate suite. Enumerates EVERY test file explicitly and FAILS LOUD on drift in BOTH directions (listed-but-missing,
+// on-disk-but-unlisted), and the same for scripts/test-expect.json against the roster. Mirrors CoalTipple's scripts/test.mjs. Run by pre-commit / pre-push alongside
+// verify.mjs.
+//
+// 08e RUNNER BUILD: the suite is judged by what the TAP says, never by an exit code alone (testing.md: a gate judges a run by the TAP test names it expects).
+//   - Each file runs as its own `node --test --test-reporter=tap --test-force-exit` child through scripts/lib/wave-run.mjs (the canon, BB-87), the next file admitted only while a
+//     fresh machine reading says BREATHE; a file that exits 0 before its tests registered is VACUOUS, not a pass.
+//   - scripts/test-expect.json holds a count FLOOR for every file, or, for the census and the secret scanners, the NAMES the file must report (scripts/lib/suite-run.mjs).
+//   - The whole run has a deadline that kills the process TREE of every running child: it is the only bound on a file that hangs before its first test.
+//   `node scripts/test.mjs --names <file>` prints the top-level test names of one file, to keep the manifest.
+//
+// CWK-199 (R20): a harness child carries a finite clock and a heap cap (testing.md Determinism: every test run has a finite clock, a MUST; AGENTS.md, the runaway test child).
+// `--test-timeout` fails ONE test that runs past it (the default is Infinity). On its own it is not enough, measured: the test is marked failed at the limit but its file
+// child stays alive while the test left a timer or a child running; `--test-force-exit` ends that file child once its tests are done.
+// THE TRADE, chosen here: force-exit ends a child held open by a leaked handle, and it also lets a LATE async failure pass unreported. A test that returns, and then has an
+// unawaited timer throw or a promise reject after it, is reported as a pass (the R20 INSPECT witness: the same file exits 1 without the flag and 0 with it). So a test must
+// await everything it starts; a handle left running is a defect in the test, not something this flag makes safe.
+// The heap cap rides NODE_OPTIONS, so every test file and every process a test starts inherits it (measured at R20: a planted test saw a 2240 MB limit under it).
+// SIZING (this room's own variables, never the canon's): one run of the whole suite (738 tests, 60 s serial; 155-173 s at 70-85% busy, 2026-10-04) had its slowest single test
+// at 20 s (a git-fixture scan), the next at 8 s. 120 s per test is six times the slowest and the most a test child may run (the house cap). The whole-run deadline is
+// ten minutes, about three and a half times the slowest measured serial run; a run that needs more is a defect to fix, not a number to raise.
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -30,6 +45,7 @@ const TESTS = [
   'scripts/lib/cwk137.test.mjs',
   'scripts/lib/engine.test.mjs',
   'scripts/lib/wave-run.test.mjs',
+  'scripts/lib/suite-run.test.mjs',
   'scripts/build-plugin.test.mjs',
   'scripts/verify.test.mjs',
   'lib/handoff-journal.test.js',
@@ -44,51 +60,28 @@ const TESTS = [
   'bin/ag-hooks.test.js',
 ];
 
-// CWK-199 (R20): a harness child carries a finite clock and a heap cap (testing.md Determinism: every test run has a finite clock, a MUST; AGENTS.md, the runaway test child).
-// `--test-timeout` fails ONE test that runs past it (the default is Infinity, so one hung test held a hook for ever). On its own it is not enough, measured: the test is
-// marked failed at the limit but its file child stays alive while the test left a timer or a child running, so the run still hung; `--test-force-exit` ends that file child
-// once its tests are done.
-// THE TRADE, chosen here: force-exit ends a child held open by a leaked handle, and it also lets a LATE async failure pass unreported. A test that returns, and then has an
-// unawaited timer throw or a promise reject after it, is reported as a pass (the R20 INSPECT witness: the same file exits 1 without the
-// flag and 0 with it). So a test must await everything it starts; a handle left running is a defect in the test, not something this flag makes safe.
-// `--test-concurrency=1` runs the files one at a time (the house rule for a test child). The heap cap goes to the runner and node:test hands it on to
-// every test file it starts (measured: a planted test saw a 2240 MB heap limit under it).
-// SIZING (this room's own variable, never the canon's 300 s): one run of the whole suite (738 tests, 60 s) on a loaded box (49.5% busy, seven other seats alive, 2026-10-04) had
-// its slowest single test at 20 s (a git-fixture scan), the next at 8 s. 120 s is six times the slowest, and the most a test child may run (the house cap). A test that needs
-// more is a defect to fix, not a number to raise.
-// Taken from the canon (`.github` e7c7959, gate-test-run.mjs): the heap cap of 2048 MB and the per-test kill-timeout. Not taken: its whole-run timer that kills the process tree
-// (needs an async spawn and a process group on POSIX), and its env override of the limit (only that file's own tests needed it). NAMED GAP, measured: a test FILE that hangs
-// at its top level, before any test starts, is not bounded by `--test-timeout`; each spawn in a test carries its own `timeout`, as testing.md asks.
 const HEAP_CAP_MB = 2048;
 const TEST_TIMEOUT_MS = 120000;
+const DEADLINE_MS = 600000;
 
-// CWK-071: process.exit() forces the process to exit before pending stdout writes flush
-// (node/runtime.md 7) -- set process.exitCode and let the process exit naturally instead.
-// Wrapped in main() so an early-exit path is a plain `return`, keeping this a flat script
-// (no async needed: spawnSync below is already synchronous).
-function main() {
-  const missing = TESTS.filter((t) => !fs.existsSync(path.join(repo, t)));
-  if (missing.length) {
-    console.error(`test runner: ${missing.length} listed test file(s) MISSING — ${missing.join(', ')}`);
+// CWK-071: process.exit() forces the process to exit before pending stdout writes flush (node/runtime.md 7) -- set process.exitCode and let the process exit naturally.
+// The judge is imported inside main (node/runtime.md 1): a missing scripts/lib/suite-run.mjs is a clean message and a red exit, never a link-time stack.
+async function main() {
+  let suite;
+  try {
+    suite = await import(pathToFileURL(path.join(repo, 'scripts/lib/suite-run.mjs')).href);
+  } catch (e) {
+    console.error(`test runner: cannot load scripts/lib/suite-run.mjs (${e && e.code ? e.code : e.message}). Restore it from git; the suite is not run without its judge.`);
     process.exitCode = 1;
     return;
   }
-
-  const onDisk = [];
-  for (const dir of ['scripts', 'scripts/lib', 'lib', 'bin']) {
-    for (const f of fs.readdirSync(path.join(repo, dir))) {
-      if (f.endsWith('.test.mjs') || f.endsWith('.test.js')) onDisk.push(`${dir}/${f}`);
-    }
-  }
-  const orphans = onDisk.filter((f) => !TESTS.includes(f));
-  if (orphans.length) {
-    console.error(`test runner: ${orphans.length} on-disk test(s) NOT in the suite — ${orphans.join(', ')}. Add to scripts/test.mjs.`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const r = spawnSync(process.execPath, [`--max-old-space-size=${HEAP_CAP_MB}`, '--test', '--test-concurrency=1', '--test-force-exit', `--test-timeout=${TEST_TIMEOUT_MS}`, ...TESTS], { cwd: repo, stdio: 'inherit' });
-  process.exitCode = r.status ?? 1;
+  process.exitCode = await suite.cli({
+    repo, tests: TESTS, dirs: ['scripts', 'scripts/lib', 'lib', 'bin'], expectFile: 'scripts/test-expect.json', argv: process.argv.slice(2),
+    limits: { heapMb: HEAP_CAP_MB, fileTimeoutMs: TEST_TIMEOUT_MS, deadlineMs: DEADLINE_MS },
+  });
 }
 
-main();
+main().catch((e) => {
+  console.error(`test runner: crashed (${e && e.message ? e.message : 'error'})`);
+  process.exitCode = 1;
+});
