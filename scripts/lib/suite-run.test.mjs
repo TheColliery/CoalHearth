@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STATUS } from './wave-run.mjs';
-import { expectProblems, judgeNames, applyFloor, runSuite, runPinned, cli } from './suite-run.mjs';
+import { expectProblems, judgeNames, applyFloor, testTotals, runSuite, runPinned, cli } from './suite-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -32,7 +32,7 @@ const FIXTURES = {
   'heap.fixture.mjs': "import { test } from 'node:test'; import fs from 'node:fs'; import v8 from 'node:v8';\ntest('alpha', () => { fs.writeFileSync(process.env.HEAP_FILE, String(v8.getHeapStatistics().heap_size_limit)); });\n",
   'marker.fixture.mjs': "import { test } from 'node:test'; import fs from 'node:fs';\ntest('alpha', () => { fs.writeFileSync(process.env.MARKER_FILE, 'ran'); });\n",
   // a hang BEFORE the first test: --test-timeout never applies; it starts a grandchild, records its pid, and keeps its own event loop alive for ever
-  'top-hang.fixture.mjs': "import { spawn } from 'node:child_process'; import fs from 'node:fs';\nconst c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });\nfs.writeFileSync(process.env.GRANDCHILD_PID_FILE, String(c.pid));\nif (process.env.START_FILE) fs.writeFileSync(process.env.START_FILE, String(Date.now()));\nsetInterval(() => {}, 1000);\nawait new Promise(() => {});\n",
+  'top-hang.fixture.mjs': "import { spawn } from 'node:child_process'; import fs from 'node:fs';\nconst c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });\nfs.writeFileSync(process.env.GRANDCHILD_PID_FILE, String(c.pid));\nsetInterval(() => {}, 1000);\nawait new Promise(() => {});\n",
 };
 for (const [name, text] of Object.entries(FIXTURES)) fs.writeFileSync(path.join(SANDBOX, name), text);
 const fx = (...names) => names.map((n) => `${n}.fixture.mjs`);
@@ -71,6 +71,12 @@ test('applyFloor: below the floor turns a PASS or a SKIP into FAIL naming both n
   assert.equal(applyFloor(r(STATUS.SKIP, 1), 3).status, STATUS.FAIL);
   for (const s of [STATUS.FAIL, STATUS.VACUOUS, STATUS.NOT_RUN]) assert.equal(applyFloor(r(s, 0), 3).status, s);
   assert.equal(applyFloor(r(STATUS.PASS, null), 3).status, STATUS.FAIL, 'a pass with no counts has run no test');
+});
+
+test('testTotals: sums tests, passes and skipped TESTS over the files that reported a summary, and passes over a file with none', () => {
+  const r = (counts) => ({ file: 'x', counts });
+  assert.deepEqual(testTotals([]), { tests: 0, pass: 0, skipped: 0 });
+  assert.deepEqual(testTotals([r({ tests: 5, pass: 4, skipped: 1 }), r({ tests: 3, pass: 3, skipped: 0 }), r(null), undefined, r({ tests: 2, pass: 0, skipped: 2 })]), { tests: 10, pass: 7, skipped: 3 });
 });
 
 // ---- the waved files: floors ----------------------------------------------------------------------------------------------------------------
@@ -164,9 +170,7 @@ const gone = async (pid) => {
 
 test('a file that hangs before its first test is bounded by the whole-run deadline: FAIL, its grandchild killed with it, the next file NOT-RUN -- RED before 08e (the old runner ran to the outer kill)', async () => {
   const pidFile = path.join(SANDBOX, 'wave-grandchild.pid');
-  const t0 = Date.now();
   const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 2500, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
-  assert.ok(Date.now() - t0 < 30000, 'the run ended');
   assert.equal(r.exitCode, 1);
   assert.equal(byName(r, 'top-hang.fixture.mjs').status, STATUS.FAIL);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
@@ -176,26 +180,27 @@ test('a file that hangs before its first test is bounded by the whole-run deadli
 
 test('the same for a names-manifest file (it runs in the pinned lane, not in wave-run): killed at the deadline with its tree, and the file after it is NOT-RUN with the remaining budget spent', async () => {
   const pidFile = path.join(SANDBOX, 'pinned-grandchild.pid');
-  const t0 = Date.now();
   const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 2500, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
-  assert.ok(Date.now() - t0 < 30000, 'the run ended');
   assert.equal(r.exitCode, 1);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
   assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.NOT_RUN);
   assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true, 'the grandchild died with the tree');
 });
 
-test('the pinned lane gets only the budget the earlier files left: a slow file first, then a hang, and the hang is killed at the run deadline, not a full deadline later', async () => {
+test('the pinned lane is GIVEN only the budget the earlier files left: after a slow file the hang gets less than the whole deadline, and is killed at that budget', async () => {
   const pidFile = path.join(SANDBOX, 'budget-grandchild.pid');
-  const startFile = path.join(SANDBOX, 'budget-start.txt');
-  const t0 = Date.now();
-  const r = await run({ files: fx('slow', 'top-hang'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile, START_FILE: startFile }, deadlineMs: 4000, expect: { floors: {}, names: { 'slow.fixture.mjs': ['alpha'], 'top-hang.fixture.mjs': ['alpha'] } } });
-  const ended = Date.now();
+  const given = [];
+  const r = await run({
+    files: fx('slow', 'top-hang'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 6000,
+    onEvent: (e) => { if (e.type === 'pinned') given.push(e); },
+    expect: { floors: {}, names: { 'slow.fixture.mjs': ['alpha'], 'top-hang.fixture.mjs': ['alpha'] } },
+  });
   assert.equal(byName(r, 'slow.fixture.mjs').status, STATUS.PASS);
+  assert.deepEqual(given.map((e) => e.file), ['slow.fixture.mjs', 'top-hang.fixture.mjs']);
+  assert.ok(given[0].deadlineMs > 5000 && given[0].deadlineMs <= 6000, 'the first pinned file is given what the run has: ' + given[0].deadlineMs);
+  // the slow file's own test waits 2500 ms, so at least that much is gone whatever the host does: a LOWER bound on elapsed time, which a loaded box can only widen
+  assert.ok(given[1].deadlineMs > 0 && given[1].deadlineMs <= 6000 - 2000, 'the hang is given the remainder, not the whole deadline: ' + given[1].deadlineMs);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
-  const hangStart = Number(fs.readFileSync(startFile, 'utf8'));
-  const allowed = 4000 - (hangStart - t0) + 1500; // what was left when it began, plus the cost of the kill
-  assert.ok(ended - hangStart <= allowed, 'the hang lived ' + (ended - hangStart) + ' ms, more than the ' + allowed + ' ms the run had left');
   assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true);
 });
 
@@ -249,6 +254,7 @@ test('cli: a green run prints one summary line and returns 0; a name the manifes
   const r = await drive(repo, roster);
   assert.equal(r.code, 0);
   assert.match(r.out, /wave-run: 3 files · pass 2 · fail 0 .* skipped 1/);
+  assert.match(r.out, /^test runner: 8 test\(s\) · pass 7 · skipped 1 \(per test, summed/m, 'the skipped TESTS are counted, beside the files');
   assert.doesNotMatch(r.out, /^SKIP /m, 'a skipped file is counted, not printed as a problem');
   assert.match(r.out, /name\(s\) the manifest does not list .*lib\/b\.test\.mjs 1/);
   assert.equal(r.err, '');

@@ -17,7 +17,7 @@
     "scripts/lib/cwk137.test.mjs": 44,
     "scripts/lib/engine.test.mjs": 45,
     "scripts/lib/wave-run.test.mjs": 25,
-    "scripts/lib/suite-run.test.mjs": 22,
+    "scripts/lib/suite-run.test.mjs": 23,
     "scripts/build-plugin.test.mjs": 11,
     "scripts/verify.test.mjs": 33,
     "lib/handoff-journal.test.js": 32,

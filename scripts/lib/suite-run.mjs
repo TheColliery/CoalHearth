@@ -128,7 +128,9 @@ export async function runSuite(opts) {
       byFile.set(file, { file, name: file, status: STATUS.NOT_RUN, reason: 'the whole-run deadline was reached before this file started', counts: null, failing: [] });
       continue;
     }
-    const { result, names } = await runPinned({ file, cwd, env, heapMb, fileTimeoutMs, deadlineMs: left });
+    const args = { file, cwd, env, heapMb, fileTimeoutMs, deadlineMs: left };
+    onEvent?.({ type: 'pinned', file, deadlineMs: args.deadlineMs }); // the budget the pinned run is GIVEN, readable without a clock
+    const { result, names } = await runPinned(args);
     if (result.status === STATUS.PASS || result.status === STATUS.SKIP) {
       const { missing, extra } = judgeNames(expect.names[file], names);
       if (missing.length) { result.status = STATUS.FAIL; result.reason = `expected test name(s) missing: ${listSome(missing)}`; }
@@ -139,6 +141,18 @@ export async function runSuite(opts) {
   const results = files.map((f) => byFile.get(f));
   const summary = summarize(results, files.length);
   return { exitCode: summary.red ? 1 : 0, problems: [], results, summary, extras };
+}
+
+// The per-TEST totals over every file that reported a TAP summary: wave-run's own summary counts FILES, so a leg that silently turned into a skip would change nothing a reader sees.
+export function testTotals(results) {
+  const t = { tests: 0, pass: 0, skipped: 0 };
+  for (const r of results) {
+    if (!r || !r.counts) continue; // a killed, missing or not-run file has no summary
+    t.tests += r.counts.tests;
+    t.pass += r.counts.pass;
+    t.skipped += r.counts.skipped;
+  }
+  return t;
 }
 
 // ---- the command line of scripts/test.mjs (here so a planted repo can drive it) -----------------------------------------------------------------
@@ -179,7 +193,11 @@ export async function cli({ repo, tests, dirs, expectFile, argv, limits, io = { 
   }
   const unlisted = Object.entries(suite.extras).map(([f, list]) => `${f} ${list.length}`);
   if (unlisted.length) out(`test runner: test name(s) the manifest does not list (not a failure; print them with --names): ${unlisted.join(', ')}`);
-  if (suite.summary) out(suite.summary.line);
+  if (suite.summary) {
+    out(suite.summary.line);
+    const t = testTotals(suite.results);
+    out(`test runner: ${t.tests} test(s) · pass ${t.pass} · skipped ${t.skipped} (per test, summed over the files that reported)`);
+  }
   return suite.exitCode;
 }
 
