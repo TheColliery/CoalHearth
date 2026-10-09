@@ -51,6 +51,10 @@ test('shape: a plain in-tree path is a candidate; the eight rejects are not', ()
   assert.deepEqual(pointerCandidates(t), ['lib/handoff-journal.js']);
 });
 
+test('shape: an elided path (`dir/...`) names a set like a glob, not a file; a real name with dots in it is still a candidate', () => {
+  assert.deepEqual(pointerCandidates('`scripts/lib/...` `scripts/...` `lib/v1.2.3/x.js` `lib/a...b.js`'), ['lib/v1.2.3/x.js', 'lib/a...b.js']);
+});
+
 test('shape: a fenced block is an EXAMPLE, not a claim about this tree', () => {
   const t = '```\n`lib/inside-fence.js`\n```\n`lib/outside.js`\n';
   assert.deepEqual(pointerCandidates(t), ['lib/outside.js']);

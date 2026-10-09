@@ -35,7 +35,7 @@ const TESTS = [
   'scripts/lib/jsonc.test.mjs',
   'scripts/lib/git-env.test.mjs',
   'scripts/lib/git-env-census.test.mjs',
-  'scripts/lib/js-lex.test.mjs',
+  'scripts/git-env-pins.test.mjs',
   'scripts/secret-scan.test.mjs',
   'scripts/secret-gate.test.mjs',
   'scripts/release-notes.test.mjs',

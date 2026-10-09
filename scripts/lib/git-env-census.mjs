@@ -1,906 +1,915 @@
-// ponytail: 860 lines at declaration -- the census reads source through one tokenizer (js-lex.mjs) and judges each env rule (binding, helper, allowlist literal, options object) against the same token arrays; splitting the rules from the spawn walk would force every rule to re-pass the shared token indexes.
-// CWK-136 -- the git-spawn census. Does every `git` child this room spawns take its environment
-// from gitEnv() (scripts/lib/git-env.mjs), or from an ALLOWLIST object (08c, 08d: see the paragraphs before SAFE_GIT_KEYS), and from nothing else?
+// ponytail: 915 lines at declaration -- one token census: the lexer, the binding index and every env rule (alias, helper, allowlist literal, key list, options object) read the same token arrays, so splitting them would force each rule to re-pass the shared indexes.
+// THE CANON GIT-SPAWN CENSUS (08d D1/D3, 2026-10-09) -- the ONE rule the flock holds for what environment a `git` child gets. Does every spawnSync/execFileSync('git', ...)
+// carry an explicit `env:` whose value cannot let an ambient GIT_* name reach the child? A git hook exports an ABSOLUTE GIT_DIR / GIT_INDEX_FILE, and a fixture or a gate that
+// inherits them acts on (or re-initialises) the REAL repository (CWK-133, CWK-136). Seven rooms built this census seven ways and each reviewer found a bypass the others had
+// not; CoalTipple's token census is the base because it passed every one of the witness vectors the others had found, and this file carries it once, with the
+// witnesses as its test corpus (git-env-census.vectors.mjs, git-env-census.test.mjs). A room adopts this file by blob id instead of keeping its own, and passes its own
+// pins to scanGitSpawns(files, pins); a room-local widening past the witness list is a named divergence, and a new bypass goes back to the list as a candidate row.
 //
-// It proves SAFETY, not presence. CoalTipple's census (the exemplar) only tested that an `env:` key
-// existed in the call, which passes `env: process.env` -- the exact hole CWK-133 closes: inside a
-// linked worktree a git hook exports an absolute GIT_DIR, and a child that inherits it acts on the
-// enclosing repository. Here a git spawn is refused when
-//   (a) it carries no `env:` key at all, or has more than one, or spreads another object after it, or
-//   (b) its `env:` mentions process.env AT ALL (a spread, a bare pass-through, a helper call beside it) -- except inside an ALLOWLIST
-//       object, where process.env is read only by named key, or
-//   (c) its `env:` is anything but gitEnv(...) ALONE (the WHOLE expression is a call to the room's helper, or a bare identifier declared
-//       `const NAME = gitEnv(...)` in the same file, exactly that call and not mutated or copied afterwards), an ALLOWLIST literal (inline, by a
-//       `const` identifier, or by a same-file helper that returns one), or an exemption row. An expression that merely CONTAINS `gitEnv(` -- a spread beside
-//       an alias of process.env, Object.assign(gitEnv(), ...), `env || gitEnv(root)` -- is refused:
-//       the helper's presence is not the property, the absence of everything else is.
-// (R8 FIXBACK M1: rule (c) used to test only that `gitEnv(` appeared somewhere in the expression, so
-// the gate printed "every one takes env from gitEnv() alone" while its own instrument did not
-// produce that claim.)
+// It is a TOKEN census, not a set of regular expressions: lex() turns the file into tokens (comments dropped; strings, templates, regex literals and punctuation told apart, so a
+// quote inside a regex or a backtick inside a template can no longer desync it, F41), and the env is judged by a small grammar over those tokens.
+// An env is SAFE only when it is one of:
+//   (i)  gitEnv(...) / gitTestEnv(...) alone. A call to a name defined in the SAME file is judged by that
+//        definition's returned expressions (F42), so a local helper called gitEnv is not trusted by its name; one
+//        that is IMPORTED is trusted only when it comes in under that same name from the room's own git-env.mjs (I1:
+//        './git-env.mjs' or './lib/git-env.mjs', resolved against the importing file's directory; git-env.mjs is proven
+//        by its own test), and an import from any other source is a finding; one neither defined nor imported keeps its
+//        name-trust (ceiling item 3).
+//   (ii) a helper of this file whose every returned expression is safe (F13, F14), up to a few hops.
+//   (iii) an object literal made only of: spreads of a safe expression; `KEY: value` and shorthand members whose
+//        KEY is a plain name or string, appears once, and is not a GIT_ name beyond GIT_CONFIG_NOSYSTEM (the literal
+//        '1', never anything else), GIT_TERMINAL_PROMPT and GIT_CEILING_DIRECTORIES (each only narrows git); values
+//        that read process.env only one named key at a time and hold no spread. Reading the environment at all
+//        (a named pick, or process.env.X) requires GIT_CONFIG_NOSYSTEM '1' in the literal.
+//   (iv) a NAMED PICK: Object.fromEntries(LIST.filter(K => process.env[K] !== undefined | K in process.env)
+//        .map(K => [K, process.env[K]])) where LIST is an inline array, or a const array, of string literals
+//        (no GIT_ name beyond the two that narrow git, none computed, none spread, never pushed to).
+//   An identifier is resolved to its one const/let/var declaration; it must be declared once in the file, never a
+//   parameter, a destructured or imported name, and every other use of it must be a read (a spread, a property or
+//   index read, a comparison, an argument of a pure builtin) -- an alias, a write, a call on it, a callee that
+//   receives it (fill(env), Reflect.set(env, ...), Object.assign(env, ...), Object(env)) is a finding (F15-F18,
+//   F35-F40); so is the env name inside a destructuring-assignment target or the left of a for-in / for-of head (B2),
+//   a key list handed to a callback method with more than one parameter (B3), JSON.stringify with a replacer (B4), a var
+//   or a declaration that comes after the spawn (B6), a gitEnv assigned in the file (B7), and a spawner named other than
+//   as a call (B8). Anything the grammar does not read whole is a finding, never a silent pass.
 //
-// EXEMPTIONS are explicit, exact, COUNTED and PRINTED -- never a silent pass. GIT_ENV_EXEMPTIONS
-// (below) names a file, the exact env expression, and the reason. Each entry carries the COUNT of spawns it covers: an exemption that matches fewer (none at all
-// included) is reported as UNUSED and the gate fails on it, and a spawn beyond the count is a finding, so an
-// entry can neither outlive its spawn nor widen to cover a new one (R8 FIXBACK 2 LOW-1).
+// THE NAMED CEILING (a token census, not a JS parser; it errs toward a finding wherever it can):
+//   1. the lexer decides regex-or-division by the previous token: after the `)` of an if/while/for/with head and after the `}`
+//      of a block a `/` starts a regex; after `]`, a name or a number it is division; after any other `)` or `}` it is
+//      division AND it might be a regex (a block whose `{` follows a label or a `case x:`, the head of a `for await`, an opener
+//      nobody has listed yet). Where a regex holding a quote or a backtick was read as division plus a string or a template,
+//      the rest of that line was lost, and so was every line the string or template then ran onto (a template, or a string
+//      continued by a backslash at the end of a line, crosses lines), so a whole spawn could hide (N17, N24, N25, N28-N30). So
+//      every such slash that has a closing slash on its line is read BOTH ways: as lexed, and again as the start of a regex, and
+//      every spawn after it, to the end of the file, is judged under either reading (a spawn found by either is counted, a
+//      finding from either is a finding). A second ambiguous slash that shows only once the first is forced is forced in turn
+//      (N26), and a file with more than MAX_READINGS (16) readings is refused as a whole (N27). What it still does not do: read the
+//      OTHER way (a head or block it recognised that is really followed by division), or read a slash with no closing slash on
+//      its line (a regex holds no newline, so such a slash is division). The cost is a false finding on genuine division that
+//      is followed, later on its line, by a quote, a backtick or another slash, in a file that names a git spawn after it: a
+//      visible refusal, never a silent pass (the real tree has none: it holds no such slash, and its bare findings are the same
+//      twelve in the same four pinned files);
+//   2. identifier lookups are FILE-WIDE, not scope-aware: every declaration and use of a name counts, so two
+//      functions that each build a clean `env` are both refused (route one through gitEnv());
+//   3. an imported helper is trusted only under the names gitEnv and gitTestEnv, and only when it is imported under THAT name
+//      from the room's own git-env.mjs (the specifier './git-env.mjs' or './lib/git-env.mjs', resolved against the importing
+//      file's directory where the file has one; the module itself is not opened). An import of either name from another
+//      source, under another name, as a default or a namespace, or by destructuring an import() or require() whose source is
+//      not one string literal, is a finding, and so is any other imported helper. A name neither defined nor imported in the
+//      file keeps its name-trust (a bare call in a fixture reads as the room's gitEnv; at run time it would be a
+//      ReferenceError unless something assigned it, and a file that assigns it loses the trust, item 10 and B7). A
+//      name bound as a PARAMETER or catch binding (F60) makes every bare gitEnv() call of the file a finding, and a name bound by an import the census cannot parse
+//      (an import statement with no `from 'literal'`) is not seen;
+//   4. a helper's returned expression is read, not its callers: a helper that returns a clean literal and is then
+//      handed to code that mutates it by another route (a closure, a getter, a Proxy) is not seen;
+//   5. only spawnSync/execFileSync called with the literal command 'git', 'git.exe' or a template holding just git are
+//      spawns: a command held in a variable, spawn(), execFile(), exec(), a spawn reached by `const run = spawnSync`
+//      or by member access on a module object (cp['spawnSync']) are not counted (an import or a destructure under
+//      another name IS a finding, X3); neither is a spawner whose NAME is written with a unicode escape sequence (a
+//      backslash, u and four hex digits standing for one of its letters): the lexer reads the name as it is written, so it is
+//      not spawnSync to the census although it is to the engine, and the spawn runs with whatever env it is given (X4);
+//   6. eval, new Function, a `with` block and a Proxy over process.env are not seen;
+//   7. a comma operator inside an env expression ends it early (but a helper's return statement is read whole, F46: `return { ... }, process.env` is a finding);
+//   8. a file that rebinds `process` (an alias, the process module, a ['process'] lookup) is read only for a bare
+//      gitEnv() call: any other env in it is a finding, even a clean one (fail closed);
+//   9. an env mutated through a closure that captured it, or through a getter or setter defined elsewhere, is not seen;
+//      a callee that receives the env as an argument IS a finding (fill(env)), but the census does not read its body;
+//  10. a whole-process write outside the env object that still reaches every env at run time is refused only where the file
+//      names the builtin it goes through (Object.prototype.X = ..., globalThis.X = ..., a rebound Object/JSON/Reflect/Array/
+//      String/Boolean/console): such a file is read only for a bare gitEnv() call. A write through a name the census does
+//      not know (a parameter called Object, a module another file imports and runs first) is not seen;
+//  11. a declaration is checked against the spawn by TOKEN POSITION (it must come before the spawn, and not be a var): a
+//      function that is declared above a const and called below it is judged as if the const came late, which errs toward a
+//      finding.
 //
-// 08d: the census reads TOKENS, not text (scripts/lib/js-lex.mjs). What it sees:
-//   - calls to the child_process functions a file binds: a destructured import or require (with `as`
-//     / `:` renames), an alias by assignment (`const run = spawnSync`), a whole-module binding used
-//     as `cp.spawnSync(` or `cp.default.spawnSync(`, and the inline `require('child_process').fn(`
-//     and `(await import('child_process')).fn(` forms. A call is CODE when no comment, string, regex literal or template text covers it: a regex ending in //
-//     on the line before a spawn no longer hides it (witness F41e).
-//   - a git spawn however the binary is spelled (`git`, `git.exe`, `git.cmd`, an absolute path to
-//     one, a plain template literal), and git through a shell: `sh -c '... git ...'`, an `execSync`/`exec` command string, or
-//     any call with `shell:` set.
-//   - a spawn whose command is neither a string literal nor process.execPath is REFUSED: it cannot
-//     be proven not to be git.
-//   - the identifier an `env:` property reads: where it is declared, whether the spawn is inside that scope, and every other place the name appears.
-// A file the tokenizer cannot read whole (an unterminated string, a regex with no end, unbalanced brackets) is a FINDING, never a silent pass.
-// What it does NOT see -- named-open, on purpose, not closed:
-//   - a callee obtained any other way: returned from a function, a property of another object,
-//     Reflect.apply, or a WRAPPER around git defined elsewhere and called by its own name (the
-//     wrapper's own spawn is seen only if it binds child_process where it is defined).
-//   - an env object changed through a path the tokens do not show under another name than its own (the name is allowed in one place only, so this is a closed hole for
-//     a `const` env; it stays open for an object reached through a property or a returned value).
-//   - a shell command that reaches git without the word appearing in the call (`sh script.sh`, a
-//     command assembled at runtime from parts), or a `shell:` call whose arguments are a variable
-//     rather than an array literal (its strings are not in the call text).
-//   - a node child (process.execPath) is COUNTED and left alone: it is not a git spawn, and the
-//     gates it runs strip their own git children.
-//
-// Pure: a list of { label, text } in, a report out, so it is unit-tested red-first without a clone.
-// The enumeration is NOT walked here -- scripts/verify.mjs feeds it the same surfaces the pointer
-// gate walks (see the wiring there).
-
-import { createHash } from 'node:crypto';
+// scanGitSpawns() is pure (a fixture map in, { findings, files, calls, safe } out) so it is unit-tested directly,
+// red-first, without a repo clone; censusGitSpawns() is its findings-only view; collectScriptsMjs() is the real
+// filesystem walk, kept separate so the pure functions never touch disk.
+import fs from 'node:fs';
 import path from 'node:path';
-import { lex, codeTokens, inNonCode, decodeString, decodeIdent } from './js-lex.mjs';
+import { createHash } from 'node:crypto';
 
-// BLOB-PINNED rows (CWK-174, R14): a row may carry `blob`, a git blob id (git hash-object <file>). It then applies ONLY while the
-// file's text is exactly those bytes; any edit, or a template re-sync that changes them, spends nothing, reads as UNUSED and adds a
-// finding naming the new id. This is for a byte-equal org carrier (the house secret scan's tests and the release overlay's test): the umbrella's parity check forbids
-// editing it here, so the census cannot be satisfied by routing its spawns through gitEnv(), and the row must not outlive that content.
-// A row whose `expr` is null covers a spawn that carries no env: key at all.
-//
-// 08c UNIT 1, the 05a NAMED DIVERGENCE is RELEASED: scripts/release-notes.test.mjs was HELD at blob d2f5b830 because the canon's a8f3ba69 was red on macOS
-// (__CF_USER_TEXT_ENCODING) and on the coverage leg (NODE_V8_COVERAGE). The canon's 8cf7e5fd, re-synced here, names both keys in its CHILD_KEY_NAMES set (UMB-456 (1) i),
-// so the copy is byte-equal again and the divergence is gone from this room. 08d: its two git helpers take sandboxEnv(cwd), a same-file helper that returns one allowlist literal, which the census now READS (no row).
-//
-// The deliberate exemptions. Exact file label + exact env expression (whitespace-normalised) + the EXPECTED
-// COUNT of spawns it covers (default 1): a further match fails the gate, fewer than the count fails it as
-// stale. The reason is printed by the gate: keep it free of parentheses.
-export const GIT_ENV_EXEMPTIONS = [
-  // CWK-174 (R14), moved at 05a, 08c and 08d: byte-equal org carriers. Each row below was decided at 08d from the census's own output on the NEW bytes, as 05a and 08c did. A file that defines its
-  // OWN gitEnv helper is judged on the helper's body (witness F42, the NAME gitEnv is trusted only for the room's imported helper), and the three carriers below define one that strips the
-  // GIT_ family from a copy of the environment (a filter, which the census does not read) instead of naming keys, so each is pinned by blob id.
-  // 08d MEASURED, re-copy of the five canon files: scripts/release-notes.test.mjs at blob 7e779ef8 needs NO row any more (its two git helpers now read as clean on the new bytes, the
-  // sandboxEnv(cwd) row and its two spawns are gone from the printed count); scripts/verify-release-shape.test.mjs at fa8a730d has no git spawn the census reads.
-  // scripts/secret-gate.mjs is .github blob 856956a1: its gitEnv keeps GIT_INDEX_FILE (the index a commit is made from), a GIT_ name outside the three the allowlist rule accepts.
-  {
-    label: 'scripts/secret-gate.mjs',
-    expr: 'gitEnv()',
-    count: 2,
-    blob: '856956a1cca6f716e5507f6c23ac90ed34cbbe5f',
-    reason: 'a byte-equal org carrier at blob 856956a1 whose own gitEnv helper strips the GIT_ family from a copy of the environment and keeps GIT_INDEX_FILE and GIT_CEILING_DIRECTORIES, pinned by blob id and deleted when the canon imports the room helper',
-  },
-  // scripts/secret-gate.test.mjs is .github blob 71452210: three spawns at lines 40, 200 and 225. Its own gitEnv (line 28) is an object literal that names GIT_CONFIG_GLOBAL, outside the three
-  // harmless GIT_ names; the line 40 spawn overlays a per-call extra on it.
-  {
-    label: 'scripts/secret-gate.test.mjs',
-    expr: '{ ...gitEnv(), ...extra }',
-    count: 1,
-    blob: '71452210d6a6f793895bc502557fce7e1f3e890c',
-    reason: 'a byte-equal org carrier at blob 71452210 from the published-code template whose env is its own GIT_-stripping helper plus a per-call overlay, pinned by blob id and deleted when the canon uses the room helper',
-  },
-  {
-    label: 'scripts/secret-gate.test.mjs',
-    expr: 'gitEnv()',
-    count: 2,
-    blob: '71452210d6a6f793895bc502557fce7e1f3e890c',
-    reason: 'a byte-equal org carrier at blob 71452210 whose own gitEnv helper names GIT_CONFIG_GLOBAL beside GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
-  },
-  // scripts/secret-scan.test.mjs is the Bankfire source, blob d0db994d. MEASURED: the old cleanEnv row is DELETED (the decoy-repository check now takes its env from gitStatus, which reads gitEnv),
-  // and five spawns (lines 547, 548, 715, 820, 825) take the carrier's own gitEnv, an arrow that assigns its object to a witness variable (envSeen = {...}) and spreads a GIT_-stripping filter:
-  // not a literal the census reads, so the file is pinned.
-  {
-    label: 'scripts/secret-scan.test.mjs',
-    expr: 'gitEnv()',
-    count: 5,
-    blob: 'd0db994df855ccd647f3ded878a6867bb198e196',
-    reason: 'a byte-equal org carrier at blob d0db994d from the Bankfire scanner source whose own gitEnv helper strips the GIT_ family from a copy of the environment and sets GIT_CONFIG_NOSYSTEM, pinned by blob id and deleted when the canon imports the room helper',
-  },
-  // The same file's one NON-LITERAL command (line 561): the 8.3 short-name probe runs the shell named by the ComSpec variable on a generated .cmd file in the sandbox, with the GIT_-stripped environment.
-  // It is not git, but the census cannot prove a computed command is not git, so it is a command row: pinned by blob id, counted, printed.
-  {
-    label: 'scripts/secret-scan.test.mjs',
-    command: "process.env.ComSpec || 'cmd.exe'",
-    count: 1,
-    blob: 'd0db994df855ccd647f3ded878a6867bb198e196',
-    reason: 'a byte-equal org carrier at blob d0db994d whose 8.3 short-name probe runs the shell named by ComSpec on a generated script file in its sandbox and is not git, pinned by blob id and deleted when the canon spells the command as a literal',
-  },
-  // 08c (UMB-456 (2) rule (a)): the row for scripts/release-notes.mjs (05a, blob 674592e0) is GONE. That file builds its env from an allowlist, and the census
-  // now accepts that shape (the paragraph before SAFE_GIT_KEYS), so the carrier needs no pin and its re-syncs cannot spend or strand one.
-  {
-    label: 'scripts/lib/git-env.test.mjs',
-    expr: 'env || gitEnv(root)',
-    count: 1,
-    reason: 'the hazard proof feeds a deliberately poisoned GIT_DIR into a sandbox to reproduce the incident',
-  },
-];
+// BLOB-PINNED EXEMPTIONS (CWK-174). A room whose own file cannot be fixed room-side (a byte-equal copy of a source elsewhere, a test that plants GIT_DIR on purpose) passes a
+// row { rel, blob, why } to scanGitSpawns(files, pins). A row matches only while the file's git blob id (line endings normalised to LF) equals `blob`, so any edit, or a new
+// source blob, re-arms the census on that file. The canon ships NO pins of its own: the default is the empty list, and the canon's one pinned carrier (the secret gate, which
+// keeps GIT_INDEX_FILE by design) is pinned in git-env-census.test.mjs, where the reason is quoted. With the token census a file that defines its OWN gitEnv() is judged by
+// that body, never by the name (F42).
+export const CENSUS_EXEMPT = [];
 
-const FNS = ['spawnSync', 'execFileSync', 'spawn', 'execFile', 'execSync', 'exec'];
-const SHELL_STRING_FNS = new Set(['execSync', 'exec']);
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
-const CP_MOD = String.raw`['"](?:node:)?child_process['"]`;
-const DESTRUCTURED_RE = new RegExp(String.raw`\{([^}]*)\}\s*(?:=\s*(?:await\s+import|require)\(\s*|from\s*)` + CP_MOD, 'g');
-const NS_IMPORT_RE = new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([\w$]+)\s+from\s*` + CP_MOD, 'g');
-const NS_REQUIRE_RE = new RegExp(String.raw`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:await\s+import|require)\(\s*` + CP_MOD, 'g');
-// A name that reaches new RegExp(...) is escaped in FULL (every metacharacter and the backslash), not for `$` alone: a
-// bound local is whatever a destructuring list holds, comments included (R8 ALERT #19, CodeQL js/incomplete-sanitization).
-const escapeRegex = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Split one destructuring/import list into [canonical function, local name] pairs.
-function bindingPairs(list) {
-  const out = [];
-  for (const part of list.split(',')) {
-    const [canon, local] = part.trim().split(/\s+as\s+|\s*:\s*/);
-    if (FNS.includes(canon)) out.push([canon, (local || canon).trim()]);
-  }
-  return out;
+// The git blob id of `text` (what `git hash-object` prints for that content), CRLF -> LF first so
+// a Windows autocrlf checkout of the same file pins the same row.
+export function gitBlobId(text) {
+  const body = Buffer.from(String(text).replace(/\r\n/g, '\n'), 'utf8');
+  return createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
 }
 
-// Which names does this file bind to child_process functions? locals: local name -> the real
-// function; spaces: whole-module bindings, used as `cp.spawnSync(`. Returns { locals, re } where re
-// finds the calls. Named groups: qfn = the function of a qualified call, ifn = the function of an
-// inline require/import call, loc = the local name of a bare call.
-function bindingsOf(text) {
-  const locals = new Map();
-  for (const m of text.matchAll(DESTRUCTURED_RE)) for (const [canon, local] of bindingPairs(m[1])) locals.set(local, canon);
-  const spaces = new Set();
-  for (const m of text.matchAll(NS_IMPORT_RE)) spaces.add(m[1]);
-  for (const m of text.matchAll(NS_REQUIRE_RE)) spaces.add(m[1]);
-  if (spaces.size) {
-    const ns = [...spaces].map(escapeRegex).join('|');
-    // const { spawnSync: run } = cp;
-    for (const m of text.matchAll(new RegExp(String.raw`\{([^}]*)\}\s*=\s*(?:${ns})\s*(?:;|\n|$)`, 'g'))) {
-      for (const [canon, local] of bindingPairs(m[1])) locals.set(local, canon);
+// ---------------------------------------------------------------------------
+// The lexer.
+// ---------------------------------------------------------------------------
+const KW_BEFORE_REGEX = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+const PUNCTS = ['>>>=', '...', '===', '!==', '**=', '<<=', '>>=', '>>>', '&&=', '||=', '??=', '=>', '==', '!=', '<=', '>=', '&&', '||', '??', '?.', '++', '--', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '**', '<<', '>>'];
+const CTL_HEAD = new Set(['if', 'while', 'for', 'with']);
+const BLOCK_BEFORE = new Set(['else', 'do', 'try', 'finally']);
+// A '{' opens a BLOCK, not an object literal, at the start of the file, after ')' ';' '{' '}' '=>', after else/do/try/finally,
+// and after a plain name (a class head). It is an object literal after '(' ',' '=' ':' '[' an operator, or return/typeof/....
+const openIsBlock = (p) => !p || (p.k === 'p' ? [')', ';', '{', '}', '=>'].includes(p.v) : p.k === 'id' ? BLOCK_BEFORE.has(p.v) || !KW_BEFORE_REGEX.has(p.v) : false);
+const isIdChar = (c) => /[\w$]/.test(c) || c.charCodeAt(0) > 127;
+
+// lex() is the token list alone. lexAmb() also returns `amb`: every '/' it read as DIVISION after a ')' or '}' that is not a block
+// head, where a regex ending on the same line could have started instead (the fail-closed reading, ceiling item 1), and takes
+// `force`, a set of offsets of such slashes to read as the start of a regex.
+export function lex(text) { return lexAmb(text).toks; }
+
+export function lexAmb(text, force = null) {
+  const toks = [];
+  const amb = [];
+  const holes = []; // brace depth at which each open template hole began
+  const parenCtl = []; // per open '(' : is it the head of if/while/for/with (a '/' after its ')' starts a regex)
+  const braceBlk = []; // per open '{' : is it a block (a '/' after its '}' starts a regex) or an object literal
+  let braces = 0;
+  let line = 1;
+  let i = 0;
+  if (text.startsWith('#!')) { while (i < text.length && text[i] !== '\n') i++; } // a shebang line is not code
+  const push = (k, v, s) => toks.push({ k, v, i: s, ln: line });
+  const regexAllowed = () => {
+    const p = toks[toks.length - 1];
+    if (!p) return true;
+    if (p.k === 'p') return p.v === ')' || p.v === '}' ? !!p.ctl : p.v !== ']';
+    if (p.k === 'id') return KW_BEFORE_REGEX.has(p.v);
+    return p.k === 'tplopen';
+  };
+  const templateChunk = (from) => {
+    let j = from;
+    while (j < text.length) {
+      const d = text[j];
+      if (d === '\\') { if (text[j + 1] === '\n') line++; j += 2; continue; }
+      if (d === '`') { push('tpl', text.slice(from, j), from); i = j + 1; return; }
+      if (d === '$' && text[j + 1] === '{') { push('tpl', text.slice(from, j), from); push('tplopen', '${', j); holes.push(braces); i = j + 2; return; }
+      if (d === '\n') line++;
+      j++;
     }
-    // const run = cp.spawnSync;
-    for (const m of text.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:${ns})\.(?:default\.)?(${FNS.join('|')})\s*(?:;|\n|,|$)`, 'g'))) locals.set(m[1], m[2]);
-  }
-  // const run = spawnSync;  (an alias by assignment, chained: a fixpoint over the assignments)
-  for (let pass = 0; pass < 3; pass++) {
-    for (const m of text.matchAll(/(?:const|let|var)\s+([\w$]+)\s*=\s*([\w$]+)\s*(?:;|\n|,|$)/g)) {
-      if (locals.has(m[2]) && !locals.has(m[1])) locals.set(m[1], locals.get(m[2]));
-    }
-  }
-  const alts = [];
-  if (spaces.size) alts.push(`(?<ns>${[...spaces].map(escapeRegex).join('|')})\\.(?:default\\.)?(?<qfn>${FNS.join('|')})`);
-  if (locals.size) alts.push(`(?<loc>${[...locals.keys()].map(escapeRegex).join('|')})`);
-  alts.push(`(?:require\\(\\s*${CP_MOD}\\s*\\)|\\(\\s*await\\s+import\\(\\s*${CP_MOD}\\s*\\)\\s*\\))\\.(?:default\\.)?(?<ifn>${FNS.join('|')})`);
-  return { locals, re: new RegExp('(?<![.\\w$])(?:' + alts.join('|') + ')\\(', 'g') };
-}
-
-const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
-const normalise = (s) => s.replace(/\s+/g, ' ').trim();
-
-// Does a command string, run by a shell, invoke git? `git` as a whole word, at a command position or
-// reached by a path (`/usr/bin/git`, `C:/Program Files/Git/cmd/git.exe`, a quoted one). `.git`,
-// `.gitignore` and `my-git-repo` are not: the character before must be a separator, a quote or a path
-// separator, and the one after a separator or a quote (R8 FIXBACK 2 MEDIUM-1: the class had no `/` or
-// `\`, so every path-qualified git in a shell string evaded).
-const shellMentionsGit = (s) => /(^|[\s;&|(`$"'/\\])git(\.exe|\.cmd|\.bat)?(?=[\s;&|)`"']|$)/i.test(s);
-const GIT_BASENAME = /^git(\.exe|\.cmd|\.bat)?$/i;
-
-// The git blob id of `text`, as `git hash-object` prints it for a file holding exactly these bytes.
-export function blobId(text) {
-  const body = Buffer.from(text, 'utf8');
-  return createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + body.length + String.fromCharCode(0)), body])).digest('hex');
-}
-
-// ---- 08c / 08d: the second safe shape, and the token reading that judges both shapes ---------------------------------------------------------------------------
-//
-// An env is also SAFE when it is an ALLOWLIST: a POSITIVE list of named keys, never a copy of the ambient environment with things taken out.
-//   - one object literal (inline, in a same-file helper that returns it, or in a `const NAME = { ... };` declared once and never touched again);
-//   - the only spread read is ...Object.fromEntries(KEYS[.filter((k) => process.env[k] !== undefined | k in process.env)].map((k) => [k, process.env[k]])), the canon
-//     idiom, over KEYS = a `const` array of string literals, declared once and never changed or used for anything but that chain;
-//   - no computed key, no method, no getter, a value that reads process.env only as process.env.NAME or process.env['NAME'] and never indexes a value by a computed key;
-//   - GIT_CONFIG_NOSYSTEM set to the literal 1, exactly once, AFTER every spread (an ambient value must not be able to override it);
-//   - every GIT_ name, in a key, in the key list (escapes decoded, any letter case) or anywhere in the literal's text, drawn from a CLOSED list of three that cannot
-//     point git at a repository (SAFE_GIT_KEYS). A positive list, never "delete the bad ones": GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and a variable git invents
-//     tomorrow are refused alike.
-// The judge reads TOKENS (scripts/lib/js-lex.mjs), not text: a regex literal holding a quote, a template holding a backtick or a comment holding the NOSYSTEM literal
-// can neither hide an entry nor fake one (08d, witnesses F28 and F41). F41 is met with a TOKENIZER, not a narrower grammar, because the canon's own sandboxEnv
-// (release-notes.test.mjs at blob 7e779ef8) carries a regex literal in a value and must pass with no pin.
-//
-// A NAME is also tied to its declaration (08d, F31 to F40): the identifier an `env:` property reads must be declared once, in a scope the spawn sits inside, and
-// be mentioned nowhere else except as the value of an `env` property inside a child_process call. A parameter, a second declaration, an alias (`const a = env`), a
-// call that takes it (`fill(env)`, `Reflect.set(env, ...)`, `Object(env)`) or a method on it (`env.__defineGetter__(...)`) is a finding. The old direct-mutation scan
-// stays beside it as the sharper message.
-//
-// And a NAME is no longer trusted: gitEnv/gitTestEnv are trusted only when the file IMPORTS it from the room's own scripts/lib/git-env.mjs, the specifier resolved from the importing file's path (F42; the 08d INSPECT LOW). A file that defines its own helper of that
-// name is judged on the helper's body (an allowlist literal passes as a helper), otherwise it needs a blob-pinned row.
-//
-// What this still does not see, named: a callee or an env object reached by a path the tokens do not show (a value returned from a call, a property of another object,
-// a mutation through a function the env is passed to under another spelling), and a hole in the tokenizer's regex-or-division guess (js-lex.mjs states it).
-const SAFE_GIT_KEYS = new Set(['GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'GIT_CEILING_DIRECTORIES']);
-const isSafeGitName = (k) => !/^git_/i.test(k) || SAFE_GIT_KEYS.has(k.toUpperCase());
-// 08c unit 2 (the 08d INSPECT LOW): the trusted helper is ONE file of THIS room, scripts/lib/git-env.mjs, and the import specifier is resolved against the importing file's own path.
-// A basename test trusted a git-env.mjs of any tree, a bare 'git-env.mjs' and a URL; the room has no git-test-env.mjs, so gitTestEnv is not a trusted name here (canon carriers of
-// other rooms that import it are judged as any local helper: by its body, or by a pinned row).
-const TRUSTED_HELPER_NAMES = new Set(['gitEnv']);
-const TRUSTED_HELPER_FILE = 'scripts/lib/git-env.mjs';
-const isRoomHelperSpecifier = (label, spec) => {
-  if (typeof spec !== 'string' || !(spec.startsWith('./') || spec.startsWith('../'))) return false;
-  return path.posix.normalize(path.posix.join(path.posix.dirname(String(label).replace(/\\/g, '/')), spec)) === TRUSTED_HELPER_FILE;
-};
-const OPEN = { '(': ')', '[': ']', '{': '}' };
-
-// Pair every bracket (and template hole) of the code tokens and record the innermost opener before each token; null when the brackets do not balance.
-function indexTokens(ct) {
-  const pair = new Array(ct.length).fill(-1);
-  const encl = new Array(ct.length).fill(-1);
-  const stack = [];
-  for (let k = 0; k < ct.length; k++) {
-    const t = ct[k];
-    const closer = t.t === 'tpl-close' || (t.t === 'punct' && (t.v === ')' || t.v === ']' || t.v === '}'));
-    if (closer) {
-      const o = stack.pop();
-      if (o === undefined) return null;
-      const want = ct[o].t === 'tpl-open' ? 'tpl-close' : OPEN[ct[o].v];
-      if (t.t === 'tpl-close' ? want !== 'tpl-close' : want !== t.v) return null;
-      pair[o] = k;
-      pair[k] = o;
-      encl[k] = stack.length ? stack[stack.length - 1] : -1;
+    push('tpl', text.slice(from), from);
+    i = text.length;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '\n') { line++; i++; continue; }
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; continue; }
+    if (c === '/' && text[i + 1] === '*') {
+      const e = text.indexOf('*/', i + 2);
+      const stop = e === -1 ? text.length : e + 2;
+      for (let j = i; j < stop; j++) if (text[j] === '\n') line++;
+      i = stop;
       continue;
     }
-    encl[k] = stack.length ? stack[stack.length - 1] : -1;
-    if (t.t === 'tpl-open' || (t.t === 'punct' && OPEN[t.v])) stack.push(k);
-  }
-  return stack.length ? null : { pair, encl };
-}
-
-const isOpener = (t) => t.t === 'tpl-open' || (t.t === 'punct' && OPEN[t.v] !== undefined);
-const isP = (t, v) => t !== undefined && t.t === 'punct' && t.v === v;
-const isId = (t, v) => t !== undefined && t.t === 'id' && (v === undefined || t.v === v);
-
-// The top-level pieces of ct[from..to): [start, end) token ranges separated by commas that sit outside every bracket.
-function splitTop(F, from, to) {
-  const out = [];
-  let s = from;
-  for (let k = from; k < to; k++) {
-    const t = F.ct[k];
-    if (isOpener(t)) { k = F.idx.pair[k]; continue; }
-    if (isP(t, ',')) { out.push([s, k]); s = k + 1; }
-  }
-  out.push([s, to]);
-  return out;
-}
-
-const srcOf = (F, a, b) => (b > a ? F.text.slice(F.ct[a].s, F.ct[b - 1].e) : '');
-const joined = (F, a, b) => F.ct.slice(a, b).map((t) => t.v).join(' ');
-const lineAt = (F, k) => lineOf(F.text, F.ct[k].s);
-
-// The text of the tokens a..b with comments blanked, for the raw GIT_ scan.
-function textNoComments(F, a, b) {
-  let s = F.text.slice(F.ct[a].s, F.ct[b - 1].e);
-  const base = F.ct[a].s;
-  for (const t of F.comments) {
-    if (t.s >= base && t.e <= base + s.length) s = s.slice(0, t.s - base) + ' '.repeat(t.e - t.s) + s.slice(t.e - base);
-  }
-  return s;
-}
-
-// The first statement after the declaration that changes NAME: a property write, an index write, Object.assign/defineProperty on it, a delete; for a key list
-// (array = true) also the array methods that grow or rewrite it. A write to process.env.X is a write to someone else's object, so a name preceded by a dot never counts.
-function mutationOf(name, fileText, array = false) {
-  const n = escapeRegex(name);
-  const forms = [
-    String.raw`(?<![.\w$])${n}\s*\.\s*[\w$]+\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
-    String.raw`(?<![.\w$])${n}\s*\[[^\]\n]*\]\s*(?:\|\|=|&&=|\?\?=|\+=|-=|=(?!=))`,
-    String.raw`\bObject\s*\.\s*(?:assign|defineProperty|defineProperties)\s*\(\s*${n}\b`,
-    String.raw`\bdelete\s+${n}\b`,
-  ];
-  if (array) forms.push(String.raw`(?<![.\w$])${n}\s*\.\s*(?:push|unshift|splice|fill|copyWithin|sort|reverse|pop|shift)\s*\(`);
-  return new RegExp(forms.join('|')).exec(fileText);
-}
-
-// Where (token indexes) is NAME declared with const/let/var, and where is it mentioned at all (a name after a dot is a property, not the binding)?
-function declsOf(F, name) {
-  const out = [];
-  for (let k = 1; k < F.ct.length; k++) {
-    const t = F.ct[k];
-    if (t.t !== 'id' || decodeIdent(t.v) !== name) continue;
-    const p = F.ct[k - 1];
-    if (p.t === 'id' && (p.v === 'const' || p.v === 'let' || p.v === 'var' || p.v === 'function' || p.v === 'class')) out.push({ k, kind: p.v });
-  }
-  return out;
-}
-
-// Is the use at token `use` inside the scope of the declaration at token `decl`? The scope is the innermost `{` block around the declaration (the module when there is none).
-function inScope(F, decl, use) {
-  let o = F.idx.encl[decl];
-  while (o !== -1 && !isP(F.ct[o], '{')) o = F.idx.encl[o];
-  if (o === -1) return true;
-  return use > o && use < F.idx.pair[o];
-}
-
-// Does the statement that ends at token `last` end there? A semicolon, a comma, the end of the file, or a line break NOT followed by a token that would continue the expression.
-const CONTINUES = new Set(['.', '(', '[', '?', '?.', '+', '-', '*', '/', '%', '**', '||', '&&', '??', '=', '==', '===', '!=', '!==', '<', '>', '<=', '>=', '|', '&', '^', ',', '=>']);
-function statementEnds(F, last) {
-  const next = F.ct[last + 1];
-  if (next === undefined) return true;
-  if (isP(next, ';') || isP(next, ',')) return true;
-  if (next.t === 'tpl') return false;
-  const gap = F.text.slice(F.ct[last].e, next.s);
-  if (!gap.includes('\n')) return isP(next, '}');
-  return !(next.t === 'punct' && CONTINUES.has(next.v));
-}
-
-// ---- the judges -----------------------------------------------------------------------------------------------------------------------------------------------
-
-const ok = (kind) => ({ ok: true, kind });
-const no = (reason, extra = {}) => ({ ok: false, reason, ...extra });
-
-// verify.mjs loads the helper at run time from the room root: `import(pathToFileURL(path.join(ROOT, 'scripts', 'lib', 'git-env.mjs')).href)`. That one idiom is read: the trailing
-// literal segments must spell the room helper's path. Named limit: ROOT is an identifier the census cannot resolve, so it is taken to be the room root (verify.mjs's own `repo`).
-function isRoomHelperJoin(F, a, b) {
-  const ct = F.ct;
-  let k = a;
-  if (!(isId(ct[k], 'pathToFileURL') && isP(ct[k + 1], '('))) return false;
-  const urlClose = F.idx.pair[k + 1];
-  if (!(isP(ct[urlClose + 1], '.') && isId(ct[urlClose + 2], 'href') && urlClose + 3 === b)) return false;
-  k += 2;
-  if (isId(ct[k], 'path') && isP(ct[k + 1], '.')) k += 2;
-  if (!(isId(ct[k], 'join') && isP(ct[k + 1], '('))) return false;
-  if (F.idx.pair[k + 1] !== urlClose - 1) return false;
-  const parts = splitTop(F, k + 2, urlClose - 1);
-  if (parts.length < 2 || !(parts[0][1] === parts[0][0] + 1 && ct[parts[0][0]].t === 'id')) return false;
-  const segs = [];
-  for (const [ps, pe] of parts.slice(1)) {
-    if (!(pe === ps + 1 && ct[ps].t === 'str')) return false;
-    const v = decodeString(ct[ps].v);
-    if (v === null) return false;
-    segs.push(v);
-  }
-  return segs.join('/') === TRUSTED_HELPER_FILE;
-}
-
-// Is `name` bound to the room's own helper by an import? A static import, or a dynamic one whose call names it, of the file scripts/lib/git-env.mjs reached from THIS file's path.
-function importedFromRoomHelper(F, name) {
-  const ct = F.ct;
-  for (let k = 0; k < ct.length; k++) {
-    if (!isId(ct[k], 'import')) continue;
-    if (isP(ct[k + 1], '{')) {
-      const close = F.idx.pair[k + 1];
-      const ids = ct.slice(k + 2, close).filter((t) => t.t === 'id').map((t) => t.v);
-      const from = ct[close + 1];
-      const spec = ct[close + 2];
-      if (!(isId(from, 'from') && spec && spec.t === 'str')) continue;
-      const names = ids.filter((v, i) => v !== 'as' && ids[i - 1] !== 'as');
-      const renamed = ids.some((v, i) => ids[i + 1] === 'as' && v === name);
-      if (names.includes(name) && !renamed && isRoomHelperSpecifier(F.label, decodeString(spec.v))) return true;
-    } else if (isP(ct[k + 1], '(')) {
-      const close = F.idx.pair[k + 1];
-      const prev = ct[k - 1];
-      const eq = ct[k - 2];
-      const brace = ct[k - 3];
-      if (!(isId(prev, 'await') && isP(eq, '=') && isP(brace, '}'))) continue;
-      const open = F.idx.pair[k - 3];
-      // 08d mutation finding: `{ other: gitEnv }` BINDS gitEnv to another export, so only the bare shorthand `{ gitEnv }` counts
-      const shorthand = splitTop(F, open + 1, k - 3).some(([s, e]) => e === s + 1 && ct[s].t === 'id' && decodeIdent(ct[s].v) === name);
-      if (!shorthand) continue;
-      if (close === k + 3 && ct[k + 2].t === 'str' && isRoomHelperSpecifier(F.label, decodeString(ct[k + 2].v))) return true;
-      if (isRoomHelperJoin(F, k + 2, close)) return true;
+    if (c === '"' || c === '\'') {
+      const s = i;
+      i++;
+      while (i < text.length && text[i] !== c && text[i] !== '\n') { if (text[i] === '\\') { if (text[i + 1] === '\n') line++; i++; } i++; }
+      push('str', text.slice(s + 1, i), s);
+      if (text[i] === c) i++;
+      continue;
     }
+    if (c === '`') { templateChunk(i + 1); continue; }
+    if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(text[i + 1] || ''))) {
+      const s = i;
+      while (i < text.length && /[\w.]/.test(text[i])) i++;
+      push('num', text.slice(s, i), s);
+      continue;
+    }
+    if (isIdChar(c)) {
+      const s = i;
+      while (i < text.length && isIdChar(text[i])) i++;
+      push('id', text.slice(s, i), s);
+      continue;
+    }
+    if (c === '/') {
+      const allowed = regexAllowed() || (force !== null && force.has(i));
+      const p = toks[toks.length - 1];
+      const maybe = !allowed && !!p && p.k === 'p' && (p.v === ')' || p.v === '}');
+      if (allowed || maybe) {
+        let j = i + 1;
+        let inClass = false;
+        let ok = false;
+        while (j < text.length && text[j] !== '\n') {
+          const d = text[j];
+          if (d === '\\') { j += 2; continue; }
+          if (d === '[') inClass = true;
+          else if (d === ']') inClass = false;
+          else if (d === '/' && !inClass) { ok = true; break; }
+          j++;
+        }
+        if (ok && allowed) {
+          j++;
+          while (j < text.length && /[a-z]/i.test(text[j])) j++;
+          push('re', text.slice(i, j), i);
+          i = j;
+          continue;
+        }
+        if (ok) amb.push({ i, ln: line });
+      }
+    }
+    if (c === '}' && holes.length && braces === holes[holes.length - 1]) {
+      holes.pop();
+      push('tplclose', '}', i);
+      templateChunk(i + 1);
+      continue;
+    }
+    const op = PUNCTS.find((p) => text.startsWith(p, i)) || c;
+    const tk = { k: 'p', v: op, i, ln: line };
+    const prevTok = toks[toks.length - 1];
+    if (op === '(') parenCtl.push(!!prevTok && prevTok.k === 'id' && CTL_HEAD.has(prevTok.v));
+    else if (op === ')') tk.ctl = parenCtl.pop() === true;
+    else if (op === '{') { braces++; braceBlk.push(openIsBlock(prevTok)); }
+    else if (op === '}') { braces--; tk.ctl = braceBlk.pop() === true; }
+    toks.push(tk);
+    i += op.length;
+  }
+  return { toks, amb };
+}
+
+const isP = (t, v) => !!t && t.k === 'p' && t.v === v;
+const isId = (t, v) => !!t && t.k === 'id' && (v === undefined || t.v === v);
+
+function bracketMap(toks) {
+  const m = new Map();
+  const st = [];
+  for (let n = 0; n < toks.length; n++) {
+    const t = toks[n];
+    if ((t.k === 'p' && (t.v === '(' || t.v === '[' || t.v === '{')) || t.k === 'tplopen') st.push(n);
+    else if ((t.k === 'p' && (t.v === ')' || t.v === ']' || t.v === '}')) || t.k === 'tplclose') {
+      const o = st.pop();
+      if (o !== undefined) { m.set(o, n); m.set(n, o); }
+    }
+  }
+  return m;
+}
+
+const STMT_KW = new Set(['const', 'let', 'var', 'function', 'class', 'if', 'for', 'while', 'return', 'export', 'import', 'try', 'throw', 'switch']);
+
+// The end of the expression that starts at token `from`: the first top-level `,` (or `;` when `semi`), or the closer of
+// whatever encloses it. Brackets nest. With `semi`, a statement keyword that starts a new line also ends it (no ASI).
+function exprEnd(ctx, from, semi, commaOk = false) {
+  const { toks, m } = ctx;
+  let n = from;
+  while (n < toks.length) {
+    const t = toks[n];
+    if (t.k === 'p') {
+      if (t.v === '(' || t.v === '[' || t.v === '{') { const c = m.get(n); if (c === undefined) return toks.length; n = c + 1; continue; }
+      if (t.v === ')' || t.v === ']' || t.v === '}' || (t.v === ',' && !commaOk) || (semi && t.v === ';')) return n;
+    } else if (t.k === 'tplopen') {
+      const c = m.get(n);
+      n = (c === undefined ? toks.length : c) + 1;
+      continue;
+    } else if (t.k === 'tplclose') return n;
+    if (semi && n > from && t.ln !== toks[n - 1].ln && t.k === 'id' && STMT_KW.has(t.v)) return n;
+    n++;
+  }
+  return n;
+}
+
+const BUILTINS = new Set(['Object', 'JSON', 'Reflect', 'Array', 'String', 'Boolean', 'console']);
+
+// Where the room's own git-env.mjs lives, and the two specifiers its files import it by (for a file under scripts/ the specifier is
+// resolved against that file's own directory; a bare fixture name has no directory, so the specifier is matched as written).
+const GIT_ENV_HOME = 'scripts/lib/git-env.mjs';
+const GIT_ENV_SPECS = new Set(['./git-env.mjs', './lib/git-env.mjs']);
+const TRUSTED_NAMES = new Set(['gitEnv', 'gitTestEnv']);
+
+function ownGitEnvSource(rel, src) {
+  if (typeof src !== 'string') return false;
+  if (!rel.includes('/')) return GIT_ENV_SPECS.has(src);
+  return /^\.\.?\//.test(src) && path.posix.normalize(path.posix.join(path.posix.dirname(rel), src)) === GIT_ENV_HOME;
+}
+
+// Every name bound by an import of this file, as local -> { src, imported }: `import a, { b, c as d } from 'x'`, `import * as n from 'x'`,
+// and `const { g, h: i } = await import('x') / require('x')` (src null when the source is not one string literal).
+function collectImports(toks, m) {
+  const imports = new Map();
+  const bind = (local, src, imported) => { imports.set(local, [...(imports.get(local) || []), { src, imported }]); };
+  for (let n = 0; n < toks.length; n++) {
+    const t = toks[n];
+    if (isId(t, 'import') && !isP(toks[n - 1], '.') && !isP(toks[n + 1], '(') && !isP(toks[n + 1], '.') && !(toks[n + 1] && toks[n + 1].k === 'str')) {
+      let j = n + 1;
+      let inBrace = false;
+      const pending = [];
+      for (; j < toks.length && j < n + 400 && !isP(toks[j], ';'); j++) {
+        const x = toks[j];
+        if (isId(x, 'from') && toks[j + 1] && toks[j + 1].k === 'str') break;
+        if (isP(x, '{')) inBrace = true;
+        else if (isP(x, '}')) inBrace = false;
+        else if (isP(x, '*') && isId(toks[j + 1], 'as') && toks[j + 2] && toks[j + 2].k === 'id') { pending.push([toks[j + 2].v, '*']); j += 2; }
+        else if (x.k === 'id' && isId(toks[j + 1], 'as') && toks[j + 2] && toks[j + 2].k === 'id') { pending.push([toks[j + 2].v, x.v]); j += 2; }
+        else if (x.k === 'id') pending.push([x.v, inBrace ? x.v : 'default']);
+      }
+      const src = toks[j + 1] && toks[j + 1].k === 'str' && isId(toks[j], 'from') ? toks[j + 1].v : null;
+      if (src !== null) for (const [local, imported] of pending) bind(local, src, imported);
+    } else if (isP(t, '{') && (isId(toks[n - 1], 'const') || isId(toks[n - 1], 'let') || isId(toks[n - 1], 'var')) && m.get(n) !== undefined && isP(toks[m.get(n) + 1], '=')) {
+      // a destructuring declaration: find the one string literal of an import(...) / require(...) in its initializer
+      let src = null;
+      const end = Math.min(toks.length, m.get(n) + 12);
+      for (let k = m.get(n) + 2; k < end; k++) {
+        if ((isId(toks[k], 'import') || isId(toks[k], 'require')) && isP(toks[k + 1], '(') && toks[k + 2] && toks[k + 2].k === 'str' && isP(toks[k + 3], ')')) { src = toks[k + 2].v; break; }
+      }
+      for (let k = n + 1; k < m.get(n); k++) {
+        const x = toks[k];
+        if (x.k !== 'id' || (!isP(toks[k - 1], '{') && !isP(toks[k - 1], ',') && !isP(toks[k - 1], ':'))) continue;
+        if (isP(toks[k + 1], ':')) continue; // a key: its local name follows the colon
+        bind(x.v, src, isP(toks[k - 1], ':') && toks[k - 2] && toks[k - 2].k === 'id' ? toks[k - 2].v : x.v);
+      }
+    }
+  }
+  return imports;
+}
+
+function buildCtx(text, force = null, rel = '') {
+  const { toks, amb } = lexAmb(text, force);
+  const m = bracketMap(toks);
+  const decls = new Map(); // name -> [{ n, init }]  (init = index of the first token after `=`, or -1)
+  const funcs = new Map(); // name -> [index of the name token of `function NAME`]
+  let envImport = false;
+  let processAlias = false;
+  let shadowed = false; // a builtin the grammar leans on (Object, JSON, ...) is rebound, or globalThis is in play
+  let gitEnvAssigned = false; // gitEnv / gitTestEnv is assigned somewhere in the file, so its name proves nothing
+  for (let n = 0; n < toks.length; n++) {
+    const t = toks[n];
+    if (t.k === 'id') {
+      if (t.v === 'process' && !isP(toks[n + 1], '.')) processAlias = true;
+      const p = toks[n - 1];
+      if ((t.v === 'globalThis' || t.v === 'global') && !isP(p, '.')) shadowed = true;
+      if (t.v === 'prototype' && isP(p, '.') && toks[n - 2] && BUILTINS.has(toks[n - 2].v)) shadowed = true; // Object.prototype.X = ... reaches every env
+      if (BUILTINS.has(t.v) && (isP(p, '{') || isP(p, ',')) && (isP(toks[n + 1], '}') || isP(toks[n + 1], ',')) && isP(toks[nearestOpener({ toks, m }, n)], '{')) shadowed = true; // an import or destructure list names it
+      if (BUILTINS.has(t.v) && !isP(p, '.') && (isId(p, 'const') || isId(p, 'let') || isId(p, 'var') || isId(p, 'function') || isId(p, 'class') || isId(p, 'as') || isId(p, 'import') || isP(toks[n + 1], '='))) shadowed = true;
+      if ((t.v === 'gitEnv' || t.v === 'gitTestEnv') && isP(toks[n + 1], '=') && !(isId(p, 'const') || isId(p, 'let') || isId(p, 'var'))) gitEnvAssigned = true;
+      if (isId(p) && (p.v === 'const' || p.v === 'let' || p.v === 'var')) {
+        const list = decls.get(t.v) || [];
+        list.push({ n, kind: p.v, init: isP(toks[n + 1], '=') ? n + 2 : -1 });
+        decls.set(t.v, list);
+      } else if (isId(p, 'function')) {
+        const list = funcs.get(t.v) || [];
+        list.push(n);
+        funcs.set(t.v, list);
+      }
+    } else if (t.k === 'str' && (t.v === 'node:process' || t.v === 'process') && (isId(toks[n - 1], 'from') || (isP(toks[n - 1], '(') && (isId(toks[n - 2], 'require') || isId(toks[n - 2], 'import'))))) envImport = true;
+    else if (t.k === 'str' && t.v === 'process' && isP(toks[n - 1], '[')) processAlias = true;
+  }
+  // gitEnv / gitTestEnv is BOUND as a parameter or a catch binding somewhere (F60): a bare call to it is then not the helper, whatever it is called. A call, a member name, an
+  // object key and a declaration (judged by its body) are not that; anything else that mentions the name inside a parameter list (or as the one parameter of an arrow) is.
+  let gitEnvParam = false;
+  for (let n = 0; n < toks.length && !gitEnvParam; n++) {
+    const t = toks[n];
+    if (t.k !== 'id' || (t.v !== 'gitEnv' && t.v !== 'gitTestEnv')) continue;
+    const p = toks[n - 1];
+    const q = toks[n + 1];
+    if (isP(q, '(') || isP(p, '.') || isP(p, '?.')) continue;
+    if (isId(p) && ['const', 'let', 'var', 'function', 'class'].includes(p.v)) continue;
+    if ((isP(p, '{') || isP(p, ',')) && isP(q, ':')) continue;
+    if (isP(q, '=>')) { gitEnvParam = true; continue; }
+    for (let o = nearestOpener({ toks, m }, n); o >= 0; o = nearestOpener({ toks, m }, o)) {
+      const c = m.get(o);
+      if (isP(toks[o], '(') && c !== undefined && (isP(toks[c + 1], '=>') || isP(toks[c + 1], '{'))) { gitEnvParam = true; break; }
+    }
+  }
+  return { toks, m, decls, funcs, envImport, shadowed, gitEnvAssigned, gitEnvParam, envTainted: envImport || processAlias || shadowed, memo: new Set(), amb, rel, imports: collectImports(toks, m) };
+}
+
+// ---------------------------------------------------------------------------
+// Uses of a name: every use must be a read.
+// ---------------------------------------------------------------------------
+const ALLOWED_CALLEES = new Set(['Object.keys', 'Object.values', 'Object.entries', 'Object.hasOwn', 'Object.getOwnPropertyNames', 'JSON.stringify', 'console.log', 'console.error', 'console.warn', 'console.info', 'Array.isArray', 'String', 'Boolean']);
+const PURE_LIST_METHODS = new Set(['includes', 'indexOf', 'join', 'slice', 'concat', 'at']);
+const CALLBACK_LIST_METHODS = new Set(['filter', 'map', 'some', 'every', 'find', 'findIndex', 'forEach', 'flatMap']);
+const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '**=', '<<=', '>>=', '>>>=', '&&=', '||=', '??=', '++', '--']);
+const COMPARE_OPS = new Set(['===', '!==', '==', '!=']);
+
+// The callee name of the call whose argument list holds token n directly, or null.
+function directCallee(ctx, n) {
+  const { toks, m } = ctx;
+  let j = n - 1;
+  while (j >= 0) {
+    const t = toks[j];
+    if ((t.k === 'p' && (t.v === ')' || t.v === ']' || t.v === '}')) || t.k === 'tplclose') { const o = m.get(j); if (o === undefined) return null; j = o - 1; continue; }
+    if (isP(t, '(')) break;
+    if ((t.k === 'p' && (t.v === '[' || t.v === '{')) || t.k === 'tplopen') return null;
+    j--;
+  }
+  if (j < 0) return null;
+  const parts = [];
+  let k = j - 1;
+  while (k >= 0 && toks[k].k === 'id') {
+    parts.unshift(toks[k].v);
+    if (isP(toks[k - 1], '.') && toks[k - 2] && toks[k - 2].k === 'id') k -= 2;
+    else { k--; break; }
+  }
+  if (isId(toks[k], 'function') || isId(toks[k], 'catch')) return null;
+  ctx.lastOpen = j; // the '(' of that call, for the caller that must look at the other arguments
+  return parts.length ? parts.join('.') : null;
+}
+
+// The index of the nearest bracket that encloses token n and is still open there, or -1.
+function nearestOpener(ctx, n) {
+  const { toks, m } = ctx;
+  for (let j = n - 1; j >= 0; j--) {
+    const t = toks[j];
+    if ((t.k === 'p' && (t.v === ')' || t.v === ']' || t.v === '}')) || t.k === 'tplclose') { const o = m.get(j); if (o === undefined) return -1; j = o; continue; }
+    if ((t.k === 'p' && (t.v === '(' || t.v === '[' || t.v === '{')) || t.k === 'tplopen') return j;
+  }
+  return -1;
+}
+
+// true when token n is inside the target of a destructuring assignment ({ a: x.y } = o, [x.y] = a) or the left of a for-in / for-of head.
+function inAssignTarget(ctx, n) {
+  const { toks, m } = ctx;
+  let j = n - 1;
+  while (j >= 0) {
+    const t = toks[j];
+    if ((t.k === 'p' && (t.v === ')' || t.v === ']' || t.v === '}')) || t.k === 'tplclose') { const o = m.get(j); if (o === undefined) return false; j = o - 1; continue; }
+    if (t.k === 'p' && (t.v === '[' || t.v === '{')) { const c = m.get(j); if (c !== undefined && isP(toks[c + 1], '=')) return true; }
+    else if (isP(t, '(') && isId(toks[j - 1], 'for')) {
+      const c = m.get(j);
+      if (c === undefined) return false;
+      for (let k = n; k < c; k++) {
+        if ((toks[k].k === 'p' && (toks[k].v === '(' || toks[k].v === '[' || toks[k].v === '{')) || toks[k].k === 'tplopen') { const e = m.get(k); if (e === undefined) return false; k = e; continue; }
+        if (isP(toks[k], ';')) return false;
+        if (isId(toks[k], 'of') || isId(toks[k], 'in')) return true;
+      }
+      return false;
+    }
+    j--;
   }
   return false;
 }
 
-// The occurrences of an identifier that are neither a property (after a dot) nor in the declaration list.
-function mentions(F, name) {
-  const out = [];
-  for (let k = 0; k < F.ct.length; k++) {
-    const t = F.ct[k];
-    if (t.t !== 'id' || decodeIdent(t.v) !== name) continue;
-    if (isP(F.ct[k - 1], '.') || isP(F.ct[k - 1], '?.')) continue;
-    out.push(k);
-  }
-  return out;
+// A callback method is read-only only when its one argument is an arrow with at most one parameter: a third parameter hands
+// the callback the array itself (keep.forEach((k, i, a) => a.push(...))), and a thisArg or a function expression hands it more.
+function onlyUnaryArrow(ctx, open) {
+  const { toks, m } = ctx;
+  const c = m.get(open);
+  if (c === undefined || exprEnd(ctx, open + 1, false) !== c) return false;
+  const a = open + 1;
+  if (toks[a] && toks[a].k === 'id' && isP(toks[a + 1], '=>')) return true;
+  if (isP(toks[a], '(')) { const e = m.get(a); return e !== undefined && e - a <= 2 && isP(toks[e + 1], '=>'); }
+  return false;
 }
 
-// A same-file helper `const NAME = (params) => ({ ... })` or `function NAME(params) { return { ... }; }`: the literal's range, or a reason.
-function helperLiteral(F, name) {
-  const defs = [];
-  for (let k = 0; k < F.ct.length; k++) {
-    const t = F.ct[k];
-    if (t.t !== 'id' || decodeIdent(t.v) !== name || isP(F.ct[k - 1], '.')) continue;
-    const p = F.ct[k - 1];
-    if (p && p.t === 'id' && (p.v === 'const' || p.v === 'let' || p.v === 'var' || p.v === 'function' || p.v === 'class')) defs.push({ k, kind: p.v });
-  }
-  if (defs.length === 0) return { reason: `${name} is not defined in this file, so the census cannot read what it returns` };
-  if (defs.length > 1) return { reason: `${name} is declared ${defs.length} times in this file, so the census cannot tell which one the call reads` };
-  const stray = mentions(F, name).filter((k) => k !== defs[0].k && !isP(F.ct[k + 1], '('));
-  if (stray.length) return { reason: `${name} is mentioned other than as a call (line ${lineAt(F, stray[0])}), so a parameter or a reassignment may stand in for the helper` };
-  const d = defs[0];
-  let bodyStart;
-  let bodyEnd;
-  if (d.kind === 'function') {
-    if (!isP(F.ct[d.k + 1], '(')) return { reason: `${name} is not a plain function declaration` };
-    const pc = F.idx.pair[d.k + 1];
-    if (!isP(F.ct[pc + 1], '{')) return { reason: `${name} has no block body` };
-    bodyStart = pc + 1;
-    bodyEnd = F.idx.pair[pc + 1];
-  } else if (d.kind === 'const') {
-    if (!isP(F.ct[d.k + 1], '=')) return { reason: `${name} is not assigned in its declaration` };
-    let a = d.k + 2;
-    if (isId(F.ct[a], 'async')) return { reason: `${name} is an async function, which the census does not read` };
-    if (isP(F.ct[a], '(')) a = F.idx.pair[a] + 1;
-    else if (F.ct[a] && F.ct[a].t === 'id') a += 1;
-    else return { reason: `${name} is not an arrow function` };
-    if (!isP(F.ct[a], '=>')) return { reason: `${name} is not an arrow function` };
-    a += 1;
-    if (isP(F.ct[a], '(') && isP(F.ct[a + 1], '{') && F.idx.pair[a + 1] === F.idx.pair[a] - 1) {
-      const lit = [a + 1, F.idx.pair[a + 1]];
-      if (!statementEnds(F, F.idx.pair[a])) return { reason: `${name}'s body has more after the object` };
-      return { range: lit };
+// JSON.stringify(x) and JSON.stringify(x, null, 2) cannot run caller code; a replacer function sees the holder as `this`.
+function plainStringify(ctx, open) {
+  const { toks, m } = ctx;
+  const c = m.get(open);
+  if (c === undefined) return false;
+  const args = [];
+  for (let k = open + 1; k < c;) { const e = Math.min(exprEnd(ctx, k, false), c); args.push([k, e]); k = e + 1; }
+  if (args.length === 1) return true;
+  if (args.length > 3) return false;
+  const [a1, b1] = args[1];
+  if (!(b1 - a1 === 1 && toks[a1].k === 'id' && (toks[a1].v === 'null' || toks[a1].v === 'undefined'))) return false;
+  if (args.length === 2) return true;
+  const [a2, b2] = args[2];
+  return b2 - a2 === 1 && (toks[a2].k === 'num' || toks[a2].k === 'str');
+}
+
+// null when every use of `name` is a read; otherwise the reason. `sites` = the token indexes where it is handed to a spawn.
+function usesCheck(ctx, name, sites, kind) {
+  const { toks, m } = ctx;
+  for (let n = 0; n < toks.length; n++) {
+    const t = toks[n];
+    if (t.k !== 'id' || t.v !== name) continue;
+    const p = toks[n - 1];
+    const q = toks[n + 1];
+    if (isId(p) && (p.v === 'const' || p.v === 'let' || p.v === 'var')) continue; // the declaration
+    if (isP(p, '.') || isP(p, '?.')) continue; // a member name
+    if ((isP(p, '{') || isP(p, ',')) && isP(q, ':')) continue; // an object key
+    if (sites.has(n)) continue;
+    const why = () => `${name} is used at line ${t.ln} in a way the census cannot read as a plain read`;
+    if (inAssignTarget(ctx, n)) return why();
+    if (isP(p, '...')) continue;
+    if (isId(p, 'return')) continue;
+    if (isId(p, 'typeof') || isP(p, '!')) continue;
+    if ((q && q.k === 'p' && COMPARE_OPS.has(q.v)) || (p && p.k === 'p' && COMPARE_OPS.has(p.v))) continue;
+    if (isId(p, 'delete') || (p && p.k === 'p' && (p.v === '++' || p.v === '--'))) return why();
+    if (isP(q, '.') || isP(q, '?.') || isP(q, '[')) {
+      let j = n + 1;
+      let last = null;
+      let steps = 0;
+      for (;;) {
+        if ((isP(toks[j], '.') || isP(toks[j], '?.')) && toks[j + 1] && toks[j + 1].k === 'id') { last = toks[j + 1].v; j += 2; steps++; continue; }
+        if (isP(toks[j], '[')) { const c = m.get(j); if (c === undefined) return why(); last = null; j = c + 1; steps++; continue; }
+        break;
+      }
+      const after = toks[j];
+      if (after && after.k === 'p' && ASSIGN_OPS.has(after.v)) return why();
+      if (isP(after, '(') || (after && after.k === 'tpl')) {
+        if (kind === 'list' && steps === 1 && last && PURE_LIST_METHODS.has(last)) continue;
+        if (kind === 'list' && steps === 1 && last && CALLBACK_LIST_METHODS.has(last) && isP(toks[j], '(') && onlyUnaryArrow(ctx, j)) continue;
+        return why();
+      }
+      continue;
     }
-    if (!isP(F.ct[a], '{')) return { reason: `${name}'s body is not one object literal` };
-    bodyStart = a;
-    bodyEnd = F.idx.pair[a];
-  } else return { reason: `${name} is declared with ${d.kind}, which the census does not read as a helper` };
-  // a block body: `return { ... } ;` and nothing else
-  if (!isId(F.ct[bodyStart + 1], 'return') || !isP(F.ct[bodyStart + 2], '{')) return { reason: `${name}'s body is not a single return of one object literal` };
-  const litClose = F.idx.pair[bodyStart + 2];
-  let after = litClose + 1;
-  if (isP(F.ct[after], ';')) after += 1;
-  if (after !== bodyEnd) return { reason: `${name}'s body does more than return one object literal` };
-  return { range: [bodyStart + 2, litClose] };
-}
-
-// ---- the allowlist literal ------------------------------------------------------------------------------------------------------------------------------------
-
-// KEYS: a const array of string literals, declared once, never changed, used only as the head of a .filter(/.map( chain.
-function keyListVerdict(F, name, useTok) {
-  const decls = declsOf(F, name);
-  if (decls.length !== 1) return no(`the key list ${name} is declared ${decls.length} times in this file, and it must be exactly once`);
-  const d = decls[0];
-  if (d.kind !== 'const') return no(`the key list ${name} is not declared with const`);
-  if (!isP(F.ct[d.k + 1], '=') || !isP(F.ct[d.k + 2], '[')) return no(`the key list ${name} is not declared \`const ${name} = [...]\``);
-  const open = d.k + 2;
-  const close = F.idx.pair[open];
-  for (let k = open + 1; k < close; k++) {
-    const t = F.ct[k];
-    if (isP(t, ',')) continue;
-    if (t.t !== 'str') return no(`the key list ${name} holds more than plain string literals`);
-    const v = decodeString(t.v);
-    if (v === null) return no(`the key list ${name} holds a string the census cannot decode`);
-    if (!isSafeGitName(v)) return no(`the key list ${name} names ${v}, which is not one of the harmless GIT_ names (${[...SAFE_GIT_KEYS].join(', ')})`);
-  }
-  if (!statementEnds(F, close)) return no(`the key list ${name} is declared with more after the array`);
-  for (const k of mentions(F, name)) {
-    if (k === d.k) continue;
-    if (!(isP(F.ct[k + 1], '.') && F.ct[k + 2] && F.ct[k + 2].t === 'id' && (F.ct[k + 2].v === 'filter' || F.ct[k + 2].v === 'map') && isP(F.ct[k + 3], '('))) {
-      return no(`the key list ${name} is used other than as the head of a .filter or .map chain (line ${lineAt(F, k)})`);
+    if ((isP(p, '(') || isP(p, ',')) && (isP(q, ')') || isP(q, ','))) {
+      const callee = directCallee(ctx, n);
+      if (callee && ALLOWED_CALLEES.has(callee) && (callee !== 'JSON.stringify' || plainStringify(ctx, ctx.lastOpen))) continue;
     }
+    return why();
   }
-  const changed = mutationOf(name, F.text, true);
-  if (changed) return no(`the key list ${name} is changed after it is declared (line ${lineOf(F.text, changed.index)})`);
-  if (!inScope(F, d.k, useTok)) return no(`the key list ${name} is declared in a block the literal is not inside`);
-  return ok('keylist');
+  return null;
 }
 
-// ARROW: `( k ) => BODY` or `k => BODY`; returns { param, bodyStart } or null.
-function arrowAt(F, a, to) {
-  let param;
-  let k = a;
-  if (isP(F.ct[k], '(') && F.ct[k + 1] && F.ct[k + 1].t === 'id' && isP(F.ct[k + 2], ')')) { param = F.ct[k + 1].v; k += 3; }
-  else if (F.ct[k] && F.ct[k].t === 'id') { param = F.ct[k].v; k += 1; }
+// ---------------------------------------------------------------------------
+// The grammar. Every judge function returns null (safe) or a reason string.
+// ---------------------------------------------------------------------------
+const SAFE_NARROWING = new Set(['GIT_TERMINAL_PROMPT', 'GIT_CEILING_DIRECTORIES']);
+const NOSYSTEM = 'GIT_CONFIG_NOSYSTEM';
+const PICK_FILTERS = new Set(['( $K ) => process . env [ $K ] !== undefined', '( $K ) => $K in process . env']);
+const PICK_MAP = '( $K ) => [ $K , process . env [ $K ] ]';
+const MAX_DEPTH = 6;
+
+function canonArrow(toks, a, b) {
+  let k;
+  let rest;
+  if (b - a >= 3 && toks[a].k === 'id' && isP(toks[a + 1], '=>')) { k = toks[a].v; rest = a + 2; }
+  else if (b - a >= 5 && isP(toks[a], '(') && toks[a + 1].k === 'id' && isP(toks[a + 2], ')') && isP(toks[a + 3], '=>')) { k = toks[a + 1].v; rest = a + 4; }
   else return null;
-  if (!isP(F.ct[k], '=>') || k + 1 > to) return null;
-  return { param, bodyStart: k + 1 };
+  return '( $K ) => ' + toks.slice(rest, b).map((t) => (t.k === 'id' && t.v === k ? '$K' : t.v)).join(' ');
 }
 
-// ...Object.fromEntries(KEYS[.filter(ARROW)].map(ARROW)): the one spread an allowlist may carry.
-function spreadVerdict(F, a, b) {
-  const j = joined(F, a, a + 4);
-  if (j !== 'Object . fromEntries (' || F.idx.pair[a + 3] !== b - 1) {
-    return no(`spreads ${srcOf(F, a, Math.min(b, a + 6)).slice(0, 30)}, which is not a list of named keys: the only spread read is ...Object.fromEntries(KEYS.filter(...).map(...))`);
+const cooked = (t) => (t.k === 'str' && !t.v.includes('\\') ? t.v : null);
+
+// A list of string literals: every name a plain string, none naming GIT_ beyond the two that narrow git. Returns a reason or null.
+function listElements(ctx, a, b) {
+  const { toks } = ctx;
+  let n = a;
+  while (n < b) {
+    const v = cooked(toks[n]);
+    if (v === null) return 'a key list holds something other than plain string literals (a computed name, a spread or an escape)';
+    const U = v.toUpperCase();
+    if (U.startsWith('GIT_') && !SAFE_NARROWING.has(U)) return `a key list names ${v}, a GIT_ name that can aim git elsewhere`;
+    n++;
+    if (n < b) { if (!isP(toks[n], ',')) return 'a key list holds something other than plain string literals'; n++; }
   }
-  let k = a + 4;
-  const end = b - 1; // the closing paren of fromEntries
-  const head = F.ct[k];
-  if (!head || head.t !== 'id') return no('its Object.fromEntries( does not start from a named key list');
-  const keysTok = k;
-  k += 1;
-  const chain = (name) => {
-    if (!(isP(F.ct[k], '.') && isId(F.ct[k + 1], name) && isP(F.ct[k + 2], '('))) return null;
-    const close = F.idx.pair[k + 2];
-    const arrow = arrowAt(F, k + 3, close);
-    if (!arrow) return null;
-    const body = joined(F, arrow.bodyStart, close);
-    const p = arrow.param;
-    k = close + 1;
-    return { p, body };
-  };
-  let f = null;
-  if (isP(F.ct[k], '.') && isId(F.ct[k + 1], 'filter')) {
-    f = chain('filter');
-    if (!f || !(f.body === `process . env [ ${f.p} ] !== undefined` || f.body === `${f.p} in process . env`)) {
-      return no('its .filter( is not the canon predicate process.env[k] !== undefined or k in process.env');
-    }
-  }
-  const m = chain('map');
-  if (!m || m.body !== `[ ${m.p} , process . env [ ${m.p} ] ]`) return no('its .map( is not the canon (k) => [k, process.env[k]]');
-  if (k !== end) return no('its Object.fromEntries(...) chain has more after .map(...)');
-  return keyListVerdict(F, F.ct[keysTok].v, keysTok);
+  return null;
 }
 
-// A value: process.env only by a named key, no computed index into a value.
-function valueVerdict(F, a, b) {
-  for (let k = a; k < b; k++) {
-    const t = F.ct[k];
-    if (t.t === 'id' && t.v === 'process') {
-      if (isP(F.ct[k + 1], '.') && isId(F.ct[k + 2], 'env')) {
-        const n = F.ct[k + 3];
-        const named = (isP(n, '.') && F.ct[k + 4] && F.ct[k + 4].t === 'id') || (isP(n, '[') && F.ct[k + 4] && F.ct[k + 4].t === 'str' && isP(F.ct[k + 5], ']'));
-        if (!named) return 'reads process.env other than by a named key (process.env.NAME or process.env["NAME"])';
-      } else if (isP(F.ct[k + 1], '[')) return 'reaches process by a computed key';
+// Object.fromEntries(LIST[.filter(F)].map(M)) -- undefined when the tokens are not that shape, else null | reason.
+function matchPick(ctx, a, b, st) {
+  const { toks, m } = ctx;
+  if (!(isId(toks[a], 'Object') && isP(toks[a + 1], '.') && isId(toks[a + 2], 'fromEntries') && isP(toks[a + 3], '(') && m.get(a + 3) === b - 1)) return undefined;
+  let n = a + 4;
+  let listIdx = -1;
+  let inlineArr = null;
+  if (isP(toks[n], '[')) { const c = m.get(n); if (c === undefined) return undefined; inlineArr = [n + 1, c]; n = c + 1; }
+  else if (toks[n] && toks[n].k === 'id') { listIdx = n; n++; }
+  else return undefined;
+  if (isP(toks[n], '.') && isId(toks[n + 1], 'filter') && isP(toks[n + 2], '(')) {
+    const fc = m.get(n + 2);
+    if (fc === undefined || !PICK_FILTERS.has(canonArrow(toks, n + 3, fc))) return undefined;
+    n = fc + 1;
+  }
+  if (!(isP(toks[n], '.') && isId(toks[n + 1], 'map') && isP(toks[n + 2], '('))) return undefined;
+  const mc = m.get(n + 2);
+  if (mc === undefined || canonArrow(toks, n + 3, mc) !== PICK_MAP || mc + 1 !== b - 1) return undefined;
+  if (inlineArr) {
+    const r = listElements(ctx, inlineArr[0], inlineArr[1]);
+    if (r) return r;
+  } else {
+    const name = toks[listIdx].v;
+    const ds = ctx.decls.get(name) || [];
+    if (ds.length !== 1 || ds[0].init < 0 || !isP(toks[ds[0].init], '[')) return `${name} is not a single const array literal here`;
+    const c = m.get(ds[0].init);
+    if (c === undefined) return `${name} is not a single const array literal here`;
+    const r = listElements(ctx, ds[0].init + 1, c) || usesCheck(ctx, name, new Set([listIdx]), 'list');
+    if (r) return r;
+  }
+  st.ambient = true;
+  return null;
+}
+
+// A value (the right side of KEY:, or a shorthand): reads process.env one named key at a time, holds no spread.
+function judgeValue(ctx, a, b, st) {
+  const { toks } = ctx;
+  for (let n = a; n < b; n++) {
+    const t = toks[n];
+    if (isP(t, '...')) return 'a spread inside a value';
+    if (isId(t, 'process')) {
+      if (!isP(toks[n + 1], '.')) return 'process is used other than as process.NAME';
+      if (isId(toks[n + 2], 'env')) {
+        const after = toks[n + 3];
+        if (isP(after, '[') || (isP(after, '.') && toks[n + 4] && toks[n + 4].k === 'id')) st.ambient = true;
+        else return 'a value that is process.env itself';
+      }
     }
-    if (isP(t, '[')) {
-      const p = F.ct[k - 1];
-      const isIndex = p && k > a && (p.t === 'id' || p.t === 'str' || p.t === 'num' || isP(p, ')') || isP(p, ']'));
-      if (isIndex && !(F.ct[k + 1] && F.ct[k + 1].t === 'str' && isP(F.ct[k + 2], ']'))) return 'indexes a value by a computed key, which could name any variable of the environment';
+  }
+  if (b - a === 1 && toks[a].k === 'id') {
+    const ds = ctx.decls.get(toks[a].v) || [];
+    for (const d of ds) {
+      if (d.init < 0) continue;
+      const e = exprEnd(ctx, d.init, true);
+      for (let n = d.init; n < e; n++) {
+        if (isId(toks[n], 'process') && !(isP(toks[n + 1], '.') && isId(toks[n + 2], 'env') && (isP(toks[n + 3], '[') || (isP(toks[n + 3], '.') && toks[n + 4] && toks[n + 4].k === 'id')))) return `${toks[a].v} holds process.env whole`;
+      }
     }
   }
   return null;
 }
 
-// The object literal ct[a..b] (a is its `{`, b its `}`) as an allowlist, or a reason.
-function allowlistObject(F, a, b) {
-  const span = textNoComments(F, a, b + 1);
-  for (const m of span.matchAll(/\bgit_[\w$]*/gi)) {
-    if (!isSafeGitName(m[0])) return no(`names ${m[0]}, which is not one of the harmless GIT_ names (${[...SAFE_GIT_KEYS].join(', ')})`);
+function judgeMember(ctx, a, b, st, keys) {
+  const { toks } = ctx;
+  if (isP(toks[a], '...')) return judgeExpr(ctx, a + 1, b, st);
+  let key;
+  let va;
+  if (toks[a] && (toks[a].k === 'id' || toks[a].k === 'str') && isP(toks[a + 1], ':')) {
+    if (toks[a].k === 'str' && cooked(toks[a]) === null) return 'a key with an escape';
+    key = toks[a].v;
+    va = a + 2;
+  } else if (b - a === 1 && toks[a].k === 'id') { key = toks[a].v; va = a; }
+  else return 'a member the census cannot read (a computed key, a method, a getter or a number key)';
+  const U = key.toUpperCase();
+  if (U === '__PROTO__') return 'a __proto__ member sets the prototype of the env';
+  if (keys.has(U)) return `the key ${key} appears twice`;
+  keys.add(U);
+  if (U.startsWith('GIT_')) {
+    if (U === NOSYSTEM) {
+      if (!(b - va === 1 && cooked(toks[va]) === '1')) return 'GIT_CONFIG_NOSYSTEM is not the literal \'1\'';
+      st.nosys = true;
+    } else if (!SAFE_NARROWING.has(U)) return `the env sets ${key}, a GIT_ name that can aim git elsewhere`;
   }
-  let noSystem = -1;
-  let noSystemCount = 0;
-  let lastSpread = -1;
-  const parts = splitTop(F, a + 1, b);
-  for (let p = 0; p < parts.length; p++) {
-    const [s, e] = parts[p];
-    if (s >= e) continue; // a trailing comma
-    const first = F.ct[s];
-    if (isP(first, '...')) {
-      const bad = spreadVerdict(F, s + 1, e);
-      if (!bad.ok) return bad;
-      lastSpread = p;
-      continue;
-    }
-    if (isP(first, '[')) return no('has a computed key, which the census cannot read');
-    let key;
-    if (first.t === 'id') key = decodeIdent(first.v);
-    else if (first.t === 'str') key = decodeString(first.v);
-    else return no(`has a property the census cannot read (${srcOf(F, s, e).slice(0, 40)})`);
-    if (key === null) return no('has a key the census cannot decode');
-    if (key === '__proto__') return no('sets __proto__');
-    if (!isSafeGitName(key)) return no(`names ${key}, which is not one of the harmless GIT_ names (${[...SAFE_GIT_KEYS].join(', ')})`);
-    const shorthand = e === s + 1 && first.t === 'id';
-    if (!shorthand && !isP(F.ct[s + 1], ':')) return no(`has a property the census cannot read (${srcOf(F, s, e).slice(0, 40)})`);
-    const vs = shorthand ? e : s + 2;
-    if (key.toUpperCase() === 'GIT_CONFIG_NOSYSTEM') {
-      noSystemCount += 1;
-      noSystem = p;
-      const vt = F.ct[vs];
-      const single = e === vs + 1 && vt && ((vt.t === 'str' && decodeString(vt.v) === '1') || (vt.t === 'num' && vt.v === '1'));
-      if (!single) return no(`sets GIT_CONFIG_NOSYSTEM to ${srcOf(F, vs, e) || '(nothing)'}, and it must be the literal 1`);
-    }
-    const bad = valueVerdict(F, vs, e);
-    if (bad) return no(bad);
-  }
-  if (noSystemCount === 0) return no('does not set GIT_CONFIG_NOSYSTEM to 1 (git reads the system config file whatever the env holds, so the list must switch it off)');
-  if (noSystemCount > 1) return no('sets GIT_CONFIG_NOSYSTEM more than once, and the last one wins');
-  if (noSystem < lastSpread) return no('sets GIT_CONFIG_NOSYSTEM before a spread, which can bring an ambient value that overrides it');
-  return ok('allowlist');
+  return judgeValue(ctx, va, b, st);
 }
 
-// A whole-call env `NAME(...)` over ct[a..b): the room's imported helper, or a same-file helper that returns one allowlist literal.
-function callVerdict(F, a, b) {
-  const name = F.ct[a].v;
-  if (TRUSTED_HELPER_NAMES.has(name) && importedFromRoomHelper(F, name) && declsOf(F, name).length === 0) {
-    // the import is the only place the name may be bound: a parameter or a rebinding of it would be a different function
-    const stray = mentions(F, name).filter((k) => {
-      if (isP(F.ct[k + 1], '(')) return false;
-      const o = F.idx.encl[k];
-      const bindingList = o !== -1 && isP(F.ct[o], '{') && (isId(F.ct[F.idx.pair[o] + 1], 'from') || isP(F.ct[F.idx.pair[o] + 1], '='));
-      return !bindingList;
-    });
-    if (!stray.length) return ok('gitEnv');
-    return no(`${name} is mentioned other than as a call (line ${lineAt(F, stray[0])}), so a parameter or a rebinding may stand in for the room's helper`, { helper: true });
+function judgeObject(ctx, a, b, st) {
+  const keys = new Set();
+  let n = a + 1;
+  while (n < b - 1) {
+    const e = Math.min(exprEnd(ctx, n, false), b - 1);
+    if (e > n) { const r = judgeMember(ctx, n, e, st, keys); if (r) return r; }
+    n = e + 1;
   }
-  const h = helperLiteral(F, name);
-  if (h.reason) {
-    if (TRUSTED_HELPER_NAMES.has(name)) return no(`${name}() is a helper this file does not import from the room's git-env.mjs, and ${h.reason}; the census trusts the NAME ${name} only for the room's own helper (pin the file by blob id or import it)`, { helper: true });
-    return no(h.reason, { helper: true });
-  }
-  const lit = allowlistObject(F, h.range[0], h.range[1]);
-  if (!lit.ok) return no(`${name}() returns a literal that fails as an allowlist: ${lit.reason}`, { helper: true });
-  return ok('helper');
+  return null;
 }
 
-// An identifier env over token k: its declaration, its mentions, its scope, and what it is assigned.
-function aliasVerdict(F, name, spawnTok) {
-  const decls = declsOf(F, name);
-  if (decls.length === 0) return no(`is not declared \`const ${name} = gitEnv(...)\` in this file`, { alias: true });
-  if (decls.length > 1) return no(`is declared ${decls.length} times in this file, so the census cannot tell which one the spawn reads`, { alias: true, attempted: true });
-  const d = decls[0];
-  const rhsFail = (reason, attempted) => no(`is not declared \`const ${name} = gitEnv(...)\` in this file`, { alias: true, attempted, note: reason });
-  if (d.kind !== 'const') return no(`is declared with ${d.kind}, and only const cannot be reassigned`, { alias: true, attempted: true });
-  if (!isP(F.ct[d.k + 1], '=')) return no(`is not assigned in its declaration`, { alias: true, attempted: true });
-  const r0 = d.k + 2;
-  const t0 = F.ct[r0];
-  let verdict;
-  let rhsEnd;
-  if (isP(t0, '{')) {
-    rhsEnd = F.idx.pair[r0];
-    verdict = allowlistObject(F, r0, rhsEnd);
-  } else if (t0 && t0.t === 'id' && isP(F.ct[r0 + 1], '(')) {
-    rhsEnd = F.idx.pair[r0 + 1];
-    verdict = callVerdict(F, r0, rhsEnd + 1);
+function judgeIdent(ctx, n, st) {
+  const name = ctx.toks[n].v;
+  const ds = ctx.decls.get(name) || [];
+  if (ds.length !== 1 || ds[0].init < 0) return `${name} is not declared exactly once here with an initializer (a parameter, an import, a destructured or a repeated name)`;
+  if (ds[0].kind === 'var') return `${name} is a var: its declaration is hoisted, so at the spawn it can still be undefined, which hands the child the whole environment`;
+  if (ds[0].n > st.at) return `${name} is declared after the spawn that uses it, so it is undefined there (and undefined hands the child the whole environment)`;
+  const r = usesCheck(ctx, name, st.sites, 'env');
+  if (r) return r;
+  return judgeExpr(ctx, ds[0].init, exprEnd(ctx, ds[0].init, true), st);
+}
+
+// The returned expressions of a helper defined in this file: [[a,b), ...] or a reason string.
+function helperReturns(ctx, name) {
+  const { toks, m } = ctx;
+  const ds = ctx.decls.get(name) || [];
+  const fs_ = ctx.funcs.get(name) || [];
+  if (ds.length + fs_.length !== 1) return `${name} is not defined exactly once in this file`;
+  let body;
+  if (fs_.length) {
+    let n = fs_[0] + 1;
+    if (!isP(toks[n], '(') || m.get(n) === undefined) return `${name} is not a readable function`;
+    n = m.get(n) + 1;
+    if (!isP(toks[n], '{') || m.get(n) === undefined) return `${name} is not a readable function`;
+    body = { block: [n + 1, m.get(n)] };
   } else {
-    return no(`is not declared \`const ${name} = gitEnv(...)\` in this file`, { alias: true });
+    let n = ds[0].init;
+    if (n < 0) return `${name} has no initializer`;
+    if (isId(toks[n], 'async')) n++;
+    if (isId(toks[n], 'function')) {
+      n++;
+      if (toks[n] && toks[n].k === 'id') n++;
+      if (!isP(toks[n], '(') || m.get(n) === undefined) return `${name} is not a readable function`;
+      n = m.get(n) + 1;
+      if (!isP(toks[n], '{') || m.get(n) === undefined) return `${name} is not a readable function`;
+      body = { block: [n + 1, m.get(n)] };
+    } else {
+      if (toks[n] && toks[n].k === 'id' && isP(toks[n + 1], '=>')) n += 2;
+      else if (isP(toks[n], '(') && m.get(n) !== undefined && isP(toks[m.get(n) + 1], '=>')) n = m.get(n) + 2;
+      else return `${name} is not a function this census can read (it is a value, or defined elsewhere)`;
+      if (isP(toks[n], '{') && m.get(n) !== undefined) body = { block: [n + 1, m.get(n)] };
+      else body = { expr: [n, exprEnd(ctx, n, true)] };
+    }
   }
-  if (!statementEnds(F, rhsEnd)) return no('is assigned from more than the bare expression', { alias: true, attempted: true });
-  const changed = mutationOf(name, F.text);
-  if (changed) return no(`is mutated after it is assigned (line ${lineOf(F.text, changed.index)})`, { alias: true, attempted: true });
-  // every mention: the declaration, or the value of an `env` property inside a child_process call
-  for (const k of mentions(F, name)) {
-    if (k === d.k) continue;
-    const prev = F.ct[k - 1];
-    const next = F.ct[k + 1];
-    const inObject = F.idx.encl[k] !== -1 && isP(F.ct[F.idx.encl[k]], '{');
-    const isKey = inObject && isP(next, ':') && (isP(prev, '{') || isP(prev, ','));
-    if (isKey) continue;
-    const asValue = inObject && isP(prev, ':') && isId(F.ct[k - 2], 'env') || (inObject && isP(prev, ':') && F.ct[k - 2] && F.ct[k - 2].t === 'str' && decodeString(F.ct[k - 2].v) === 'env');
-    const asShorthand = name === 'env' && inObject && (isP(prev, '{') || isP(prev, ',')) && (isP(next, ',') || isP(next, '}'));
-    const inCall = F.callRanges.some(([lo, hi]) => k > lo && k < hi);
-    if ((asValue || asShorthand) && inCall) continue;
-    return no(`is used outside its declaration and a child_process env: property (line ${lineAt(F, k)}), so it may be copied, handed to a function or changed there`, { alias: true, attempted: true });
+  if (body.expr) return [body.expr];
+  const out = [];
+  for (let n = body.block[0]; n < body.block[1]; n++) {
+    if (isId(toks[n], 'return')) {
+      const e = Math.min(exprEnd(ctx, n + 1, true, true), body.block[1]); // a comma in a return is the comma operator: the value is the last operand, so the whole statement is read (F46)
+      if (e > n + 1) out.push([n + 1, e]);
+    }
   }
-  if (!inScope(F, d.k, spawnTok)) return no('is declared in a block the spawn is not inside, so the spawn reads a different binding', { alias: true, attempted: true });
-  if (!verdict.ok) {
-    if (verdict.helper) return no(`is not declared \`const ${name} = gitEnv(...)\` in this file`, { alias: true, attempted: true, note: verdict.reason });
-    return rhsFail(verdict.reason, isP(t0, '{'));
-  }
-  return verdict;
+  return out.length ? out : `${name} returns nothing this census can read`;
 }
 
-// The verdict for the env expression at ct[a..b), inside the spawn that opens at token `spawnTok`.
-function exprVerdict(F, a, b, spawnTok) {
-  const t0 = F.ct[a];
-  if (a >= b) return no('(empty)');
-  if (isP(t0, '{') && F.idx.pair[a] === b - 1) return allowlistObject(F, a, b - 1);
-  if (t0.t === 'id' && isP(F.ct[a + 1], '(') && F.idx.pair[a + 1] === b - 1) return callVerdict(F, a, b);
-  if (t0.t === 'id' && b === a + 1) return aliasVerdict(F, t0.v, spawnTok);
-  return no('');
+function judgeCall(ctx, a, b, st) {
+  const name = ctx.toks[a].v;
+  const defined = (ctx.decls.get(name) || []).length + (ctx.funcs.get(name) || []).length > 0;
+  if (!defined) {
+    if (TRUSTED_NAMES.has(name)) {
+      if (ctx.gitEnvAssigned || ctx.shadowed || ctx.gitEnvParam) return `${name} is assigned, bound as a parameter or catch binding, or reachable through globalThis in this file, so its name proves nothing`;
+      // every binding of the name counts (a function-scope destructure of another module beside a trusted top-level import)
+      const imp = (ctx.imports.get(name) || []).find((b) => !(b.imported === name && ownGitEnvSource(ctx.rel, b.src)));
+      if (imp) return `${name} is imported ${imp.src === null ? 'from a source the census cannot read' : `from '${imp.src}'${imp.imported === name ? '' : ` as ${imp.imported}`}`}, not by that name from the room's own git-env.mjs (the census does not open the module, so it trusts only that one)`;
+      st.trusted = true;
+      return null;
+    }
+    return `${name}(...) is a helper this file does not define (the census reads only same-file helpers, and trusts only gitEnv and gitTestEnv by name)`;
+  }
+  if (ctx.memo.has(name)) return `${name} calls itself`;
+  const rets = helperReturns(ctx, name);
+  if (typeof rets === 'string') return rets;
+  ctx.memo.add(name);
+  try {
+    for (const [ra, rb] of rets) { const r = judgeExpr(ctx, ra, rb, st); if (r) return `${name}() returns an env the census refuses: ${r}`; }
+  } finally { ctx.memo.delete(name); }
+  return null;
 }
 
-const mentionsProcessEnv = (F, a, b) => {
-  for (let k = a; k < b; k++) {
-    if (!isId(F.ct[k], 'process')) continue;
-    if (isP(F.ct[k + 1], '.') && isId(F.ct[k + 2], 'env')) return true;
-    if (isP(F.ct[k + 1], '[') && F.ct[k + 2] && F.ct[k + 2].t === 'str' && decodeString(F.ct[k + 2].v) === 'env') return true;
+function judgeExpr(ctx, a, b, st) {
+  if (st.depth >= MAX_DEPTH) return 'an env expression nested too deeply to read';
+  st.depth++;
+  try { return judgeExpr0(ctx, a, b, st); } finally { st.depth--; }
+}
+
+function judgeExpr0(ctx, a, b, st) {
+  const { toks, m } = ctx;
+  while (b - a >= 2 && isP(toks[a], '(') && m.get(a) === b - 1) { a++; b--; }
+  if (a >= b) return 'an empty env expression';
+  const t0 = toks[a];
+  if (isP(t0, '(')) { // ( () => E )()
+    const c = m.get(a);
+    if (c !== undefined && c + 3 === b && isP(toks[c + 1], '(') && isP(toks[c + 2], ')') && isP(toks[a + 1], '(') && isP(toks[a + 2], ')') && isP(toks[a + 3], '=>')) return judgeExpr(ctx, a + 4, c, st);
+  }
+  if (b - a === 1 && t0.k === 'id') return judgeIdent(ctx, a, st);
+  if (t0.k === 'id' && isP(toks[a + 1], '(') && m.get(a + 1) === b - 1) return judgeCall(ctx, a, b, st);
+  if (isP(t0, '{') && m.get(a) === b - 1) return judgeObject(ctx, a, b, st);
+  const pick = matchPick(ctx, a, b, st);
+  if (pick !== undefined) return pick;
+  return 'an expression the census cannot read whole';
+}
+
+// The whole judgement of one env value starting at token a, ending before b.
+function judgeEnv(ctx, a, b, sites, at) {
+  const st = { depth: 0, ambient: false, nosys: false, trusted: false, sites, at };
+  const r = judgeExpr(ctx, a, b, st);
+  if (r) return r;
+  if (ctx.envTainted) {
+    const bare = ctx.toks[a] && ctx.toks[a].k === 'id' && (ctx.toks[a].v === 'gitEnv' || ctx.toks[a].v === 'gitTestEnv') && isP(ctx.toks[a + 1], '(') && ctx.m.get(a + 1) === b - 1;
+    if (!(bare && st.trusted && !st.ambient)) return 'this file rebinds process or a builtin the grammar leans on (an alias, the process module, Object, JSON, globalThis ...), so only a bare gitEnv() call is read';
+  }
+  if (st.ambient && ctx.envImport) return 'this file imports the process module, so a named read of the environment cannot be told from a whole copy';
+  if (st.ambient && !st.nosys && !st.trusted) return 'the env reads process.env but sets no GIT_CONFIG_NOSYSTEM: \'1\'';
+  return null;
+}
+
+// true when the env value, or the one declaration an identifier in it names, holds process.env whole (picks the finding's wording).
+function holdsWholeEnv(ctx, a, b) {
+  const { toks } = ctx;
+  const scan = (x, y) => {
+    for (let n = x; n < y; n++) {
+      if (!isId(toks[n], 'process')) continue;
+      if (!isP(toks[n + 1], '.') || (isId(toks[n + 2], 'env') && !(isP(toks[n + 3], '[') || (isP(toks[n + 3], '.') && toks[n + 4] && toks[n + 4].k === 'id')))) return true;
+    }
+    return false;
+  };
+  if (scan(a, b)) return true;
+  for (let n = a; n < b; n++) {
+    if (toks[n].k !== 'id') continue;
+    for (const d of ctx.decls.get(toks[n].v) || []) if (d.init >= 0 && scan(d.init, exprEnd(ctx, d.init, true))) return true;
   }
   return false;
-};
-
-// The env property of a spawn call, or the finding that says why there is not exactly one.
-function envProps(F, open, close) {
-  const found = [];
-  for (let k = open + 1; k < close; k++) {
-    const t = F.ct[k];
-    if (isP(t, '[') && F.ct[k + 1] && F.ct[k + 1].t === 'str' && decodeString(F.ct[k + 1].v) === 'env' && isP(F.ct[k + 2], ']') && isP(F.ct[k + 3], ':')
-      && (isP(F.ct[k - 1], '{') || isP(F.ct[k - 1], ',')) && F.idx.encl[k] !== -1 && isP(F.ct[F.idx.encl[k]], '{')) {
-      found.push({ k, obj: F.idx.encl[k], start: k + 4, end: k + 5, shorthand: false, computed: true });
-      continue;
-    }
-    const name = t.t === 'id' ? decodeIdent(t.v) : t.t === 'str' ? decodeString(t.v) : null;
-    if (name !== 'env') continue;
-    const o = F.idx.encl[k];
-    if (o === -1 || !isP(F.ct[o], '{') || o < open) continue;
-    const prev = F.ct[k - 1];
-    const next = F.ct[k + 1];
-    if (!(isP(prev, '{') || isP(prev, ','))) continue;
-    if (isP(next, ':')) {
-      let e = k + 2;
-      const stop = F.idx.pair[o];
-      while (e < stop) {
-        if (isOpener(F.ct[e])) { e = F.idx.pair[e] + 1; continue; }
-        if (isP(F.ct[e], ',')) break;
-        e += 1;
-      }
-      found.push({ k, obj: o, start: k + 2, end: e, shorthand: false });
-    } else if (t.t === 'id' && (isP(next, ',') || isP(next, '}'))) {
-      found.push({ k, obj: o, start: k, end: k + 1, shorthand: true });
-    }
-  }
-  return found;
 }
 
-// null = the env is safe by the room's own helper alone; { allowlist: true, kind, expr } = a sound allowlist; otherwise { why, expr }.
-function envVerdict(F, open, close) {
-  const props = envProps(F, open, close);
-  if (props.length === 0) return { why: "carries no 'env:' -- every git child must take env: gitEnv(...) (CWK-133)", expr: null };
-  const p = props[props.length - 1];
-  const expr = p.shorthand ? 'env' : srcOf(F, p.start, p.end).trim();
-  if (props.length > 1) return { why: `has ${props.length} env properties, and the last one wins -- the census will not guess which`, expr };
-  if (p.computed) return { why: `sets env through a computed key, which the census cannot read -- spell it env: (CWK-136)`, expr };
-  // the env: property must sit in the spawn's OWN options object, not in an object a helper call will merge with another
-  if (F.idx.encl[p.obj] !== open) return { why: `the env: property is inside an object that is not an argument of the spawn itself (a call or an array wraps it), so another argument can override it -- take env from gitEnv(...) alone (CWK-136)`, expr };
-  // nothing else in that object may be, or look like, a second env: a getter, a computed key, the name again
-  for (let k = p.obj + 1; k < F.idx.pair[p.obj]; k++) {
-    if (isOpener(F.ct[k])) {
-      if (isP(F.ct[k], '[') && (isP(F.ct[k - 1], '{') || isP(F.ct[k - 1], ','))) return { why: `the options object has a computed key, which can be env -- take env from gitEnv(...) alone (CWK-136)`, expr };
-      k = F.idx.pair[k];
-      continue;
-    }
-    const t = F.ct[k];
-    const name = t.t === 'id' ? decodeIdent(t.v) : t.t === 'str' ? decodeString(t.v) : null;
-    if (name === 'env' && k !== p.k && !(k >= p.start && k < p.end) && !isP(F.ct[k - 1], '.')) return { why: `the options object mentions env more than once (line ${lineAt(F, k)}) -- the census will not guess which one wins`, expr };
-  }
-  // a spread AFTER the env property can bring its own env: and override this one
-  const stop = F.idx.pair[p.obj];
-  for (let k = p.end; k < stop; k++) {
-    if (isOpener(F.ct[k])) { k = F.idx.pair[k]; continue; }
-    if (isP(F.ct[k], '...')) return { why: `the options object spreads another object after env:, and that object can carry its own env: -- take env from gitEnv(...) alone (CWK-136)`, expr };
-  }
-  const v = p.shorthand ? aliasVerdict(F, 'env', open) : exprVerdict(F, p.start, p.end, open);
-  if (v.ok) return v.kind === 'gitEnv' ? null : { allowlist: true, kind: v.kind, expr };
-  const note = v.alias ? (v.note || '') : (v.reason || '');
-  const allowNote = note ? `; as an allowlist env it fails: ${note}` : '';
-  if (v.alias) return { why: `env: ${expr} ${v.reason}${allowNote} -- take env from gitEnv(...) alone (CWK-136)`, expr };
-  if (mentionsProcessEnv(F, p.start, p.end)) {
-    return { why: `env: ${expr} mentions process.env -- a git child inherits a hook's absolute GIT_DIR that way; take env from gitEnv(...) alone (CWK-136)${allowNote}`, expr };
-  }
-  return { why: `env: ${expr || '(empty)'} is not produced by gitEnv() alone -- the whole expression must be a call to it, or a const assigned from exactly that call (CWK-136)${allowNote}`, expr };
-}
+// ---------------------------------------------------------------------------
+// The census.
+// ---------------------------------------------------------------------------
+const GIT_COMMAND = /^(?:.*[\\/])?git(?:\.exe)?$/i;
+const SPAWNERS = new Set(['spawnSync', 'execFileSync']);
 
-// ---- the census -----------------------------------------------------------------------------------------------------------------------------------------------
-
-function fileContext(label, text) {
-  const lx = lex(text);
-  if (lx.error) return { error: `${label}:${lineOf(text, lx.at)} could not be tokenized (${lx.error}) -- the census cannot vouch for a file it cannot read whole` };
-  const ct = codeTokens(lx.tokens);
-  const idx = indexTokens(ct);
-  if (!idx) return { error: `${label} has brackets that do not balance -- the census cannot vouch for a file it cannot read whole` };
-  return { label, text, tokens: lx.tokens, comments: lx.tokens.filter((t) => t.t === 'comment'), ct, idx, callRanges: [] };
-}
-
-export function censusGitSpawns(files, { exemptions = GIT_ENV_EXEMPTIONS } = {}) {
+// One reading of one file: every spawner token `accept` takes, judged. Returns the findings in source order and, for each counted git
+// spawn (keyed by the offset of its spawner token), whether its env was judged safe.
+function scanOne(rel, ctx, accept) {
   const findings = [];
-  const gitSpawns = [];
-  const exempt = [];
-  const allowlist = [];
-  const matched = new Map(); // exemption -> how many spawns it has been spent on
-  let nodeChildren = 0;
-  for (const { label, text } of files) {
-    if (text === null || text === undefined) {
-      findings.push(`${label} could not be read -- the census cannot vouch for a file it never saw`);
+  const calls = new Map();
+  const { toks, m } = ctx;
+  const fileSites = new Set();
+  const spawns = [];
+  for (let n = 0; n < toks.length; n++) {
+    const t = toks[n];
+    if (t.k !== 'id' || !SPAWNERS.has(t.v) || !accept(t)) continue;
+    // A spawner named anywhere but as a call is a finding: an import under another name, a destructure with a rename, an alias
+    // (const run = spawnSync), a value, an argument, and spawnSync.call / .apply / .bind / Reflect.apply(spawnSync, ...), none of
+    // which the census can count. Only an import or destructure LIST names it without calling it.
+    if (!isP(toks[n + 1], '(')) {
+      const prev = toks[n - 1];
+      const next = toks[n + 1];
+      const o = nearestOpener(ctx, n);
+      const listShape = (isP(prev, '{') || isP(prev, ',')) && (isP(next, ',') || isP(next, '}')) && o >= 0 && isP(toks[o], '{');
+      if (!listShape) findings.push(`${rel}:${t.ln} ${t.v} is named other than as a call (re-bound, aliased, passed on, or reached by .call / .apply / .bind) -- the census cannot follow it, so it cannot count its git spawns`);
       continue;
     }
-    const b = bindingsOf(text);
-    const hits = [...text.matchAll(b.re)];
-    if (!hits.length) continue;
-    const F = fileContext(label, text);
-    if (F.error) { findings.push(F.error); continue; }
-    // every child_process call that is code (not text in a comment, a string, a regex or a template), with its parens as token indexes
-    const calls = [];
-    for (const m of hits) {
-      if (inNonCode(F.tokens, m.index)) continue;
-      const openChar = m.index + m[0].length - 1;
-      const open = F.ct.findIndex((t) => t.s === openChar);
-      const close = open === -1 ? -1 : F.idx.pair[open];
-      calls.push({ m, open, close });
-      if (open !== -1 && close !== -1) F.callRanges.push([open, close]);
+    const first = toks[n + 2];
+    const second = toks[n + 3];
+    const gitCmd = first && ((first.k === 'str' && GIT_COMMAND.test(first.v)) || (first.k === 'tpl' && !(second && second.k === 'tplopen') && GIT_COMMAND.test(first.v)));
+    if (!gitCmd || !(isP(second, ',') || isP(second, ')'))) continue;
+    calls.set(t.i, false);
+    const open = n + 1;
+    const close = m.get(open);
+    if (close === undefined) { findings.push(`${rel}:${t.ln} unbalanced parens scanning a ${t.v}('git', ...) call -- census cannot verify it`); continue; }
+    // The env must be a top-level member of an OBJECT ARGUMENT of this call (the options), never one nested in the args array
+    // or in another value: a decoy env elsewhere in the call would be judged while the real options inherit process.env.
+    const sites = [];
+    let ca = open + 1;
+    while (ca < close) {
+      const ce = Math.min(exprEnd(ctx, ca, false), close);
+      if (isP(toks[ca], '{') && m.get(ca) === ce - 1) {
+        const found = [];
+        let spread = false;
+        for (let k = ca + 1; k < ce - 1;) {
+          const me = Math.min(exprEnd(ctx, k, false), ce - 1);
+          if (isP(toks[k], '...') || isP(toks[k], '[') || ((isId(toks[k], 'get') || isId(toks[k], 'set')) && toks[k + 1] && (toks[k + 1].k === 'id' || toks[k + 1].k === 'str') && isP(toks[k + 2], '('))) spread = true;
+          else if ((isId(toks[k], 'env') || (toks[k] && toks[k].k === 'str' && toks[k].v === 'env')) && isP(toks[k + 1], ':')) found.push({ j: k, a: k + 2, b: me, shorthand: false });
+          else if (isId(toks[k], 'env') && me - k === 1) found.push({ j: k, a: k, b: k + 1, shorthand: true });
+          k = me + 1;
+        }
+        for (const x of found) sites.push({ ...x, spread });
+      }
+      ca = ce + 1;
     }
-    for (const { m, open, close } of calls) {
-      const fn = m.groups.qfn || m.groups.ifn || b.locals.get(m.groups.loc);
-      const line = lineOf(text, m.index);
-      if (open === -1 || close === -1) {
-        findings.push(`${label}:${line} unbalanced parens reading a ${fn}(...) call -- the census cannot vouch for it`);
-        continue;
-      }
-      const args = splitTop(F, open + 1, close);
-      const [fs0, fe0] = args[0];
-      const firstSrc = srcOf(F, fs0, fe0).replace(/\s+/g, '');
-      if (firstSrc === 'process.execPath') { nodeChildren++; continue; }
-      const ft = F.ct[fs0];
-      // a string is read twice, as written and with its escapes resolved: 'g\x69t' is git, and so is a Windows path whose backslashes were never doubled
-      const variants = (t) => {
-        if (t.t === 'str') { const d = decodeString(t.v); return d === null ? [t.v.slice(1, -1)] : [...new Set([t.v.slice(1, -1), d])]; }
-        if (t.t === 'tpl' && t.v.startsWith('`') && t.v.endsWith('`') && t.v.length >= 2 && !t.v.endsWith('${')) return [t.v.slice(1, -1)];
-        return null;
-      };
-      const cmds = fe0 === fs0 + 1 ? variants(ft) : null;
-      if (cmds === null) {
-        // 08d: a COMMAND row (command: the first argument's source) pins ONE non-literal command in one byte-equal carrier, by blob id and count -- never a blanket pass for a file
-        const cmdSrc = normalise(srcOf(F, fs0, fe0));
-        const sameCmd = (e) => e.command !== undefined && e.label === label && normalise(e.command) === cmdSrc;
-        const exC = exemptions.find((e) => sameCmd(e) && (e.blob === undefined || blobId(text) === e.blob));
-        if (exC) {
-          const n = (matched.get(exC) || 0) + 1;
-          matched.set(exC, n);
-          const entry = { label, line, fn, exempt: true };
-          gitSpawns.push(entry);
-          if (n <= (exC.count ?? 1)) { exempt.push({ label, line, expr: `command ${cmdSrc}`, reason: exC.reason }); continue; }
-          findings.push(`${label}:${line} ${fn}(...) command ${cmdSrc} matches the exemption for ${exC.label}, which allows ${exC.count ?? 1} spawn(s) -- this is spawn ${n}; a new spawn needs its own exemption`);
-          continue;
-        }
-        const pinnedC = exemptions.find((e) => sameCmd(e));
-        if (pinnedC) {
-          findings.push(`${label}:${line} ${fn}(...) command ${cmdSrc} is exempt only at blob ${pinnedC.blob}, and this file's blob id is ${blobId(text)}: re-derive the row from the template or drop the pin with its reason`);
-          continue;
-        }
-        findings.push(`${label}:${line} ${fn}(...) command is not a string literal or process.execPath -- the census cannot prove it is not git; spell the command as a literal`);
-        continue;
-      }
-      const restStart = fe0 < close ? fe0 : close;
-      const strs = (from, to) => {
-        const out = [];
-        for (let k = from; k < to; k++) {
-          const vs = variants(F.ct[k]);
-          if (vs) out.push(...vs);
-        }
-        return out;
-      };
-      const restSrc = srcOf(F, restStart, close);
-      let isGit = false;
-      if (SHELL_STRING_FNS.has(fn) || /\bshell\s*:(?!\s*false\b)/.test(restSrc)) { // (?!\s*false) not \s*(?!false): the latter backtracks off the space and reads `shell: false` as a shell
-        // A command STRING run by a shell. With `shell:` set Node JOINS the arguments array into that command line, so git named only in the arguments is git too
-        // (an array literal; a variable is named open).
-        const second = args[1];
-        const argStrings = second && isP(F.ct[second[0]], '[') ? strs(second[0], second[1]) : [];
-        isGit = cmds.some((c) => shellMentionsGit(c)) || argStrings.some((x) => shellMentionsGit(x));
-      } else if (cmds.some((c) => GIT_BASENAME.test(c.split(/[\\/]/).pop()))) isGit = true; // git, however the binary is spelled
-      else if (cmds.some((c) => SHELLS.has(c.split(/[\\/]/).pop().toLowerCase()))) isGit = strs(restStart, close).some((x) => shellMentionsGit(x)); // sh -c '... git ...'
-      if (!isGit) continue;
-      const entry = { label, line, fn };
-      gitSpawns.push(entry);
-      const v = envVerdict(F, open, close);
-      if (!v) continue;
-      if (v.allowlist) {
-        allowlist.push({ label, line, expr: normalise(v.expr), kind: v.kind });
-        continue;
-      }
-      const sameSpawn = (e) => e.command === undefined && e.label === label && (e.expr === null ? v.expr === null : v.expr !== null && normalise(e.expr) === normalise(v.expr));
-      const pinOk = (e) => e.blob === undefined || blobId(text) === e.blob;
-      const ex = exemptions.find((e) => sameSpawn(e) && pinOk(e));
-      if (!ex) {
-        const pinned = exemptions.find((e) => sameSpawn(e) && !pinOk(e));
-        if (pinned) {
-          findings.push(`${label}:${line} ${fn}(git) ${v.why} -- the exemption for ${pinned.label} is pinned to blob ${pinned.blob}, and this file's blob id is ${blobId(text)}, not the pinned ${pinned.blob}: re-derive it from the template or drop the pin with its reason`);
-          continue;
-        }
-      }
-      if (ex) {
-        const want = ex.count ?? 1;
-        const n = (matched.get(ex) || 0) + 1;
-        matched.set(ex, n);
-        if (n <= want) {
-          entry.exempt = true;
-          exempt.push({ label, line, expr: v.expr === null ? null : normalise(v.expr), reason: ex.reason });
-        } else {
-          // R8 FIXBACK 2 LOW-1: the exemption is keyed to an EXPECTED COUNT, so a further spawn with the same
-          // expression in the same file is a finding, not a silent widening of the exemption.
-          findings.push(`${label}:${line} ${fn}(git) env: ${v.expr} matches the exemption for ${ex.label}, which allows ${want} spawn(s) -- this is spawn ${n}; a new spawn needs its own exemption or gitEnv(...) alone (CWK-136)`);
-        }
-        continue;
-      }
-      findings.push(`${label}:${line} ${fn}(git) ${v.why}`);
-    }
+    if (!sites.length) { findings.push(`${rel}:${t.ln} ${t.v}('git', ...) carries no 'env:' -- must route through gitEnv() (CWK-133/C-4)`); continue; }
+    for (const s of sites) fileSites.add(s.shorthand ? s.j : s.b - s.a === 1 ? s.a : -1);
+    spawns.push({ t, open, close, sites });
   }
-  // Stale: fewer spawns than the entry counts (none at all included). More than it counts is already a finding.
-  const unusedExemptions = exemptions
-    .map((e) => ({ label: e.label, expr: e.command !== undefined ? `command ${e.command}` : e.expr, want: e.count ?? 1, matched: matched.get(e) || 0 }))
-    .filter((e) => e.matched < e.want);
-  return { findings, gitSpawns, exempt, allowlist, unusedExemptions, nodeChildren };
+  for (const { t, open, sites } of spawns) {
+    let bad = null;
+    for (const s of sites) {
+      const reason = s.spread ? 'the options object holds a spread, a computed key or an accessor, which could override env' : judgeEnv(ctx, s.a, s.b, fileSites, open);
+      if (reason) { bad = { reason, s }; break; }
+    }
+    if (!bad) { calls.set(t.i, true); continue; }
+    const whole = holdsWholeEnv(ctx, bad.s.a, bad.s.b);
+    if (whole) findings.push(`${rel}:${t.ln} ${t.v}('git', ...) env: holds process.env without gitEnv() -- ambient GIT_* reaches the child (CWK-133/C-4, CWK-136)`);
+    else if (bad.s.shorthand) findings.push(`${rel}:${t.ln} ${t.v}('git', ...) shorthand env is neither an allowlist env (named keys, GIT_CONFIG_NOSYSTEM=1, no GIT_* beyond the safe three) nor resolvable here (${bad.reason}) -- route it through gitEnv() (CWK-133/C-4)`);
+    else findings.push(`${rel}:${t.ln} ${t.v}('git', ...) env: is neither gitEnv() nor an allowlist env of named keys (${bad.reason}) -- route it through gitEnv() (CWK-133/C-4)`);
+  }
+  return { findings, calls };
+}
+
+// The census of one file reads it more than once where a slash is ambiguous (ceiling item 1): once as lexed, and again for each '/' the
+// lexer took for division after a ')' or '}' that is not a block head, with that slash read as the start of a regex. The two readings
+// can part ways past the slash's own line, because the division reading may open a template or a backslash-continued string that
+// runs onto later lines and swallows a spawn there (X1-X3), so every spawn after the slash, to the end of the file, is judged again;
+// a spawn found by either reading is counted, and a finding from either reading is a finding. A second ambiguous slash that only
+// appears once the first is read as a regex is forced in turn, and a file whose readings pass MAX_READINGS is itself a finding. The
+// cost is a false finding on genuine division followed by a quote or a backtick, in a file that names a git spawn after it, never
+// a silent pass.
+const MAX_READINGS = 16;
+const hasSpawner = (text, from) => { const tail = text.slice(from); return [...SPAWNERS].some((s) => tail.includes(s)); };
+
+export function scanGitSpawns(files, exempt = CENSUS_EXEMPT) {
+  const findings = [];
+  let calls = 0;
+  let safe = 0;
+  let exempted = 0;
+  for (const { rel, text } of files) {
+    if (exempt.some((e) => e.rel === rel && e.blob === gitBlobId(text))) { exempted++; continue; }
+    const ctx = buildCtx(text, null, rel);
+    const base = scanOne(rel, ctx, () => true);
+    findings.push(...base.findings);
+    const state = new Map(base.calls);
+    const queue = ctx.amb.filter((a) => hasSpawner(text, a.i)).map((a) => ({ force: [a.i], ln: a.ln }));
+    for (let r = 0; r < queue.length; r++) {
+      const { force, ln } = queue[r];
+      if (r >= MAX_READINGS) { findings.push(`${rel}:${ln} more than ${MAX_READINGS} ways to read the slashes that precede a spawn (a '/' after a ')' or '}' may be division or a regex) -- the census stops reading and refuses the file`); break; }
+      const alt = buildCtx(text, new Set(force), rel);
+      const res = scanOne(rel, alt, (t) => t.i > force[0]);
+      for (const f of res.findings) if (!findings.includes(f)) findings.push(f);
+      for (const [i, ok] of res.calls) state.set(i, (state.has(i) ? state.get(i) : true) && ok);
+      for (const a of alt.amb) if (a.i > force[force.length - 1] && hasSpawner(text, a.i)) queue.push({ force: [...force, a.i], ln });
+    }
+    calls += state.size;
+    for (const ok of state.values()) if (ok) safe++;
+  }
+  return { findings, files: files.length, calls, safe, exempted };
+}
+
+export function censusGitSpawns(files, exempt = CENSUS_EXEMPT) {
+  return scanGitSpawns(files, exempt).findings;
+}
+
+// Real filesystem walk of scripts/**/*.mjs, `rel` relative to `repo` so a finding names the
+// exact path the reviewer's own manual census used (`scripts/lib/...`).
+export function collectScriptsMjs(repo) {
+  const scriptsDir = path.join(repo, 'scripts');
+  const files = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.mjs')) {
+        files.push({ rel: path.relative(repo, p).replace(/\\/g, '/'), text: fs.readFileSync(p, 'utf8') });
+      }
+    }
+  })(scriptsDir);
+  return files;
 }
