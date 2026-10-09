@@ -14,6 +14,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from './lib/git-env.mjs';
+import { GIT_ENV_PINS } from './lib/git-env-pins.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -269,7 +270,8 @@ test('CWK-133: verify.mjs asks git about ITS OWN repo when an absolute GIT_DIR i
 const PLANT_FN = 'spawn' + 'Sync';
 function plantSpawn(tmp, envText) {
   const call = PLANT_FN + "('git', ['status'], { cwd: '.'" + (envText ? ', env: ' + envText : '') + ' });';
-  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, ''].join('\n');
+  // 08d: the NAME gitEnv is trusted only when the file imports it from the room's git-env.mjs (witness F42). The import goes AFTER the call so the call stays on line 3.
+  const body = ['import { ' + PLANT_FN + " } from 'node:child_process';", '', call, "import { gitEnv } from './lib/git-env.mjs';", ''].join('\n');
   fs.writeFileSync(path.join(tmp, 'scripts', 'zz-planted.test.mjs'), body);
 }
 
@@ -335,48 +337,48 @@ test('CWK-120 #11: deleting bin/user-prompt-submit.js from source AND plugin/ FA
   assert.match(r.stdout, /FAIL bin\/user-prompt-submit\.js missing/);
 });
 
-// R8 FIXBACK M1: the gate's printed census line must not claim more than the instrument produced. The one
-// deliberate hazard fixture (a spawn fed a poisoned GIT_DIR on purpose) is a NAMED, COUNTED, PRINTED exemption.
-test('M1: the census line counts the exemption instead of claiming every spawn takes env from gitEnv() alone', (t) => {
+// R8 FIXBACK M1, kept for the canon census (09a): the gate's printed census line must not claim more than the instrument produced. The files a blob-pinned row holds out are
+// counted, NAMED and printed, never folded into "every spawn takes env from gitEnv() alone".
+test('M1: the census line counts the spawns it read safe and names every file a pinned blob held out, instead of claiming every spawn takes env from gitEnv() alone', (t) => {
   const tmp = mkTmp();
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   seed(tmp);
   const r = run(tmp);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\).*: (\d+) take env from gitEnv\(\) alone, (\d+) exempt by name \(([^)]*)\)/);
-  assert.ok(m, 'the ok line must split alone vs exempt, got:\n' + r.stdout);
-  assert.equal(Number(m[3]) + Number(m[4]), Number(m[1]), 'alone + exempt = every counted spawn');
-  assert.ok(Number(m[4]) >= 1, 'the hazard fixture is counted as exempt');
-  assert.match(m[5], /git-env\.test\.mjs/, 'the exemption names its file');
+  const m = r.stdout.match(/ok {3}(\d+) git spawn\(s\) across (\d+) file\(s\).*: (\d+) read safe[^,]*, (\d+) file\(s\) held out by a pinned blob \(([^)]*)\)/);
+  assert.ok(m, 'the ok line must say how many were read safe and how many files a pin held out, got:\n' + r.stdout);
+  assert.equal(m[3], m[1], 'every counted spawn is read safe, none is counted twice');
+  assert.equal(Number(m[4]), GIT_ENV_PINS.length, 'each pin holds one file out');
+  for (const pin of GIT_ENV_PINS) assert.ok(m[5].includes(pin.rel), pin.rel + ' is named on the line');
   assert.doesNotMatch(r.stdout, /every one takes env from gitEnv\(\) alone/, 'the old blanket claim is gone');
 });
 
-test('M1: an exemption whose spawn is gone FAILs the gate as stale', (t) => {
+test('M1: a pin whose file no longer matches its blob FAILs the gate as stale (the pin must not outlive its bytes)', (t) => {
   const tmp = mkTmp();
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   seed(tmp);
   const f = path.join(tmp, 'scripts', 'lib', 'git-env.test.mjs');
   fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('env: env || gitEnv(root)', 'env: gitEnv(root)'));
   const r = run(tmp);
-  assert.equal(r.status, 1, 'a stale exemption must FAIL, got:\n' + r.stdout);
-  assert.match(r.stdout, /FAIL .*exemption.*no longer matches/i);
+  assert.equal(r.status, 1, 'a stale pin must FAIL, got:\n' + r.stdout);
+  assert.match(r.stdout, /FAIL the census pin for scripts\/lib\/git-env\.test\.mjs .*matches no file of the walk/);
 });
 
-// R8 FIXBACK 2 LOW-1: the exemption is keyed to a COUNT, so a second spawn with the exempted expression in the
-// same file FAILs the gate as surely as a stale exemption does (INSPECT's X2: it used to PASS and print "2 exempt").
-test('L1: a second spawn with the exempted expression in the same file FAILs the gate', (t) => {
+// R8 FIXBACK 2 LOW-1, restated for the canon census: an edit to the pinned hazard fixture (here a second spawn with the same env expression) spends its pin, so the census reads the
+// file again and refuses the expression it cannot prove -- the widening is a FAIL, not a quiet pass.
+test('L1: a second spawn added to the pinned hazard fixture FAILs the gate (the edit spends the pin and the file is read again)', (t) => {
   const tmp = mkTmp();
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   seed(tmp);
   const f = path.join(tmp, 'scripts', 'lib', 'git-env.test.mjs');
   const src = fs.readFileSync(f, 'utf8');
   const anchor = "  const git = (cwd, args, env) => " + PLANT_FN + "('git', args, { cwd, encoding: 'utf8', env: env || gitEnv(root) });";
-  assert.ok(src.includes(anchor), 'setup: the exempted spawn is where the test expects it');
+  assert.ok(src.includes(anchor), 'setup: the pinned spawn is where the test expects it');
   const second = "\n  const git2 = (cwd, args, env) => " + PLANT_FN + "('git', ['init'], { cwd, env: env || gitEnv(root) });";
   fs.writeFileSync(f, src.replace(anchor, anchor + second));
   const r = run(tmp);
-  assert.equal(r.status, 1, 'the widened exemption must FAIL, got:\n' + r.stdout);
-  assert.match(r.stdout, /FAIL .*git-env\.test\.mjs:\d+ .*allows 1 spawn/);
+  assert.equal(r.status, 1, 'the widened fixture must FAIL, got:\n' + r.stdout);
+  assert.match(r.stdout, /FAIL .*git-env\.test\.mjs:\d+ .*neither gitEnv\(\)/);
 });
 
 // R19 (CodeRabbit PR #19 thread 17): hooks-safety.md section 7 says a hermetic spawn test points TEMP/TMP/TMPDIR and USERPROFILE/HOME at a throwaway directory, so the real

@@ -319,7 +319,7 @@ try {
   // CWK-133: this gate runs under .githooks/pre-commit, i.e. as a git-hook child, where a linked
   // worktree exports an absolute GIT_DIR that overrides cwd. Both git spawns below take a CLEAN env
   // (whole GIT_* family stripped, ceiling at the repo's parent) -- never process.env.
-  const { gitEnv } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env.mjs')).href);
+  const { gitEnv } = await import('./lib/git-env.mjs'); // a plain literal beside this file: the canon census reads that spelling as the room helper, not a computed path
   const REPO_GIT_ENV = gitEnv(path.dirname(repo));
 
   // GIT IS AN OPTIONAL ENHANCEMENT, NEVER A RUNTIME REQUIREMENT (no-external-assumption).
@@ -432,38 +432,30 @@ try {
   }
 } catch (e) { fail(`pointer drift check crashed: ${e.message}`); }
 
-// git-spawn census (CWK-136): every git child this room ships or tests must take its environment
-// from gitEnv() and only from it. Presence of an env: key is not safety -- env: process.env has one,
-// and hands a linked-worktree hook's absolute GIT_DIR straight to the child (CWK-133).
+// git-spawn census (CWK-136; the CANON census since 09a): every git child this room ships or tests must take its environment from gitEnv() or from an allowlist of named keys,
+// and from nothing else. Presence of an env: key is not safety -- env: process.env has one, and hands a linked-worktree hook's absolute GIT_DIR straight to the child (CWK-133).
+// The rule is scripts/lib/git-env-census.mjs, adopted by blob id from the org canon; the room's pins (the byte-equal carriers it cannot route through gitEnv()) and the walk live in
+// scripts/lib/git-env-pins.mjs, and a pin that no longer matches its file is a failure here (it must not outlive its bytes).
 //
-// ENUMERATION, reused rather than re-walked: the ROOTS are the pointer gate's own DEFAULT_SURFACE_PLAN
-// `comments` rows (scripts, bin, lib -- so a code root added to that plan is censused the day it
-// lands), collected by the SAME collectSurfaces() with the SAME walkSrc primitive above. What differs
-// is deliberate and stated: the plan's ext filter skips *.test.* files (a test file's comments quote
-// fake fixtures), but the census is about SPAWNS, and the fixtures are where the class lives -- so it
-// takes every .mjs/.cjs/.js under those roots, tests included, as raw text.
+// ENUMERATION: the ROOTS are the pointer gate's own DEFAULT_SURFACE_PLAN `comments` rows (scripts, bin, lib -- so a code root added to that plan is censused the day it lands). Every
+// .mjs/.cjs/.js under them is read, tests included: the census is about SPAWNS, and the fixtures are where the class lives.
 console.log('git-spawn census:');
 try {
-  const { censusGitSpawns } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env-census.mjs')).href);
-  const { collectSurfaces, DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
+  const { scanGitSpawns } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env-census.mjs')).href);
+  const { GIT_ENV_PINS, collectCensusFiles, stalePins } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'git-env-pins.mjs')).href);
+  const { DEFAULT_SURFACE_PLAN } = await import(pathToFileURL(path.join(repo, 'scripts', 'lib', 'pointer-check.mjs')).href);
   const roots = DEFAULT_SURFACE_PLAN.filter((row) => row.kind === 'comments').map((row) => row.root);
-  const censusPlan = roots.map((root) => ({ kind: 'raw', root, dir: true, ext: /\.(mjs|cjs|js)$/,
-    why: 'the pointer gate\'s own code roots, widened to test files: the fixtures are where a bare git spawn lives' }));
-  const files = collectSurfaces(repo, censusPlan, {
-    join: path.join, walkMd, walkSrc, read: readOrNull, rel: relToRepo, commentLines, hashComments,
-  });
+  const files = collectCensusFiles(repo, roots);
   if (!roots.length || !files.length) fail(`census walked ${files.length} file(s) from ${roots.length} root(s) -- an empty walk proves nothing`);
   else {
-    const { findings, gitSpawns, exempt, unusedExemptions, nodeChildren } = censusGitSpawns(files);
-    for (const msg of findings) fail(msg);
-    // An exemption whose spawn is gone is a blanket pass waiting to happen: it FAILs the gate (R8 FIXBACK M1).
-    for (const e of unusedExemptions) fail(`git-spawn census exemption for ${e.label} (env: ${e.expr === null ? 'none' : e.expr}) no longer matches ${e.want} spawn(s), only ${e.matched} -- remove it or lower its count, or restore the spawn it names`);
-    if (!findings.length && !unusedExemptions.length) {
-      // The line states what the instrument PRODUCED: how many spawns take env from gitEnv() alone, and the
-      // named, counted exemptions -- never a blanket "every one" (R8 FIXBACK M1, the r29 class).
-      const alone = gitSpawns.length - exempt.length;
-      const named = exempt.length ? `, ${exempt.length} exempt by name (${exempt.map((e) => `${e.label}: ${e.reason}`).join('; ')})` : '';
-      ok(`${gitSpawns.length} git spawn(s) across ${files.length} file(s) (roots: ${roots.join(', ')}; ${nodeChildren} node child(ren) left alone): ${alone} take env from gitEnv() alone${named}`);
+    const r = scanGitSpawns(files, GIT_ENV_PINS);
+    for (const msg of r.findings) fail(msg);
+    const stale = stalePins(files, GIT_ENV_PINS);
+    for (const msg of stale) fail(msg);
+    if (!r.findings.length && !stale.length) {
+      // The line states what the instrument PRODUCED: the spawns it counted and read safe, and the files a blob-pinned row holds out (named), never a blanket claim (R8 FIXBACK M1, the r29 class).
+      const held = r.exempted ? `, ${r.exempted} file(s) held out by a pinned blob (${GIT_ENV_PINS.map((p) => p.rel).join(', ')})` : '';
+      ok(`${r.calls} git spawn(s) across ${r.files} file(s) (roots: ${roots.join(', ')}): ${r.safe} read safe (gitEnv() or an allowlist of named keys)${held}`);
     }
   }
 } catch (e) { fail(`git-spawn census crashed: ${e.message}`); }

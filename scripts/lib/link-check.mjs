@@ -98,7 +98,7 @@ function decodeEntities(s) {
       return String.fromCodePoint(cp);
     }
     const key = e.toLowerCase();
-    return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, key) ? NAMED_ENTITIES[key] : m;
+    return Object.hasOwn(NAMED_ENTITIES, key) ? NAMED_ENTITIES[key] : m;
   });
 }
 

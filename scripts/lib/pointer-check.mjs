@@ -207,6 +207,9 @@ export function collectSurfaces(repo, plan, io) {
 }
 
 const GLOB = /[*?[\]{}|]/;
+// An ELIDED path (`scripts/lib/...`) is prose shorthand for "the files under there", a set like a glob, not a citation of one file. The org canon's own census file writes one in a
+// comment (09a), and a byte-equal carrier cannot be edited here, so the gate reads the shorthand for what it is.
+const ELIDED = /\/\.\.\.$/;
 const OUTSIDE = /^([~/]|[A-Za-z]:|[a-z][a-z0-9+.-]*:\/\/)/;
 // A `.` or `..` SEGMENT — never a dot-DIR like `.github`, which is a real name.
 const DOTSEG = /(^|\/)\.\.?(\/|$)/;
@@ -383,6 +386,7 @@ export function pointerCandidates(text) {
     if (/\s/.test(tok)) continue;          // a command or a Markdown table row, not a pointer
     if (/[<>]/.test(tok)) continue;        // <placeholder> — the author already said "not literal"
     if (GLOB.test(tok)) continue;          // a glob names a SET, not a file
+    if (ELIDED.test(tok)) continue;        // so does `dir/...`
     if (!tok.includes('/')) continue;      // a bare filename is the USER's repo's
     if (OUTSIDE.test(tok)) continue;       // absolute, home-relative, or a URL
     if (DOTSEG.test(tok)) continue;        // `../` navigates, it does not NAME, and it escapes

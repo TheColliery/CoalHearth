@@ -1,479 +1,85 @@
-// CWK-136 -- unit tests for the git-spawn census. The census proves SAFETY, not presence: a git
-// spawn must carry an env: built by gitEnv(), and an env: that mentions process.env is refused
-// (CoalTipple's census, which this ports, passed env: process.env because it only proved an env:
-// key existed).
-//
-// The sample sources below are assembled from name parts (SP, EFS, ...) on purpose. This file is
-// itself walked by the census -- it lives under scripts/ -- so a literal call written here would be
-// read as a real git spawn with no env. Composing the call name keeps the fixture text out of this
-// file's own source, the same self-reference hazard the pointer gate's plan comment records.
+// git-env-census.test.mjs -- the canon git-spawn census against the WITNESS LIST (08d, merged 2026-10-09): one leg per vector, each fixture run through scanGitSpawns with NO pins.
+// A refused fixture must also be a COUNTED spawn, so a vector that hides the spawn itself cannot read as clean; a passing fixture must read clean with no pin and be counted
+// safe. Hermetic: the fixtures are strings in git-env-census.vectors.mjs, written nowhere. Portable: a room that adopts the census by blob id adopts this file with it and adds
+// its own pins and its own spawns in a test of its own (this file names no path outside scripts/lib/).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { censusGitSpawns, blobId } from './git-env-census.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { scanGitSpawns, censusGitSpawns, collectScriptsMjs, gitBlobId, lex, CENSUS_EXEMPT } from './git-env-census.mjs';
+import { VECTORS, CEILINGS, COVERS } from './git-env-census.vectors.mjs';
 
-const SP = 'spawn' + 'Sync';
-const EFS = 'execFile' + 'Sync';
-const ES = 'exec' + 'Sync';
-const CP = 'c' + 'p';
-const MOD = 'node:child' + '_process';
-const SPN = 'spa' + 'wn';
-const EF = 'exec' + 'File';
-const EX = 'ex' + 'ec';
+const scan = (text, pins = []) => scanGitSpawns([{ rel: 'fixture.mjs', text }], pins);
 
-// The census only reads calls to names a file BINDS from child_process, so every sample carries the
-// binding. It is appended AFTER the sample so the sample's own line numbers stay what the tests say.
-const BINDINGS = `import { ${[SP, EFS, ES, SPN, EF, EX].join(', ')} } from '${MOD}';\nimport ${CP} from '${MOD}';\n`;
-const census = (text, label = 'scripts/x.test.mjs') => censusGitSpawns([{ label, text: text + BINDINGS }]);
-
-test('census: a git spawn whose env is built by gitEnv() is clean and is counted', () => {
-  const r = census(`${SP}('git', ['status'], { cwd: d, env: gitEnv(path.dirname(d)) });\n`);
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.gitSpawns.length, 1);
-});
-
-test('census: a git spawn with NO env: key is a finding naming file:line', () => {
-  const r = census(`const a = 1;\n${SP}('git', ['status'], { cwd: d, encoding: 'utf8' });\n`);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:2 /);
-  assert.match(r.findings[0], /no 'env:'/);
-});
-
-test('census: env: process.env is REFUSED -- presence of an env: key is not safety', () => {
-  const r = census(`${SP}('git', ['status'], { cwd: d, env: process.env });\n`);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:1 /);
-  assert.match(r.findings[0], /process\.env/);
-});
-
-test('census: a spread of process.env is refused, including when gitEnv() is ALSO present (ordering re-adds GIT_*)', () => {
-  const a = census(`${SP}('git', [], { env: { ...process.env, X: '1' } });\n`);
-  assert.equal(a.findings.length, 1);
-  const b = census(`${SP}('git', [], { env: { ...gitEnv(d), ...process.env } });\n`);
-  assert.equal(b.findings.length, 1, 'a helper call beside process.env does not launder it');
-  assert.match(b.findings[0], /process\.env/);
-});
-
-test('census: an env that is not produced by gitEnv() is refused; an alias assigned from gitEnv() in the same file is accepted', () => {
-  const bad = census(`${SP}('git', [], { env: someEnv });\n`);
-  assert.equal(bad.findings.length, 1);
-  assert.match(bad.findings[0], /someEnv is not declared/);
-  const bareLiteral = census(`${SP}('git', [], { env: { PATH: '/x' } });\n`);
-  assert.equal(bareLiteral.findings.length, 1);
-  const alias = census(`const GIT_ENV = gitEnv(root);\n${SP}('git', [], { env: GIT_ENV });\n`);
-  assert.deepEqual(alias.findings, []);
-  const otherFileAlias = census(`${SP}('git', [], { env: GIT_ENV });\n`);
-  assert.equal(otherFileAlias.findings.length, 1, 'an alias must be assigned from gitEnv() in THIS file');
-});
-
-test('census: a multi-line call is read whole; the finding names the line the call STARTS on', () => {
-  const text = `x();\n${SP}(\n  'git',\n  ['status'],\n  {\n    cwd: d,\n    env: process.env,\n  },\n);\n`;
-  const r = census(text);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:2 /);
-  const ok = census(`${SP}(\n  'git',\n  [],\n  {\n    env: gitEnv(d),\n  },\n);\n`);
-  assert.deepEqual(ok.findings, []);
-});
-
-test('census: a call inside a // or * comment line is ignored; a URL string earlier on the SAME line does not hide a real call', () => {
-  const commented = census(`// ${SP}('git', ['status'], { cwd: d });\n * ${SP}('git', [], {});\n`);
-  assert.deepEqual(commented.findings, []);
-  assert.equal(commented.gitSpawns.length, 0);
-  const url = census(`const u = 'https://example.invalid'; ${SP}('git', ['status'], { cwd: d });\n`);
-  assert.equal(url.findings.length, 1, 'a // inside a string is not a comment');
-});
-
-test('census: every spawn form is covered -- execFile, spawn, execSync/exec with a git command string, the qualified child_process form', () => {
-  assert.equal(census(`${EFS}('git', ['ls-files'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(census(`${SPN}('git', ['ls-files'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(census(`${EF}('git', ['ls-files'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(census(`${ES}('git status', { cwd: d });\n`).findings.length, 1);
-  assert.equal(census(`${EX}("git status", { cwd: d });\n`).findings.length, 1);
-  assert.equal(census(`${CP}.${SP}('git', [], { cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(census(`${CP}.${SP}('git', [], { env: gitEnv(d) });\n`).findings, []);
-  assert.deepEqual(census(`${ES}('git status', { env: gitEnv(d) });\n`).findings, []);
-});
-
-test('census: a node child (process.execPath) is counted and left alone; RegExp .exec( and an unrelated .spawn( method are not spawns', () => {
-  const r = census(`${SP}(process.execPath, [script], { cwd: d });\nconst m = RE.exec(line);\nmock.spawn('git', []);\n`);
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.nodeChildren, 1);
-  assert.equal(r.gitSpawns.length, 0);
-});
-
-test('census: a spawn whose command is neither a literal nor process.execPath cannot be proven not-git and is refused', () => {
-  const r = census(`${SP}(cmd, ['status'], { cwd: d });\n`);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /cannot prove/);
-  const lit = census(`${SP}('node', ['x'], { cwd: d });\n`);
-  assert.deepEqual(lit.findings, [], 'a literal non-git command is not this census\'s business');
-});
-
-test('census: an unreadable file (text null) is a finding, never a silent zero', () => {
-  const r = censusGitSpawns([{ label: 'scripts/gone.mjs', text: null }]);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /^scripts\/gone\.mjs /);
-});
-
-test('census: findings are reported per file across a map, in walk order', () => {
-  const r = censusGitSpawns([
-    { label: 'scripts/a.mjs', text: `${SP}('git', [], { cwd: d });\n${BINDINGS}` },
-    { label: 'lib/b.js', text: `${SP}('git', [], { env: gitEnv(d) });\n${BINDINGS}` },
-    { label: 'bin/c.js', text: `\n\n${SP}('git', [], { env: process.env });\n${BINDINGS}` },
-  ]);
-  assert.equal(r.gitSpawns.length, 3);
-  assert.equal(r.findings.length, 2);
-  assert.match(r.findings[0], /^scripts\/a\.mjs:1 /);
-  assert.match(r.findings[1], /^bin\/c\.js:3 /);
-});
-
-// -- which names does a file bind from child_process? --------------------------------------
-
-test('census: a file that never binds child_process is skipped whole -- prose that looks like a call is not one', () => {
-  const r = censusGitSpawns([{ label: 'scripts/prose.mjs', text: `console.log('${SPN}(s) across files');\nconst x = ${SPN}(a);\n` }]);
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.gitSpawns.length, 0);
-});
-
-test('census: an aliased import (as) is followed to the real function, so an alias cannot hide a spawn', () => {
-  const alias = 'ru' + 'n';
-  const aliased = `import { ${SP} as ${alias} } from '${MOD}';\n${alias}('git', ['status'], { cwd: d });\n`;
-  const r = censusGitSpawns([{ label: 'scripts/a.mjs', text: aliased }]);
-  assert.equal(r.gitSpawns.length, 1);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /^scripts\/a\.mjs:2 /);
-  const safe = `import { ${SP} as ${alias} } from '${MOD}';\n${alias}('git', ['status'], { env: gitEnv(d) });\n`;
-  assert.deepEqual(censusGitSpawns([{ label: 'scripts/a.mjs', text: safe }]).findings, []);
-});
-
-test('census: a dynamic-import destructure and a require destructure are read like a static import', () => {
-  const dyn = `const { ${SP} } = await import('${MOD}');\n${SP}('git', [], { cwd: d });\n`;
-  assert.equal(censusGitSpawns([{ label: 'scripts/d.mjs', text: dyn }]).findings.length, 1);
-  const req = `const { ${EFS} } = require('${MOD}');\n${EFS}('git', [], { cwd: d });\n`;
-  assert.equal(censusGitSpawns([{ label: 'bin/r.js', text: req }]).findings.length, 1);
-  const ns = `const ${CP} = require('${MOD}');\n${CP}.${SP}('git', [], { cwd: d });\n`;
-  assert.equal(censusGitSpawns([{ label: 'bin/n.js', text: ns }]).findings.length, 1);
-});
-
-// -- R8 FIXBACK M1: the census accepted any env: that merely CONTAINED gitEnv(), and printed a verdict
-// ("every one takes env from gitEnv() alone") that its own instrument did not produce. INSPECT's evasion
-// shapes, each one a real hand-off of an un-stripped environment to a git child. A finding here = CLOSED.
-const raw = (text, label = 'scripts/x.test.mjs') => censusGitSpawns([{ label, text }], { exemptions: [] });
-const PE = 'process' + '.env';
-
-test('M1: the WHOLE env expression must be gitEnv(...) -- a spread of an alias of process.env beside it is refused (E6)', () => {
-  const r = raw(`${BINDINGS}const e = ${PE};\n${SP}('git', [], { env: { ...gitEnv(x), ...e } });\n`);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /not produced by gitEnv\(\) alone/);
-});
-
-test('M1: Object.assign(gitEnv(x), process[env]) is refused (E6c)', () => {
-  const r = raw(`${BINDINGS}${SP}('git', [], { env: Object.assign(gitEnv(x), process['env']) });\n`);
-  assert.equal(r.findings.length, 1);
-});
-
-test('M1: env: env || gitEnv(root) -- a caller-supplied env with a fallback -- is refused unless named (E6b)', () => {
-  const r = raw(`${BINDINGS}const git = (cwd, args, env) => ${SP}('git', args, { cwd, env: env || gitEnv(root) });\n`);
-  assert.equal(r.findings.length, 1);
-  assert.match(r.findings[0], /env \|\| gitEnv\(root\)/);
-});
-
-test('M1: a whole call gitEnv(...) is accepted, nested parens and whitespace included', () => {
-  assert.deepEqual(raw(`${BINDINGS}${SP}('git', [], { env: gitEnv(path.dirname(path.join(a, b))) });\n`).findings, []);
-  assert.deepEqual(raw(`${BINDINGS}${SP}('git', [], { env:   gitEnv()   });\n`).findings, []);
-});
-
-test('M1: an identifier assigned from exactly gitEnv(...) is accepted -- and refused once it is MUTATED afterwards (E5)', () => {
-  const ok = raw(`${BINDINGS}const G = gitEnv(r);\n${SP}('git', [], { env: G });\n`);
-  assert.deepEqual(ok.findings, []);
-  for (const mutation of ['G.GIT_DIR = hookDir;', "G['GIT_DIR'] = hookDir;", 'Object.assign(G, ambient);', 'delete G.GIT_CEILING_DIRECTORIES;', 'G.X ||= 1;']) {
-    const r = raw(`${BINDINGS}const G = gitEnv(r);\n${mutation}\n${SP}('git', [], { env: G });\n`);
-    assert.equal(r.findings.length, 1, mutation);
-    assert.match(r.findings[0], /mutated/, mutation);
-  }
-  // an alias assigned from anything OTHER than exactly the call is refused
-  const wrapped = raw(`${BINDINGS}const G = gitEnv(r) || fallback;\n${SP}('git', [], { env: G });\n`);
-  assert.equal(wrapped.findings.length, 1);
-  const notConst = raw(`${BINDINGS}let G = gitEnv(r);\n${SP}('git', [], { env: G });\n`);
-  assert.equal(notConst.findings.length, 1, 'let/var can be reassigned: only const counts');
-});
-
-test('M1: a git binary not spelled git -- an absolute path, git.cmd, git.exe under a directory -- is still git (E7, E7b)', () => {
-  assert.equal(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('git.cmd', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { env: gitEnv(x) });\n`).findings, []);
-  assert.deepEqual(raw(`${BINDINGS}${SP}('/usr/bin/gitk', ['x'], { cwd: d });\n`).findings, [], 'gitk is not git');
-});
-
-test('M1: git through a SHELL -- sh -c, a command string, shell: true -- is a git spawn and needs the same env (E8, E8b, E13)', () => {
-  assert.equal(raw(`${BINDINGS}${SP}('sh', ['-c', 'git init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('bash', ['-lc', 'cd x && git init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${ES}('cd x && git init', { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${EFS}('git init', { shell: true, cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(raw(`${BINDINGS}${ES}('cd x && git init', { env: gitEnv(d) });\n`).findings, []);
-  // controls: a shell running something that is not git is not this census's business
-  assert.deepEqual(raw(`${BINDINGS}${SP}('sh', ['-c', 'echo hi'], { cwd: d });\n`).findings, []);
-  assert.deepEqual(raw(`${BINDINGS}${ES}('echo digit', { cwd: d });\n`).findings, [], 'a word merely containing git is not git');
-});
-
-test('M1: a callee reached by alias assignment, an inline require, or cp.default is still seen (E1, E9, E10)', () => {
-  const alias = 'ru' + 'n';
-  assert.equal(raw(`import { ${SP} } from '${MOD}';\nconst ${alias} = ${SP};\n${alias}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`require('${MOD}').${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`(await import('${MOD}')).${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`import ${CP} from '${MOD}';\n${CP}.default.${SP}('git', ['init'], { cwd: d });\n`).findings.length, 1);
-  assert.deepEqual(raw(`require('${MOD}').${SP}('git', ['init'], { env: gitEnv(x) });\n`).findings, []);
-});
-
-// -- the deliberate hazard fixture: an EXPLICIT, COUNTED, PRINTED exemption, never a silent pass ------------
-const EXEMPT = [{ label: 'scripts/x.test.mjs', expr: 'env || gitEnv(root)', reason: 'the hazard proof feeds a poisoned GIT_DIR on purpose' }];
-const HAZARD = `${BINDINGS}const git = (cwd, args, env) => ${SP}('git', args, { cwd, env: env || gitEnv(root) });\n`;
-
-test('M1: a NAMED exemption (file + exact expression) is counted, carries its reason, and is no finding', () => {
-  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.gitSpawns.length, 1);
-  assert.equal(r.exempt.length, 1);
-  assert.equal(r.exempt[0].label, 'scripts/x.test.mjs');
-  assert.match(r.exempt[0].reason, /poisoned GIT_DIR/);
-  assert.deepEqual(r.unusedExemptions, []);
-});
-
-test('M1: an exemption is exact -- another spawn in the same file, or the same expression in another file, is still checked', () => {
-  const more = HAZARD + `${SP}('git', ['status'], { cwd: d, env: process.env });\n`;
-  const a = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: more }], { exemptions: EXEMPT });
-  assert.equal(a.findings.length, 1, 'the second spawn is not covered by the first one\'s exemption');
-  const b = censusGitSpawns([{ label: 'scripts/other.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
-  assert.equal(b.findings.length, 1, 'the exemption is keyed to its file');
-});
-
-test('M1: an exemption that no longer matches anything is reported as UNUSED, so it cannot rot into a blanket pass', () => {
-  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: BINDINGS + SP + "('git', [], { env: gitEnv(x) });\n" }], { exemptions: EXEMPT });
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.unusedExemptions.length, 1);
-  assert.equal(r.unusedExemptions[0].label, 'scripts/x.test.mjs');
-});
-
-// -- R8 FIXBACK 2 MEDIUM-1: a path-qualified git inside a shell string, and git named only in the ARGUMENTS of a shell:true call ---
-// The reviewer's shapes (census-evasions2/3). Each is a git child; the CHANGELOG says so.
-test('M-1: a path-qualified git inside a shell string is a git spawn (an absolute path, a Windows path, a quoted path)', () => {
-  assert.equal(raw(`${BINDINGS}${ES}('/usr/bin/git init', { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('/usr/bin/git', ['init'], { shell: true });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('C:/Program Files/Git/cmd/git.exe', ['init'], { shell: true });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${SP}('sh', ['-c', '/usr/bin/git init'], { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${ES}('"C:/Program Files/Git/cmd/git.exe" init', { cwd: d });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${ES}('C:\\Git\\cmd\\git.exe init', { cwd: d });\n`).findings.length, 1, 'a backslash-separated path');
-  assert.deepEqual(raw(`${BINDINGS}${ES}('/usr/bin/git init', { env: gitEnv(d) });\n`).findings, [], 'clean once env is gitEnv() alone');
-});
-
-test('M-1: with shell: true Node joins the ARGUMENTS into the command line, so git named only there is a git spawn', () => {
-  assert.equal(raw(`${BINDINGS}${SP}('echo', ['x', '&&', 'git', 'init'], { shell: true });\n`).findings.length, 1);
-  assert.equal(raw(`${BINDINGS}${EFS}('true', ['&&', '/usr/bin/git', 'init'], { shell: true });\n`).findings.length, 1);
-  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['x', '&&', 'git', 'init'], { shell: true, env: gitEnv(d) });\n`).findings, []);
-  // controls: shell false / absent leaves the arguments as argv, so the word git there is just data
-  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['git', 'init'], { cwd: d });\n`).findings, []);
-  assert.deepEqual(raw(`${BINDINGS}${SP}('echo', ['git', 'init'], { shell: false });\n`).findings, []);
-  // and a shell:true call that runs no git stays clean
-  assert.deepEqual(raw(`${BINDINGS}${SP}('npm', ['test'], { shell: true, cwd: d });\n`).findings, []);
-});
-
-test('M-1: no new false positive -- a path or word that merely CONTAINS git is not git', () => {
-  for (const cmd of ['cat .gitignore', 'cat ./repo/.git/config', 'ls /var/gitea/data', 'echo digit', 'cd my-git-repo && ls', 'dir C:\\src\\github\\x']) {
-    assert.deepEqual(raw(`${BINDINGS}${ES}('${cmd}', { cwd: d });\n`).findings, [], cmd);
-  }
-});
-
-// -- R8 FIXBACK 2 LOW-1: an exemption carries an EXPECTED COUNT, so a second matching spawn in the same file fails ------------
-const TWICE = HAZARD + `const git2 = (cwd, args, env) => ${SP}('git', ['init'], { cwd, env: env || gitEnv(root) });\n`;
-
-test('L-1: a SECOND spawn with the exempted expression in the same file is a finding, not a silent widening', () => {
-  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE }], { exemptions: EXEMPT });
-  assert.equal(r.gitSpawns.length, 2);
-  assert.equal(r.exempt.length, 1, 'the exemption covers exactly the one spawn it counts');
-  assert.equal(r.findings.length, 1, 'the extra spawn FAILs');
-  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:\d+ /);
-  assert.match(r.findings[0], /allows 1 spawn/);
-});
-
-test('L-1: an exemption that states count 2 covers two spawns, and a third fails', () => {
-  const two = [{ ...EXEMPT[0], count: 2 }];
-  const ok2 = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE }], { exemptions: two });
-  assert.deepEqual(ok2.findings, []);
-  assert.equal(ok2.exempt.length, 2);
-  assert.deepEqual(ok2.unusedExemptions, []);
-  const three = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: TWICE + `const git3 = () => ${SP}('git', [], { env: env || gitEnv(root) });\n` }], { exemptions: two });
-  assert.equal(three.findings.length, 1);
-});
-
-test('L-1: fewer spawns than the exemption counts is stale, exactly as none is', () => {
-  const two = [{ ...EXEMPT[0], count: 2 }];
-  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: two });
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.unusedExemptions.length, 1);
-  assert.equal(r.unusedExemptions[0].matched, 1);
-  assert.equal(r.unusedExemptions[0].want, 2);
-});
-
-// -- R8 FIXBACK 3: every rule that reads PAST the first argument must survive the ordinary formatting of a call --------
-// The first argument was located by `1 + first.length`, but `first` is trimmed, so a space after the paren or a newline
-// (the normal multi-line format) shifted every later read: the shell:true argument scan and the `sh -c '...'` string
-// scan read 0 findings. Each shape below is run tight, with a spaced paren, multi-line, and CRLF multi-line.
-const FORMATS = { tight: ['', ''], 'spaced paren': [' ', ' '], multiline: ['\n  ', '\n  '], 'CRLF multiline': ['\r\n  ', '\r\n  '] };
-const READS_PAST_FIRST = [
-  ['git only in shell:true arguments', (p, s) => `${SP}(${p}'echo',${s}['x', '&&', 'git', 'init'],${s}{ shell: true });`, 1],
-  ['sh -c with git in its command string', (p, s) => `${SP}(${p}'sh',${s}['-c', 'git init'],${s}{ cwd: d });`, 1],
-  ['bash -lc chained git', (p, s) => `${SP}(${p}'bash',${s}['-lc', 'cd x && git init'],${s}{ cwd: d });`, 1],
-  ['shell:true on a git binary', (p, s) => `${SP}(${p}'git.exe',${s}['init'],${s}{ shell: true });`, 1],
-  ['a plain git with no env', (p, s) => `${SP}(${p}'git',${s}['init'],${s}{ cwd: d });`, 1],
-  ['a plain git taking env from gitEnv() alone', (p, s) => `${SP}(${p}'git',${s}['init'],${s}{ env: gitEnv(d) });`, 0],
-  ['sh -c that runs no git (control)', (p, s) => `${SP}(${p}'sh',${s}['-c', 'echo hi'],${s}{ cwd: d });`, 0],
-  ['git as data with no shell (control)', (p, s) => `${SP}(${p}'echo',${s}['git', 'init'],${s}{ cwd: d });`, 0],
-  ['git as data with shell: false (control)', (p, s) => `${SP}(${p}'echo',${s}['git'],${s}{ shell: false });`, 0],
-];
-for (const [name, build, want] of READS_PAST_FIRST) {
-  test('F3: ' + name + ' reads the same however the call is formatted', () => {
-    for (const [fmt, [p, s]] of Object.entries(FORMATS)) {
-      assert.equal(raw(`${BINDINGS}${build(p, s)}\n`).findings.length, want, `${name} / ${fmt}`);
-    }
+for (const v of VECTORS) {
+  test(`witness ${v.id}${v.src ? ` [${v.src}]` : ''}: ${v.expect === 'fail' ? 'every fixture is a counted spawn WITH a finding' : 'every fixture is a counted spawn with NO finding and no pin'} (${v.texts.length} fixture${v.texts.length === 1 ? '' : 's'})`, () => {
+    v.texts.forEach((text, k) => {
+      const r = scan(text);
+      if (!v.noCount) assert.ok(r.calls >= 1, `${v.id}[${k}] was not counted as a git spawn:\n${text}`);
+      if (v.expect === 'fail') assert.ok(r.findings.length >= 1, `${v.id}[${k}] passed the census:\n${text}`);
+      else {
+        assert.deepEqual(r.findings, [], `${v.id}[${k}] was refused:\n${text}`);
+        assert.equal(r.safe, r.calls, `${v.id}[${k}] was counted but not safe`);
+      }
+    });
   });
 }
 
-// -- R8 ALERT #19: a bound local name reaches new RegExp(...), so it must be escaped in FULL, not for `$` alone -------------
-// `\{([^}]*)\}` captures whatever a destructuring list holds, comments included, so a local name can carry a regex
-// metacharacter. Before the fix an unbalanced `(` in one made the alternation an unterminated group and the census THREW
-// (verify.mjs then reports "census crashed"); a `[` or `.*` was silently a pattern, not the literal name.
-test('A19: a destructured local whose text carries a regex metacharacter does not crash the census, and the real spawn is still seen', () => {
-  for (const junk of ['/* x( */', '/* x) */', '/* [ */', '/* a.b* */', '/* $^+?|\\ */']) {
-    const text = `import { ${SP}, ${ES}: run ${junk} } from '${MOD}';\n${SP}('git', ['status'], { cwd: d });\n`;
-    let r;
-    assert.doesNotThrow(() => { r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text }], { exemptions: [] }); }, junk);
-    assert.equal(r.findings.length, 1, 'the plain git spawn beside it is still a finding: ' + junk);
+// The loop above asserts nothing about WHICH vectors exist, so a deleted row or an emptied list would shrink it without a sound. Every id of the list is carried by a row.
+test('every id of the witness list is carried by a row: F1-F60 and R1-R3 by a vector, R4 and R5 by a named ceiling, P3-P7 by a vector, and P1 and P2 by the canon carriers', () => {
+  const have = new Set(VECTORS.map((v) => v.id.split(' ')[0]));
+  const ceilings = new Set(CEILINGS.map((c) => c.id));
+  const carriers = new Set(['P1', 'P2']); // the canon release-notes.mjs and its test, checked where those files live (the .github repository's own tests)
+  const missing = [];
+  const want = [...Array.from({ length: 60 }, (_, i) => `F${i + 1}`), 'R1', 'R2', 'R3', 'R4', 'R5', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7'];
+  for (const id of want) {
+    const carried = have.has(id) || ceilings.has(id) || carriers.has(id) || (COVERS[id] && COVERS[id].length > 0 && COVERS[id].every((x) => have.has(x)));
+    if (!carried) missing.push(id);
+  }
+  assert.deepEqual(missing, [], 'witness ids with no row');
+  for (const [id, rows] of Object.entries(COVERS)) assert.ok(rows.every((x) => have.has(x)), `${id} points at a row that does not exist`);
+  assert.ok(VECTORS.length >= 150, `the corpus shrank to ${VECTORS.length} rows`);
+});
+
+test('the named ceilings are what they say: R4 (a spawner named with a unicode escape) and R5 (a command built by concatenation) are NOT counted, each with its reason', () => {
+  assert.deepEqual(CEILINGS.map((c) => c.id), ['R4', 'R5']);
+  for (const c of CEILINGS) {
+    assert.ok(c.why && c.why.length > 20, `${c.id} carries its reason`);
+    for (const text of c.texts) assert.equal(scan(text).calls, 0, `${c.id} is counted now: close the ceiling in the census header and move the row to the vectors`);
   }
 });
 
-test('A19: a whole-module name and a plain local with $ still match literally after the full escape', () => {
-  const ns = census(`${CP}.${SP}('git', ['init'], { cwd: d });\n`);
-  assert.equal(ns.findings.length, 1);
-  const dollar = 'ru' + '$n';
-  const d$ = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: `import { ${SP} as ${dollar} } from '${MOD}';\n${dollar}('git', ['init'], { cwd: d });\n` }], { exemptions: [] });
-  assert.equal(d$.findings.length, 1);
+test('no pin ships with the canon, and a pin matches only the bytes it names: any edit re-arms the census on that file', () => {
+  assert.deepEqual(CENSUS_EXEMPT, []);
+  const dirty = "import { spawnSync } from 'node:child_process';\nspawnSync('git', ['status'], { env: process.env });\n";
+  assert.ok(scan(dirty).findings.length >= 1);
+  const pin = { rel: 'fixture.mjs', blob: gitBlobId(dirty), why: 'a test' };
+  const pinned = scan(dirty, [pin]);
+  assert.deepEqual([pinned.findings, pinned.exempted, pinned.calls], [[], 1, 0], 'a pin hides the file from the census and says so (exempted 1)');
+  assert.ok(scan(dirty + '// edited\n', [pin]).findings.length >= 1, 'one edited byte spends the pin');
+  assert.ok(scan(dirty, [{ ...pin, rel: 'other.mjs' }]).findings.length >= 1, 'a pin names its file');
+  assert.equal(gitBlobId('a\r\nb\r\n'), gitBlobId('a\nb\n'), 'line endings are normalised, so a Windows checkout of the same file reads the same blob');
 });
 
-test('A19: an env alias whose name carries $ is declared and matched literally (the identifier class allows $, nothing else needs escaping)', () => {
-  const E = '$' + 'env';
-  const ok = census(`const ${E} = gitEnv(d);\n${SP}('git', ['init'], { env: ${E} });\n`);
-  assert.deepEqual(ok.findings, []);
+test('censusGitSpawns is the findings-only view, and collectScriptsMjs walks scripts/**/*.mjs of a repository with forward-slash names', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-env-census-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'scripts', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'scripts', 'a.mjs'), "import { spawnSync } from 'node:child_process';\nspawnSync('git', ['status'], { env: process.env });\n");
+    fs.writeFileSync(path.join(dir, 'scripts', 'lib', 'b.mjs'), 'export const x = 1;\n');
+    fs.writeFileSync(path.join(dir, 'scripts', 'notes.txt'), 'not code');
+    const files = collectScriptsMjs(dir);
+    assert.deepEqual(files.map((f) => f.rel).sort(), ['scripts/a.mjs', 'scripts/lib/b.mjs']);
+    const findings = censusGitSpawns(files);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0], /^scripts\/a\.mjs:2 /);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// -- CWK-174 (R14): a BLOB-PINNED exemption for a byte-equal org carrier, and a row for spawns that carry no env: at all ------------
-// A byte-equal carrier (the house secret scan's tests) cannot be edited here without breaking the umbrella's parity check, so the
-// census exempts it ONLY while its content is exactly the pinned git blob id; any edit or template re-sync makes it a finding again.
-const NOENV = BINDINGS + SP + "('git', ['fetch'], { cwd: d });\n";
-const NOENV_ROW = (blob) => [{ label: 'scripts/carrier.test.mjs', expr: null, count: 1, blob, reason: 'a byte-equal org carrier whose spawns inherit the environment' }];
-
-test('CWK-174: blobId equals git hash-object for the same bytes', () => {
-  assert.equal(blobId(''), 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391', 'git\'s empty-blob id');
-  assert.equal(blobId('hello\n'), 'ce013625030ba8dba906f756967f9e9ca394464a', 'git hash-object of "hello" and an LF');
-});
-
-test('CWK-174: a row with expr null covers a spawn that carries no env:, counted and printed, and only while its blob matches', () => {
-  const file = [{ label: 'scripts/carrier.test.mjs', text: NOENV }];
-  const bare = censusGitSpawns(file);
-  assert.equal(bare.findings.length, 1, 'control: with no row the env-less spawn is a finding');
-  const r = censusGitSpawns(file, { exemptions: NOENV_ROW(blobId(NOENV)) });
-  assert.deepEqual(r.findings, []);
-  assert.equal(r.exempt.length, 1);
-  assert.deepEqual(r.unusedExemptions, []);
-});
-
-test('CWK-174: an edited carrier is a finding again, and says its blob id is not the pinned one', () => {
-  const pin = blobId(NOENV);
-  const r = censusGitSpawns([{ label: 'scripts/carrier.test.mjs', text: NOENV + '// edited\n' }], { exemptions: NOENV_ROW(pin) });
-  assert.equal(r.exempt.length, 0, 'the exemption is not spent on changed content');
-  assert.ok(r.findings.some((f) => /blob id is [0-9a-f]{40}, not the pinned /.test(f) && f.includes(pin)), 'names the mismatch: ' + r.findings.join(' | '));
-  assert.equal(r.unusedExemptions.length, 1, 'and the row reads as unused, so the gate fails on it too');
-});
-
-test('CWK-174: a pin is per row, a row without one is unchanged behaviour', () => {
-  const r = censusGitSpawns([{ label: 'scripts/x.test.mjs', text: HAZARD }], { exemptions: EXEMPT });
-  assert.deepEqual(r.findings, [], 'the existing unpinned row still exempts');
-  const other = censusGitSpawns([{ label: 'scripts/other.test.mjs', text: NOENV }], { exemptions: NOENV_ROW(blobId(NOENV)) });
-  assert.equal(other.findings.length, 1, 'a pin never widens to another file');
-});
-
-// R19 (CodeRabbit PR #19 thread 15): the literal check accepted a BACKTICK string, and `[^\\]` matches `$`, `{` and `}`, so an
-// interpolated template (a computed command) read as a provable literal, matched neither git nor a shell and went unchecked, though the
-// header promises a spawn whose command is neither a string literal nor process.execPath is REFUSED. A template with an interpolation
-// is not a provable literal; one with none (or an escaped dollar-brace) still is. The shell branch (execSync/exec, shell: true) reads the
-// command through the same check.
-const BT = '`'; // the samples are built from parts so this file's own source never holds a literal spawn call
-const interp = (body) => BT + body + BT;
-
-test('census: an INTERPOLATED template-literal command is refused as not a provable literal (spawn form)', () => {
-  const r = census(SP + '(' + interp('${gitBin}') + ", ['init'], { cwd: d });\n");
-  assert.equal(r.findings.length, 1, JSON.stringify(r.findings));
-  assert.match(r.findings[0], /command is not a string literal or process\.execPath/);
-  assert.match(r.findings[0], /^scripts\/x\.test\.mjs:\d+ /);
-});
-
-test('census: an INTERPOLATED template-literal command is refused in the shell branch too (execSync, exec, shell: true)', () => {
-  for (const text of [
-    ES + '(' + interp('${cmd} status') + ', { cwd: d });\n',
-    EX + '(' + interp('${cmd} status') + ', { cwd: d });\n',
-    SP + '(' + interp('${cmd}') + ", ['status'], { cwd: d, shell: true });\n",
-  ]) {
-    const r = census(text);
-    assert.equal(r.findings.length, 1, text + ' -> ' + JSON.stringify(r.findings));
-    assert.match(r.findings[0], /not a string literal/);
-  }
-});
-
-test('census: a template literal with NO interpolation is still a provable literal, and an escaped dollar-brace is not an interpolation', () => {
-  const plain = census(SP + '(' + interp('git') + ", ['status'], { cwd: d });\n");
-  assert.equal(plain.gitSpawns.length, 1, 'git as a plain template is seen as a git spawn');
-  assert.match(plain.findings[0], /carries no 'env:'/, 'and judged on its env, not refused as a non-literal');
-  const escaped = census(SP + '(' + interp('git\\${x}') + ", ['status'], { cwd: d });\n");
-  assert.ok(!/not a string literal/.test(escaped.findings.join(' ')), 'an escaped dollar-brace is text, not an interpolation: ' + JSON.stringify(escaped.findings));
-  const dollar = census(SP + '(' + interp('node $x') + ", ['status'], { cwd: d });\n");
-  assert.deepEqual(dollar.findings, [], 'a lone dollar sign is text too (and node is not this census\'s business)');
-});
-
-// 05a FIXBACK 1, LOW-1 (the 05a INSPECT witness shorthand.mjs): a shorthand property `{ env }` means `env: env`, and the census read it as no env key at all, so a SAFE file (env is a
-// const assigned from exactly gitEnv(...)) was refused with a message that said something false about it. The shorthand is read as env: env and judged like the longhand; the no-env control
-// still fails, and a shorthand of anything but a sound gitEnv() alias still fails.
-const SAFE_HEAD = `const env = gitEnv(process.cwd());\n`;
-
-test('census: the shorthand { env } of a const assigned from gitEnv() is clean, like env: env', () => {
-  const longhand = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8', env: env });\n`);
-  const shorthand = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8', env });\n`);
-  assert.deepEqual(longhand.findings, []);
-  assert.deepEqual(shorthand.findings, [], 'the shorthand is the same property');
-  assert.equal(shorthand.gitSpawns.length, 1);
-});
-
-test('census: the shorthand with env last in a multi-line options object, and env first, are read too', () => {
-  const last = census(SAFE_HEAD + `${SP}('git', ['status'], {\n  encoding: 'utf8',\n  env,\n});\n`);
-  const first = census(SAFE_HEAD + `${SP}('git', ['status'], { env, encoding: 'utf8' });\n`);
-  assert.deepEqual(last.findings, []);
-  assert.deepEqual(first.findings, []);
-});
-
-test('census: a shorthand env that is NOT a sound gitEnv() alias still fails, and names the alias', () => {
-  const notGitEnv = census(`const env = { PATH: process.env.PATH };\n${SP}('git', ['status'], { encoding: 'utf8', env });\n`);
-  assert.equal(notGitEnv.findings.length, 1);
-  assert.match(notGitEnv.findings[0], /env: env is not declared \`const env = gitEnv\(\.\.\.\)\`/);
-  const mutated = census(SAFE_HEAD + `env.GIT_DIR = 'x';\n${SP}('git', ['status'], { env });\n`);
-  assert.equal(mutated.findings.length, 1);
-  assert.match(mutated.findings[0], /is mutated after it is assigned/);
-});
-
-test('census: the no-env control still fails, and an env that is only a positional argument or a variable elsewhere is not a shorthand property', () => {
-  const control = census(SAFE_HEAD + `${SP}('git', ['status'], { encoding: 'utf8' });\n`);
-  assert.equal(control.findings.length, 1);
-  assert.match(control.findings[0], /no 'env:'/);
-  const positional = census(SAFE_HEAD + `${SP}('git', ['status'], opts, env, extra);\n`);
-  assert.equal(positional.findings.length, 1, 'a positional env is not the options object');
-  assert.match(positional.findings[0], /no 'env:'/);
-  const inArray = census(SAFE_HEAD + `${SP}('git', [env, 'status'], { encoding: 'utf8' });\n`);
-  assert.equal(inArray.findings.length, 1, 'env inside the args array is not a property');
+test('the lexer reads a quote inside a regex and a backtick inside a template without losing the line (F41), and a shebang is not code', () => {
+  const toks = lex("#!/usr/bin/env node\nconst r = /['\"]/g; const t = `a ${'b'} c`; marker('git');\n");
+  assert.ok(toks.some((t) => t.k === 're'), 'a regex literal is one token');
+  assert.ok(toks.some((t) => t.k === 'id' && t.v === 'marker'), 'the call after them is still seen');
+  assert.ok(!toks.some((t) => t.v === 'usr'), 'the shebang line is skipped');
 });

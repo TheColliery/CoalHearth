@@ -2,6 +2,38 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.2] - 2026-10-09
+
+The journal folder pin now guards every delete and second write.
+
+The plugin dist changes in `lib/contained-dir.js`, `lib/handoff-journal.js`, `lib/resume-engine.js`, `commands/update.md` and the version string; the CodeQL fixes below are the room's own test tooling.
+
+### Security
+
+- **A link swapped in at the journal folder no longer redirects a delete or a second write** *(shipped: `lib/resume-engine.js`, `lib/contained-dir.js`, `lib/handoff-journal.js`)*. In 2.8.1 several acts still ran under one earlier check. The folder's pin is now asked again before each of these: the quarantine's removal of the original journal (and only after a copy that succeeded), each unlink and the rmdir of the legacy-phantom clean-up, each scratch file and each worktree the resume-time orphan sweep deletes, the rename into the journal name (in `save()` and in the shared atomic writer), and the self-ignore `.gitignore` write at construction (the folder is resolved again after it is made). A changed answer stops that act and fails closed: nothing is written or deleted through the swapped folder. **Behaviour change:** a quarantine whose copy fails for another reason (a full disk, a directory at the quarantine name) now leaves the corrupt journal in place; 2.8.1 removed it. Not covered: the instant between a pin answer and its own act; the two pid-named temp removals (the failure path of the atomic write and `lib/repo-fs.js`'s exclusive temp create), which remove only the temp this process just wrote, never recursively and never a name it did not create; and the `mkdir` at construction, which runs right after its own check. — test: `lib/handoff-journal.test.js`, `scripts/lib/cwk137.test.mjs`
+- **Erratum for `[2.8.1]`: its Security bullet says a refused quarantine leaves the corrupt journal where it is, and that was not true for every interleaving.** As shipped, one check covered both the quarantine's copy and its delete, so a link swapped in between the two let the delete remove the journal in the link's target (another project's recovery state, if the link pointed there). 2.8.2 closes it (the first item above); the `[2.8.1]` entry stays as published. — test: `lib/handoff-journal.test.js`
+
+### Changed
+
+- **`commands/update.md` names agy's plugins folder instead of spelling its path** *(shipped: `commands/update.md`)*. The Antigravity paragraph added in 2.8.1 now says the install cloned the whole repository "into agy's plugins folder" and points to README's Antigravity section for the exact path, which is unchanged there and was measured. Every fact in the paragraph stays: the command, exit 0, the whole repository cloned, the commands imported as skills, and the hooks firing from that folder not measured. SkillSpector's static stage matched the literal `~/.gemini/config` path in the 2.8.1 text (`AS1`, Agent Config Directory Access); the true reading was benign (a past-tense statement, no instruction), and the wording is changed so the scan reads clean of it. — test: none (text)
+- **Two CodeQL alerts raised on the 2.8.1 push are fixed in test code, not dismissed** *(repo tests, not in the plugin dist)*. #21 `js/incomplete-sanitization` in `scripts/lib/git-env-census.test.mjs`: the backslash-separator fixture was built with a string-pattern `.replace`, which swaps only the first occurrence, and it never presented a backslash separator at all (the census read `\g` as `g`); it now holds two backslash characters. #22 `js/file-system-race` in `lib/handoff-journal.test.js`: the ordinary acquire, release and steal test checked a lock path and then wrote it; it now reads the folder listing. — test: `scripts/lib/git-env-census.test.mjs`, `lib/handoff-journal.test.js`
+
+## [2.8.1] - 2026-10-09
+
+The journal folder's link check now runs at every write.
+
+The plugin dist changes in `lib/contained-dir.js`, `lib/handoff-journal.js`, `lib/resume-engine.js`, `commands/update.md` and the version string; everything else below is the room's own tooling.
+
+### Security
+
+- **A link swapped in at the journal folder during one hook run no longer redirects the write** *(shipped: `lib/contained-dir.js`, `lib/handoff-journal.js`, `lib/resume-engine.js`)*. Since 2.6.3 the default folder was refused at a link only when the journal was built, so a link swapped in later in the same hook run still redirected the next write, and the resume engine's quarantine of a corrupt journal removed it through the link. The folder is now checked again before each write: before every attempt to save the journal, before creating (at every poll of a held lock), stealing or removing its lock file, before the quarantined copy of a corrupt journal, and before the resume engine's mark-resumed and quarantine. The default folder is checked against its literal location `<project root>/.claude/coalhearth`; a custom `journal.outputDirectory` (global config) against the physical path it had when built. A refused quarantine leaves the corrupt journal where it is. Not covered: a link swapped in the instant between the check and the write itself (a check followed by a write is not one atomic step); the next hook run refuses it. Measured on Windows with a junction swapped in after the journal was built. — test: `lib/handoff-journal.test.js`
+
+### Changed
+
+- **`commands/update.md` says how Antigravity is updated** *(shipped: `commands/update.md`)*. On Antigravity the plugin is installed by `agy plugin install https://github.com/TheColliery/CoalHearth.git`, so `claude plugin update` does not apply there. Measured 2026-10-08 on `agy` 1.3.1: that command exited 0, cloned the whole repository to `~/.gemini/config/plugins/coalhearth/` and imported the commands as skills. Whether the hooks then fire from that folder, and what a re-install over an existing install does, were not measured. — test: none (text)
+- **Correction to the `[2.8.0]` install note: only a Windows junction was measured.** That entry says a junction (symlink to the folder) is not discovered; what was measured is a Windows junction, and a symbolic link was not tried. The `[2.8.0]` entry stays as published. — test: none (text)
+- **The git-spawn census reads source as tokens and trusts one helper** *(repo gate, not in the plugin dist)*. `scripts/lib/js-lex.mjs` tokenizes each file, so a quote, a backtick or a comment inside a regex or a string can no longer hide or fake a git spawn. A spawn passes with `gitEnv()` alone or with an allowlist environment (one object literal that names its keys, reads `process.env` only by a named key and sets `GIT_CONFIG_NOSYSTEM` to `1`); `gitEnv` counts only when imported from this room's own `scripts/lib/git-env.mjs`, resolved from the importing file's path. The secret-scan carriers, the release overlay tests and both git hooks are re-copied from the org canon, whose scan-limit sentence (what the scan does not catch) `SECURITY.md` now repeats. — test: `scripts/lib/git-env-census.test.mjs`, `scripts/lib/js-lex.test.mjs`
+
 ## [2.8.0] - 2026-10-08
 
 CoalHearth now installs as a native Antigravity plugin.
