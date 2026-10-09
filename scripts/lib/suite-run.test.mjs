@@ -140,7 +140,7 @@ test('withStdoutSync: the preload goes AFTER what the caller already set in NODE
 test('the stdout preload is silent and harmless: with stdout a pipe, a file or nothing it exits 0 and says nothing', () => {
   const url = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
   const out = path.join(SANDBOX, 'preload-out.txt');
-  const fd = fs.openSync(out, 'w');
+  const fd = fs.openSync(out, 'w+'); // read back through this descriptor, never through the path again
   try {
     const piped = spawnSync(process.execPath, ['--import', url, '-e', "process.stdout.write('hello'); process.stderr.write('')"], { encoding: 'utf8', timeout: 30000 });
     assert.equal(piped.status, 0);
@@ -151,10 +151,11 @@ test('the stdout preload is silent and harmless: with stdout a pipe, a file or n
     assert.equal(toFile.stderr, '');
     const none = spawnSync(process.execPath, ['--import', url, '-e', '1'], { stdio: 'ignore', timeout: 30000 });
     assert.equal(none.status, 0);
+    const got = Buffer.alloc(16);
+    assert.equal(got.toString('utf8', 0, fs.readSync(fd, got, 0, got.length, 0)), 'hello', 'the output of the child reached the file');
   } finally {
     fs.closeSync(fd);
   }
-  assert.equal(fs.readFileSync(out, 'utf8'), 'hello');
 });
 
 // ---- the waved files: floors ----------------------------------------------------------------------------------------------------------------
@@ -231,7 +232,7 @@ test('a manifest that does not match the roster runs NOTHING and is red with eve
   assert.equal(r.exitCode, 1);
   assert.equal(r.summary, null);
   assert.match(r.problems.join('|'), /marker\.fixture\.mjs has no entry/);
-  assert.equal(fs.existsSync(marker), false, 'no child was started');
+  assert.equal(fs.readdirSync(SANDBOX).includes(path.basename(marker)), false, 'no child was started');
   const ran = await run({ files: fx('marker'), env: { ...process.env, MARKER_FILE: marker }, expect: { floors: { 'marker.fixture.mjs': 1 }, names: {} } });
   assert.equal(ran.exitCode, 0);
   assert.equal(fs.readFileSync(marker, 'utf8'), 'ran', 'the control: with an entry the same file runs');
@@ -371,7 +372,7 @@ test('cli: a listed file that is missing, a test file on disk that is not listed
     const drift = await drive(plantRepo({ roster, expect: { floors: {}, names: {} } }), roster);
     assert.equal(drift.code, 1);
     assert.match(drift.err, /scripts\/test-expect\.json: scripts\/a\.test\.mjs has no entry/);
-    assert.equal(fs.existsSync(marker), false, 'nothing ran');
+    assert.equal(fs.readdirSync(SANDBOX).includes(path.basename(marker)), false, 'nothing ran');
     const ok = await drive(plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1 }, names: {} } }), roster);
     assert.equal(ok.code, 0);
     assert.equal(fs.readFileSync(marker, 'utf8'), 'ran', 'the control: with a matching manifest the file runs');
