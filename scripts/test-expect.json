@@ -290,6 +290,7 @@
       "sameDir: a link and its target are one directory, though their paths differ, and git's answer from inside the link is that directory (the macOS leg)",
       "a repository reached by its 8.3 short name is the directory git reports: real paths are compared, not spellings (the Windows runner)",
       "a fixture call is handed GIT_CONFIG_NOSYSTEM and no other GIT_ name beyond the three the flock allows, whatever the process inherited",
+      "a named environment key whose value is undefined is left out of a child's environment, never passed as the string \"undefined\"",
       "the fixtures run in the test's own sandbox: a hostile global git config and HOME never reach them, and the fixture folders live inside it",
       "the pushed range scans a file git calls binary (a NUL byte, a -diff attribute), unless the caller skips its path",
       "a key in a pushed commit message or annotated-tag message is a hit, never the value",
