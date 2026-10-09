@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+'use strict';
+// CoalHearth UserPromptSubmit hook (Claude Code adapter) — board #94, issue #13.
+//
+// THE GAP: SessionStart's warm-resume fires only when a NEW session opens after the
+// PARENT dies. A subagent dying mid-flight leaves the parent session alive, so
+// SessionStart never fires — the only place a died-subagent record could ever
+// surface was the NEXT session's resume block, which could be hours away. This hook
+// closes that gap on the SANCTIONED UserPromptSubmit channel (hooks-safety.md
+// Phoenix #13): the live journal's inFlightAgents already records a spawn's
+// resolution (status/outcome, board #94's PostToolUse capture) the moment its tool
+// call resolves — this hook surfaces any RESOLVED-but-not-yet-shown entry on the
+// user's very next prompt, which in a live session is seconds to minutes away, not
+// a session restart.
+//
+// HONEST SCOPE (unchanged from Incident E): this does NOT detect a subagent whose
+// tool call has never resolved at all (true "still running, or the harness itself
+// died before the call could resolve") — Claude Code's PostToolUse only fires AT
+// resolution, and this room does not yet track a PENDING/dispatch-time record (no
+// PreToolUse wiring exists here). A dead-BEFORE-resolution subagent is invisible to
+// this hook exactly as it always was; SessionStart's next-boot resume block is still
+// the recovery path for that class. Named as a follow-up, not built here.
+//
+// Phoenix-13: fail-silent, zero-dep, no network, no child process, no process.exit().
+// The ONLY emit is the sanctioned UserPromptSubmit stdout channel, and only when there
+// is something new to say — the common case (nothing unsurfaced) does one journal
+// read and stops, no write, matching Phoenix #3's fast-path budget.
+const fs = require('node:fs');
+const { ResumeEngine } = require('../lib/resume-engine.js');
+const { HandoffJournal } = require('../lib/handoff-journal.js');
+const { loadConfig } = require('../lib/load-config.js');
+const { firstString } = require('../lib/journal-step.js');
+
+// A spawn is "worth nudging about" once it has RESOLVED (status is set by board #94's
+// deriveStatus — 'completed' or 'failed'; 'unknown' means tool_response gave no
+// recognizable status at all, which is not new information worth interrupting for)
+// AND has not already been shown (`surfaced`). Never re-nags the same resolution twice.
+function unsurfacedResolved(agents) {
+  return (Array.isArray(agents) ? agents : []).filter(
+    (a) => a && typeof a === 'object' && (a.status === 'completed' || a.status === 'failed') && !a.surfaced
+  );
+}
+
+function formatNudge(entries) {
+  const lines = entries.map((a) => {
+    const type = a.subagentType ? ` [${a.subagentType}]` : '';
+    const outcome = a.outcome ? ` — "${a.outcome}"` : '';
+    return `- ${a.description || '(no description)'}${type} — status: ${a.status}${outcome}`;
+  });
+  return `[CoalHearth] A subagent resolved since your last message (this session, not a restart):
+${lines.join('\n')}
+⚠️ \`status\` is self-reported by the subagent and has been observed WRONG (a "failed" subagent has actually completed) — verify liveness before deciding to re-dispatch or discard; resuming is cheap, try it before waiting on a stated reset time.`;
+}
+
+function main() {
+  let raw = '';
+  try { raw = fs.readFileSync(0, 'utf8'); } catch { /* no stdin -> no session context, still try cwd */ }
+  let payload = {};
+  try { payload = JSON.parse(raw); } catch { /* garbage stdin -> {} */ }
+
+  const wsCwd = firstString(payload, ['cwd', 'Cwd']);
+  if (wsCwd) { try { process.chdir(wsCwd); } catch { /* keep spawn cwd */ } }
+
+  const config = loadConfig();
+  // Cheap first read (no lock): the common case is nothing to surface, and this must
+  // stay fast (Phoenix #3) since UserPromptSubmit fires on EVERY prompt.
+  const engine = new ResumeEngine(config.journal || {}, config.recovery || {});
+  const data = engine.detectAbortedSession(); // reads the LIVE journal; 'in_progress' covers a still-running session same as an aborted one
+  if (!data) return;
+  const pending = unsurfacedResolved(data.inFlightAgents);
+  if (!pending.length) return;
+
+  console.log(formatNudge(pending)); // sanctioned UserPromptSubmit context-injection channel (Phoenix #13)
+
+  // Mark shown, under the SAME lock PostToolUse uses (H1) -- a concurrent tool call's
+  // recordStep must never lose this write, and this write must never clobber a
+  // concurrent recordStep's accumulated modifiedFiles/inFlightAgents. Re-check inside
+  // the lock (the cheap read above is optimistic; the journal may have moved).
+  const shownKeys = new Set(pending.map((a) => `${a.description} ${a.spawnedAt}`));
+  const journal = new HandoffJournal(config.journal || {});
+  journal.updateUnderLock((prior) => {
+    if (!prior || typeof prior !== 'object') return prior; // nothing to mark, no-op save
+    const agents = Array.isArray(prior.inFlightAgents) ? prior.inFlightAgents : [];
+    return {
+      ...prior,
+      inFlightAgents: agents.map((a) =>
+        a && typeof a === 'object' && shownKeys.has(`${a.description} ${a.spawnedAt}`)
+          ? { ...a, surfaced: true }
+          : a
+      ),
+    };
+  });
+  // Fail-silent by design: if the mark-surfaced write fails (read-only fs), the same
+  // nudge repeats next prompt -- honest degrade, matching the room's existing
+  // "may repeat" pattern (session-start.js, ag-pre-invocation.js), no extra machinery.
+}
+
+try {
+  main();
+} catch {
+  // Phoenix #4: fail-silent, never throw, never crash the parent agent.
+}
+// No process.exit() — Phoenix #4 (would truncate the sanctioned stdout write above).

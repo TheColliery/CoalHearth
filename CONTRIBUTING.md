@@ -1,0 +1,102 @@
+# Contributing to CoalHearth
+
+CoalHearth is the session warm-resume engine of the [TheColliery](https://github.com/TheColliery) series. We welcome issues, bug reports, and pull requests.
+
+---
+
+## 🤝 Proposing a Change
+
+1. **Open an issue first** describing the problem, gap, or proposed feature (especially for hook-behavior changes — the hooks run inside every session).
+2. Make your code changes and keep the verification gates green.
+3. For hook or recovery-block changes, **validate against the hermetic fake-case suite** (`scripts/lib/hooks.test.mjs` simulates all the limit-hit failure modes) and, where you can, a real interrupted session — then document the behavior in your PR.
+
+---
+
+## 💻 Developing & Testing
+
+CoalHearth is **zero-dependency** (Node.js built-ins only, Node 22+). No `npm install` and no `package.json` — the gates run directly:
+
+```bash
+node scripts/build-plugin.mjs   # regenerate plugin/ from source
+node scripts/secret-gate.mjs    # gate: the house secret scan of the tracked tree (the git hooks run it first)
+node scripts/verify.mjs         # gate: manifests, factory config vs schema, config-key drift, pointer drift, git-spawn census, dist-sync, version pins
+node scripts/test.mjs           # zero-dependency test suite (node --test, explicit file list; each file is a TAP child run in waves, the next admitted only while a fresh machine reading says BREATHE; the run is judged by the TAP, not by an exit code: a file that exits before its tests register is vacuous, and every file has a count floor or a names list in scripts/test-expect.json; 120 s per test, a 2048 MB heap cap, a 4-minute clock on each file (`--file-clock-ms 240000`, `FILE_CLOCK_MS` in `scripts/test.mjs`) that kills that file's process tree, so a hang before a file's first test ends that file alone, and a 10-minute whole-run deadline that kills the process tree; each file force-exited when its tests finish, so a test must await everything it starts. The waves, the clocks and the stdout preload that keeps a force-exited file from losing its output are the org canon `scripts/lib/wave-run.mjs`, `wave-run.test.mjs` and `stdout-sync.mjs`, adopted by blob id and never edited here; the count floors, the names lists and the files run one at a time after the waves are this room's, in `scripts/lib/suite-run.mjs`)
+```
+
+### Development Rules
+* **Rebuild the dist after a source change:** edit `bin/`, `lib/`, `config/`, `hooks/`, `commands/`, or the manifest, then `node scripts/build-plugin.mjs` to re-sync `plugin/` (verify fails on a stale dist).
+* **`scripts/lib/config-schema.mjs` is the single source of truth** for every `.coalhearth.json` key — `verify.mjs` validates the factory config against it; the runtime `config/schema.json` mirrors it.
+* **A git child takes its environment from `gitEnv()` or from an allowlist, and from nothing else** (`scripts/lib/git-env.mjs`): a git hook exports an absolute `GIT_DIR`, and a gate or test fixture that inherits it acts on the wrong repository. The census is the org canon file, adopted by blob id and never edited here: `scripts/lib/git-env-census.mjs`, its witness corpus `scripts/lib/git-env-census.vectors.mjs` and its test `scripts/lib/git-env-census.test.mjs` (a bypass found in any room goes back to the corpus as a candidate row). `verify.mjs` runs it over the room's code (`scripts`, `bin` and `lib`, tests included) and fails a git spawn whose `env:` is not safe. It reads tokens, not what runs. Safe means `gitEnv(...)` alone, imported from this room's own `scripts/lib/git-env.mjs` (the specifier is resolved against the importing file's directory; a helper defined in the same file is judged by what it returns, never by its name), or a named-key allowlist: an object literal whose keys are plain names, that reads `process.env` one named key at a time, sets `GIT_CONFIG_NOSYSTEM` to the literal `'1'`, and holds no `GIT_` name beyond `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT` and `GIT_CEILING_DIRECTORIES`. A spawn with no `env:`, a spread or any other mention of `process.env`, `env || gitEnv(x)`, or an alias, a write or a callee that touches the env name is a finding. The canon counts only `spawnSync` and `execFileSync` called with the literal command `git` (or `git.exe`, or a template holding just git): an asynchronous `spawn`, `execFile`, `exec` or `execSync`, and a command held in a variable are not counted; a spawner reached through an alias (`import { spawnSync as run }`, `const run = spawnSync`) is refused as a finding, because the census cannot follow it. The header of `scripts/lib/git-env-census.mjs` ("THE NAMED CEILING") lists everything else it cannot see. The room's own pins live in `scripts/lib/git-env-pins.mjs`: two files held out by their git blob id because they cannot be routed through `gitEnv()`. They are the hazard proof `scripts/lib/git-env.test.mjs` (it feeds a poisoned `GIT_DIR` on purpose) and the org carrier `scripts/secret-gate.mjs` (its own `gitEnv` keeps `GIT_INDEX_FILE`). The Bankfire scanner test `scripts/secret-scan.test.mjs` had a third pin until its source rewrote its `gitEnv()` to named keys and the room adopted that blob; the canon census now reads it with no pin. A pin hides its whole file and matches only while the blob matches, so an edit or a re-copy of a pinned file spends the pin, `verify.mjs` fails on a stale pin, and `scripts/git-env-pins.test.mjs` holds the pins and the census over this tree from the test side; a pin is dropped when its file can be routed through `gitEnv()`. `verify.mjs` prints what the census produced, for example (as of 09b) `21 git spawn(s) across 69 file(s) (roots: scripts, bin, lib): 21 read safe (gitEnv() or an allowlist of named keys), 2 file(s) held out by a pinned blob (scripts/lib/git-env.test.mjs, scripts/secret-gate.mjs)`.
+* **The git hooks are the local gate.** `.githooks/pre-commit` and `.githooks/pre-push` (identical bytes) run `scripts/secret-gate.mjs` first (the staged tree on a commit; every pushed commit's added lines, message and tag on a push), then `verify.mjs`, then `test.mjs`. Enable them once per clone with `git config core.hooksPath .githooks`; git does not let a repository configure its own hooks.
+* **Keep the hooks Phoenix-pure:** zero dependencies, fail-silent (wrap in try/catch, exit 0, never `process.exit()`), no network, silent except the sanctioned channels.
+* **Add tests:** every lib change gets a unit test; every hook-behavior change gets a **hermetic spawn test** (spawn the real hook, sandbox TEMP + HOME). Register a new test *file* in `scripts/test.mjs` (the runner fails on an unlisted orphan) and add its entry to `scripts/test-expect.json`: a count floor under `floors`, or, for a suite whose tests are generated per vector (the census and the two secret scanners), its names under `names` (`node scripts/test.mjs --names <file>` prints them). A file with no entry, or an entry for a file not in the roster, makes the run red before any test runs.
+* **Language & tone:** shipped source and docs stay in English.
+
+### What CI does on a docs-only change
+
+Both required checks — `all-green` (CI) and `analyze (javascript)` (CodeQL) — **always run**, on
+every push. A change touching only non-shipped docs still reports them green, and each workflow
+writes a **job summary saying plainly that nothing ran**: no dist-sync check, no tests, no CodeQL
+query, no SARIF. Read that as *"there was nothing to check"*, never as *"the checks passed"* — in
+the checks list the two are indistinguishable, and the summary is the only place they differ.
+
+The two filters are deliberately **not** the same width. CodeQL skips every `.md`; CI skips only
+the six non-shipped root docs, because a **shipped** markdown file (`commands/*.md`) reaches
+`plugin/` and must still pass the dist-sync gate. Widening either one to match the other silently
+drops coverage.
+
+A third workflow, `link-check`, is **NOT a required check** — it isn't in the branch ruleset —
+but it still runs on every push and pull request, docs-only or not, and it does real work: it
+walks every tracked `.md` file outside `plugin/` (the generated dist copy) and
+`scripts/fixtures/` (the engine's own planted-defect test fixtures), and fails on a broken
+internal link or a heading anchor that doesn't resolve. There's no `paths:` filter on it (most of this room's citations point at
+non-markdown targets, so a filter scoped to `.md` would miss the change that breaks them), so a
+docs-only push doesn't get a free pass from `link-check` the way it does from CI and CodeQL — a
+broken link in the very doc you're editing goes red on this check, even though it can't block a
+merge on its own.
+
+Every job in every workflow declares a `timeout-minutes`, sized from that job's own recent runs, so a hung job ends as a failure instead of holding a runner for the 360-minute default; every checkout sets `persist-credentials: false`, because no step in this repository pushes.
+
+A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
+can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
+docs-only or not. Unlike the two required checks it does **not** report "nothing ran": on a
+docs-only push it still runs the **whole test suite** (every `*.test.mjs`, `*.test.cjs` and
+`*.test.js` on disk, under Node's experimental coverage flag) and publishes one line-coverage
+report, which GitHub shows as a coverage comment on a pull request. A red run there is a real
+failure to fix — a test broke — not a gate. Its upload step is `fail-on-error: false`, so a
+refused upload (say, Code Quality isn't switched on for the repository) shows as an `::error::`
+annotation inside a green run, not a red one.
+
+---
+
+## 🖥️ Supported Platforms
+
+CoalHearth is **hook-only by design** — the hooks ARE the product (a session-start-class event = resume, a per-tool event = journal). It runs wherever a platform ships that event **pair**: Claude Code (validated, plugin), Antigravity (validated on its native plugin path, headless; `plugin.json` and `hooks.json` at the root and in the dist, both gated by `verify.mjs`), plus the works-with config-only ports — Gemini CLI, Copilot CLI, Devin CLI, Kiro, Augment (see the README compat matrix and [`platform-configs/hooks/`](platform-configs/hooks/)). There is no skill directory to port: without a hook lifecycle there is nothing left to run, and a platform missing half the pair (session-start only, or per-tool only) cannot carry the product. If a platform ships the pair and isn't in the matrix, open an issue.
+
+---
+
+## 🗂️ Project Layout
+
+| Path | Purpose |
+|---|---|
+| `bin/` | Hook entrypoints: `session-start.js` (resume + self-update schedule) · `post-tool-use.js` (journal). |
+| `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `journal-step`, `load-config`, `repo-fs` (the bounded, contained reader every repo-planted file goes through). |
+| `config/schema.json` | Draft-07 JSON-Schema mirror of the config (derived from `scripts/lib/config-schema.mjs`). |
+| `hooks/hooks.json` | Hook wiring via `${CLAUDE_PLUGIN_ROOT}/bin/…`. |
+| `commands/update.md` | The `/coalhearth:update` self-update procedure (agent-side; the hook only schedules). |
+| `commands/stats.md` | The `/coalhearth:stats` measurement command (read-only journal/resume report). |
+| `scripts/` | Tool scripts: `build-plugin.mjs`, `verify.mjs`, `test.mjs`, `lib/` (ESM logic + hermetic tests). |
+| `plugin/` | Generated Claude Code plugin distribution — never hand-edit. |
+| `platform-configs/.coalhearth.json` | Commented factory default configuration. |
+
+---
+
+## 🚀 Releasing (Maintainers)
+
+Bump version in `.claude-plugin/plugin.json` ➡️ add a `CHANGELOG.md` entry ➡️ ensure `verify.mjs` and `test.mjs` pass ➡️ commit ➡️ create a signed git tag (`vX.Y.Z`) ➡️ push. The `create-release` workflow then creates the GitHub Release for a stable tag from that tag's own CHANGELOG entry and re-reads it byte for byte; nobody posts a Release by hand. A tag cut before the workflow existed is posted by running it from the default branch with the tag as input, and a beta launch is posted the same way with its launch-form option (a prerelease).
+
+---
+
+## 📄 License & Conduct
+
+Contributions are licensed under the [Apache License 2.0](LICENSE). Please assume good faith and be respectful. Report security issues per [SECURITY.md](SECURITY.md).
