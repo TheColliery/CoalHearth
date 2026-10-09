@@ -1,10 +1,13 @@
 // suite-run.mjs -- how scripts/test.mjs judges the enumerated suite (08e RUNNER BUILD; testing.md: a gate judges a run by the TAP test names it EXPECTS, never by an exit code).
 //
-// LAYER 0, under the three below: every child gets scripts/lib/stdout-sync.mjs as a preload (withStdoutSync). On a POSIX pipe a force-exited file process drops the tail of its report,
-// so the runner counts fewer tests than ran (the CI of 4744791); without this the layers below would be judging a truncated stream.
+// LAYER 0, under the three below, is the canon's (09a): wave-run.mjs puts scripts/lib/stdout-sync.mjs on the NODE_OPTIONS of every file it runs (withStdoutSync), because on a POSIX pipe a
+// force-exited file process drops the tail of its report and the runner counts fewer tests than ran (the CI of 4744791). The names lane below runs OUTSIDE wave-run, so it takes the
+// canon's exported withStdoutSync itself. The split with the canon, piece by piece: the preload, its wiring on the waved files and the per-file clock (--file-clock-ms) are the canon's;
+// the floors, the names manifest, the run-after-waves of the names files and the file clock and tree-kill of that lane are this room's.
 // THREE LAYERS, each one a different way a green exit code can lie:
 //   1. wave-run.mjs (the canon, adopted byte for byte) runs each file as its own `node --test --test-reporter=tap` child, admitted by the live machine reading, and reads
-//      a PASS from the TAP: a file that exits 0 before its tests registered is VACUOUS, never a pass. Its whole-run deadline kills the TREE of every running child.
+//      a PASS from the TAP: a file that exits 0 before its tests registered is VACUOUS, never a pass. Its whole-run deadline, and its per-file clock when the room passes one,
+//      kill the TREE of the running child.
 //   2. A COUNT FLOOR for every file the room lists in scripts/test-expect.json `floors`: the file must report at least that many tests (`# tests N`). A test that vanished
 //      from a file that still exits 0 (a `process.exit(0)` after the first test, a deleted leg) takes the count below its floor and the file is FAIL. A floor is a MINIMUM:
 //      adding tests never trips it, removing tests does until a person lowers it on purpose (a ratchet, never a target).
@@ -14,25 +17,16 @@
 // Every roster file must have exactly one of the two entries, and neither list may name a file outside the roster: the manifest drifts loudly in both directions, like the roster.
 //
 // NAMED OPEN, measured not assumed: the TAP of a file whose test exits 0 AFTER another test passed shows only the tests that finished. Layers 2 and 3 are what see that, for the
-// files that have an entry; a floor set to the current count sees one missing test of any file. The whole-run deadline is the only bound on a file that hangs at its top level
-// (before any test starts, so `--test-timeout` never applies): such a file runs to the deadline and is then FAIL, and the files that did not start are NOT-RUN.
+// files that have an entry; a floor set to the current count sees one missing test of any file. A file that hangs at its top level (before any test starts, so `--test-timeout`
+// never applies) is bounded by the per-file clock when the room sets one, else by the whole-run deadline: it is FAIL, and with the deadline the files that did not start are NOT-RUN.
 //
 // Node builtins plus ./wave-run.mjs only (Phoenix #2).
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, runWaves } from './wave-run.mjs';
+import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves } from './wave-run.mjs';
 
 const MAX_LISTED = 5;
-
-// The preload that keeps a force-exited file process from losing what it has written (see stdout-sync.mjs: a POSIX pipe queues writes and process.exit() drops them).
-const STDOUT_SYNC = new URL('./stdout-sync.mjs', import.meta.url).href;
-
-// The env every child of the run gets: the caller's own NODE_OPTIONS first (their preloads run before ours), then the stdout preload. Idempotent.
-export function withStdoutSync(env) {
-  const have = String(env.NODE_OPTIONS || '');
-  return have.includes(STDOUT_SYNC) ? env : { ...env, NODE_OPTIONS: (have + ' --import ' + STDOUT_SYNC).trim() };
-}
 
 const listSome = (items) => items.slice(0, MAX_LISTED).join(', ') + (items.length > MAX_LISTED ? ` (+${items.length - MAX_LISTED} more)` : '');
 
@@ -87,7 +81,7 @@ function killTree(child) { // wave-run.mjs does not export its own; the same two
   try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') child.kill('SIGKILL'); }
 }
 
-export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs }) {
+export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs, fileClockMs }) {
   return new Promise((resolve) => {
     const syncEnv = withStdoutSync(env);
     const childEnv = { ...syncEnv, NODE_OPTIONS: nodeOptionsWithHeap(syncEnv.NODE_OPTIONS, heapMb) };
@@ -104,10 +98,13 @@ export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs,
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
     const timer = setTimeout(() => { killedBy = 'killed at the whole-run deadline'; killTree(child); }, deadlineMs);
+    // the canon's per-file clock, same words as wave-run.mjs: it ends this file alone and names the clock, which the deadline above would only do at the end of the run
+    const clock = fileClockMs === undefined ? null : setTimeout(() => { if (!killedBy) { killedBy = `killed at the file clock (${fileClockMs} ms)`; killTree(child); } }, fileClockMs);
     const finish = (code, signal, startError) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (clock) clearTimeout(clock);
       const r = startError
         ? { file, status: STATUS.FAIL, reason: `could not start: ${startError}`, counts: null, failing: [] }
         : classifyFile({ file, code, signal, stdout: out, killedBy });
@@ -122,7 +119,7 @@ export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs,
 
 // ---- the suite ---------------------------------------------------------------------------------------------------------------------------------
 export async function runSuite(opts) {
-  const { files, expect, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs, read, serial, onEvent } = opts;
+  const { files, expect, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs, fileClockMs, read, serial, onEvent } = opts;
   const problems = expectProblems(expect, files);
   if (problems.length) return { exitCode: 1, problems, results: [], summary: null, extras: {} };
   const started = Date.now();
@@ -130,7 +127,7 @@ export async function runSuite(opts) {
   const waved = files.filter((f) => !Object.hasOwn(expect.names, f));
   const byFile = new Map();
   if (waved.length) {
-    const wave = await runWaves({ files: waved, cwd, env: withStdoutSync(env), heapMb, fileTimeoutMs, deadlineMs, read, serial, onEvent });
+    const wave = await runWaves({ files: waved, cwd, env, heapMb, fileTimeoutMs, deadlineMs, fileClockMs, read, serial, onEvent });
     for (const r of wave.results) byFile.set(r.file, applyFloor(r, expect.floors[r.file]));
   }
   const extras = {};
@@ -140,7 +137,7 @@ export async function runSuite(opts) {
       byFile.set(file, { file, name: file, status: STATUS.NOT_RUN, reason: 'the whole-run deadline was reached before this file started', counts: null, failing: [] });
       continue;
     }
-    const args = { file, cwd, env, heapMb, fileTimeoutMs, deadlineMs: left };
+    const args = { file, cwd, env, heapMb, fileTimeoutMs, deadlineMs: left, fileClockMs };
     onEvent?.({ type: 'pinned', file, deadlineMs: args.deadlineMs }); // the budget the pinned run is GIVEN, readable without a clock
     const { result, names } = await runPinned(args);
     if (result.status === STATUS.PASS || result.status === STATUS.SKIP) {

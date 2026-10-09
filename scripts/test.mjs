@@ -7,7 +7,8 @@
 //   - Each file runs as its own `node --test --test-reporter=tap --test-force-exit` child through scripts/lib/wave-run.mjs (the canon, BB-87), the next file admitted only while a
 //     fresh machine reading says BREATHE; a file that exits 0 before its tests registered is VACUOUS, not a pass.
 //   - scripts/test-expect.json holds a count FLOOR for every file, or, for the census and the secret scanners, the NAMES the file must report (scripts/lib/suite-run.mjs).
-//   - The whole run has a deadline that kills the process TREE of every running child: it is the only bound on a file that hangs before its first test.
+//   - The whole run has a deadline that kills the process TREE of every running child, and (09b) each file has its own wall clock, --file-clock-ms: a file that hangs before its first
+//     test is FAIL at its own clock and the rest of the roster still runs, where the deadline alone would end the whole run.
 //   `node scripts/test.mjs --names <file>` prints the top-level test names of one file, to keep the manifest.
 //
 // CWK-199 (R20): a harness child carries a finite clock and a heap cap (testing.md Determinism: every test run has a finite clock, a MUST; AGENTS.md, the runaway test child).
@@ -63,6 +64,9 @@ const TESTS = [
 const HEAP_CAP_MB = 2048;
 const TEST_TIMEOUT_MS = 120000;
 const DEADLINE_MS = 600000;
+// The per-file wall clock (--file-clock-ms), this room's own variable: the slowest roster file measured 58 s serial and 48 s in waves on a box 57% busy (09a, 2026-10-09), so 240 s is
+// four times the slowest and stays under the whole-run deadline; it kills one hung file and lets the rest of the run go on.
+const FILE_CLOCK_MS = 240000;
 
 // CWK-071: process.exit() forces the process to exit before pending stdout writes flush (node/runtime.md 7) -- set process.exitCode and let the process exit naturally.
 // The judge is imported inside main (node/runtime.md 1): a missing scripts/lib/suite-run.mjs is a clean message and a red exit, never a link-time stack.
@@ -77,7 +81,7 @@ async function main() {
   }
   process.exitCode = await suite.cli({
     repo, tests: TESTS, dirs: ['scripts', 'scripts/lib', 'lib', 'bin'], expectFile: 'scripts/test-expect.json', argv: process.argv.slice(2),
-    limits: { heapMb: HEAP_CAP_MB, fileTimeoutMs: TEST_TIMEOUT_MS, deadlineMs: DEADLINE_MS },
+    limits: { heapMb: HEAP_CAP_MB, fileTimeoutMs: TEST_TIMEOUT_MS, deadlineMs: DEADLINE_MS, fileClockMs: FILE_CLOCK_MS },
   });
 }
 

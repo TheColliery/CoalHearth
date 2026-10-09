@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { STATUS, runWaves } from './wave-run.mjs';
-import { expectProblems, judgeNames, applyFloor, testTotals, withStdoutSync, runSuite, runPinned, cli } from './suite-run.mjs';
+import { STATUS } from './wave-run.mjs';
+import { expectProblems, judgeNames, applyFloor, testTotals, runSuite, runPinned, cli } from './suite-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -105,57 +105,20 @@ test('testTotals: sums tests, passes and skipped TESTS over the files that repor
 });
 
 // ---- the loss at the end of a file process on a POSIX pipe (08e RUNNER RED FIX) ------------------------------------------------------------------------------------------
-test('the simulation bites: through the canon wave-run alone, a file of 300 tests reports fewer than 300 when its stdout queues writes and the process is force-exited', async () => {
-  const r = await runWaves({ files: ['many.fixture.mjs'], cwd: SANDBOX, env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, ...LIMITS, serial: true });
-  const res = r.results[0];
-  assert.ok(!(res.status === STATUS.PASS && res.counts && res.counts.tests === MANY), 'the control must lose events, or the legs below prove nothing: ' + res.status + ' ' + JSON.stringify(res.counts));
+test('the simulation bites: a plain node --test --test-force-exit child of 300 tests reports fewer than 300 when its stdout queues writes (no stdout-sync preload anywhere)', () => {
+  const env = { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-force-exit', 'many.fixture.mjs'], { cwd: SANDBOX, encoding: 'utf8', timeout: 60000, env });
+  const m = /# tests (\d+)/.exec(r.stdout);
+  assert.ok(!m || Number(m[1]) < MANY, 'the control must lose events, or the leg below proves nothing: ' + (m ? m[0] : 'no summary'));
 });
 
-test('a file of 300 tests whose stdout would queue writes (a POSIX pipe) still reports all 300 to the floors lane -- RED before the RED FIX (counts differed from leg to leg on the CI of 4744791)', async () => {
-  const r = await run({ files: ['many.fixture.mjs'], env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, expect: { floors: { 'many.fixture.mjs': MANY }, names: {} } });
-  const res = byName(r, 'many.fixture.mjs');
-  assert.equal(res.status, STATUS.PASS, res.reason);
-  assert.equal(res.counts.tests, MANY);
-  assert.equal(r.exitCode, 0);
-});
-
-test('the same for the names lane: every one of the 300 listed names is reported -- RED before the RED FIX', async () => {
+test('the names lane, which runs outside wave-run, still puts the canon preload on its child: all 300 listed names are reported when stdout would queue writes (a POSIX pipe) -- RED before the RED FIX', async () => {
   const names = Array.from({ length: MANY }, (_, i) => 't' + i);
   const r = await run({ files: ['many.fixture.mjs'], env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, expect: { floors: {}, names: { 'many.fixture.mjs': names } } });
   const res = byName(r, 'many.fixture.mjs');
   assert.equal(res.status, STATUS.PASS, res.reason);
   assert.equal(r.exitCode, 0);
-});
-
-test('withStdoutSync: the preload goes AFTER what the caller already set in NODE_OPTIONS, once, and the other variables are kept', () => {
-  const url = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
-  assert.equal(withStdoutSync({ A: '1' }).NODE_OPTIONS, '--import ' + url);
-  assert.equal(withStdoutSync({ A: '1' }).A, '1');
-  const mine = '--import file:///sim.mjs --max-old-space-size=512';
-  assert.equal(withStdoutSync({ NODE_OPTIONS: mine }).NODE_OPTIONS, mine + ' --import ' + url);
-  const once = withStdoutSync({ NODE_OPTIONS: mine });
-  assert.equal(withStdoutSync(once), once, 'a second call adds nothing');
-});
-
-test('the stdout preload is silent and harmless: with stdout a pipe, a file or nothing it exits 0 and says nothing', () => {
-  const url = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
-  const out = path.join(SANDBOX, 'preload-out.txt');
-  const fd = fs.openSync(out, 'w+'); // read back through this descriptor, never through the path again
-  try {
-    const piped = spawnSync(process.execPath, ['--import', url, '-e', "process.stdout.write('hello'); process.stderr.write('')"], { encoding: 'utf8', timeout: 30000 });
-    assert.equal(piped.status, 0);
-    assert.equal(piped.stdout, 'hello');
-    assert.equal(piped.stderr, '');
-    const toFile = spawnSync(process.execPath, ['--import', url, '-e', "process.stdout.write('hello')"], { stdio: ['ignore', fd, 'pipe'], encoding: 'utf8', timeout: 30000 });
-    assert.equal(toFile.status, 0);
-    assert.equal(toFile.stderr, '');
-    const none = spawnSync(process.execPath, ['--import', url, '-e', '1'], { stdio: 'ignore', timeout: 30000 });
-    assert.equal(none.status, 0);
-    const got = Buffer.alloc(16);
-    assert.equal(got.toString('utf8', 0, fs.readSync(fd, got, 0, got.length, 0)), 'hello', 'the output of the child reached the file');
-  } finally {
-    fs.closeSync(fd);
-  }
 });
 
 // ---- the waved files: floors ----------------------------------------------------------------------------------------------------------------
@@ -283,6 +246,32 @@ test('the pinned lane is GIVEN only the budget the earlier files left: after a s
   assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true);
 });
 
+test('the per-file clock (the canon --file-clock-ms) ends a file that hangs before its first test and the rest of the roster still runs: FAIL naming the clock, its grandchild dead, the next file PASS -- RED before 09a (the run waited for the whole-run deadline)', async () => {
+  const pidFile = path.join(SANDBOX, 'clock-wave-grandchild.pid');
+  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, fileClockMs: 2000, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
+  assert.equal(r.exitCode, 1);
+  assert.equal(byName(r, 'top-hang.fixture.mjs').status, STATUS.FAIL);
+  assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the file clock \(2000 ms\)/);
+  assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.PASS, 'the roster went on after the file that hung');
+  assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true, 'the grandchild died with the tree');
+});
+
+test('the same clock in the names lane: the hang is killed at the file clock with its tree, and the next names file still runs and passes', async () => {
+  const pidFile = path.join(SANDBOX, 'clock-pinned-grandchild.pid');
+  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, fileClockMs: 2000, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
+  assert.equal(r.exitCode, 1);
+  assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the file clock \(2000 ms\)/);
+  assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.PASS);
+  assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true, 'the grandchild died with the tree');
+});
+
+test('a file that ends before its clock is untouched by it (the clock is cleared on exit, so it never holds the run open or kills a later file)', async () => {
+  const r = await run({ files: fx('three'), fileClockMs: 60000, expect: { floors: { 'three.fixture.mjs': 3 }, names: {} } });
+  assert.equal(r.exitCode, 0);
+  const p = await runPinned({ file: fx('three')[0], cwd: SANDBOX, env: process.env, ...LIMITS, fileClockMs: 60000 });
+  assert.equal(p.result.status, STATUS.PASS);
+});
+
 test('runPinned: a file that cannot start is FAIL, never a throw; the pinned lane takes the room heap cap and drops a parent runner\'s NODE_TEST_CONTEXT', async () => {
   const none = await runPinned({ file: 'does-not-exist.fixture.mjs', cwd: SANDBOX, env: process.env, ...LIMITS });
   assert.equal(none.result.status, STATUS.FAIL);
@@ -402,6 +391,14 @@ test('scripts/test.mjs is wired to the judge: --names on a roster file prints JS
   assert.ok(Array.isArray(names) && names.length > 0 && names.every((n) => typeof n === 'string'));
   const unknown = spawnSync(process.execPath, ['scripts/test.mjs', '--wat'], { cwd: REPO, encoding: 'utf8', timeout: 60000 });
   assert.equal(unknown.status, 64);
+});
+
+test('scripts/test.mjs hands the judge a finite per-file clock that is under the whole-run deadline (09b: the canon --file-clock-ms is wired, not just available)', () => {
+  const text = fs.readFileSync(path.join(REPO, 'scripts', 'test.mjs'), 'utf8');
+  const num = (name) => Number((text.match(new RegExp('const ' + name + ' = (\\d+);')) || [])[1]);
+  assert.ok(Number.isInteger(num('FILE_CLOCK_MS')) && num('FILE_CLOCK_MS') > 0, 'FILE_CLOCK_MS is a positive integer');
+  assert.ok(num('FILE_CLOCK_MS') < num('DEADLINE_MS'), 'one hung file must not be allowed the whole run');
+  assert.ok(/limits: \{[^}]*fileClockMs: FILE_CLOCK_MS[^}]*\}/.test(text), 'the clock reaches the limits the judge is given');
 });
 
 test('scripts/test.mjs without its judge is a clean message and a red exit, never a link-time stack', () => {

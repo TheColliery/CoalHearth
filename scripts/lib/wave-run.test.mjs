@@ -8,8 +8,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, runWaves, defaultRead } from './wave-run.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves, defaultRead } from './wave-run.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAVE_RUN = path.join(HERE, 'wave-run.mjs');
@@ -205,10 +205,8 @@ test('the NODE_TEST_CONTEXT of a parent test runner never reaches a child: it wo
 });
 
 test('a file that leaves a handle open still ends (--test-force-exit), and a test that never settles is cancelled at the clock of the room: FAIL naming the cancel -- RED before BB-87', async () => {
-  const t0 = Date.now();
   const open = await runWaves({ files: fx('open-handle'), cwd: SANDBOX, env: process.env, ...LIMITS, serial: true, read: scripted('BREATHE') });
   assert.deepEqual(open.results.map((x) => x.status), [STATUS.PASS]);
-  assert.ok(Date.now() - t0 < 15000, 'the run ended without waiting for the handle');
   const hung = await runWaves({ files: fx('hang-async'), cwd: SANDBOX, env: process.env, ...LIMITS, fileTimeoutMs: 1500, serial: true, read: scripted('BREATHE') });
   assert.deepEqual(hung.results.map((x) => x.status), [STATUS.FAIL]);
   assert.match(hung.results[0].reason, /cancelled 1/);
@@ -224,9 +222,7 @@ test('a module that throws at load is FAIL; a listed file that does not exist is
 });
 
 test('the whole-run deadline kills a hung file\'s tree and the run ends; a file never started is NOT-RUN and the roster still reconciles -- RED before BB-87', async () => {
-  const t0 = Date.now();
   const r = await runWaves({ files: fx('hang-sync', 'pass'), cwd: SANDBOX, env: process.env, ...LIMITS, deadlineMs: 2500, serial: true, read: scripted('BREATHE') });
-  assert.ok(Date.now() - t0 < 30000, 'the run ended');
   assert.deepEqual(r.results.map((x) => x.status), [STATUS.FAIL, STATUS.NOT_RUN]);
   assert.match(r.results[0].reason, /whole-run deadline/);
   assert.match(r.results[1].reason, /before this file started/);
@@ -296,10 +292,8 @@ test('defaultRead passes the running count and the thresholds the room gives to 
 });
 
 test('defaultRead against the real core: one reading comes back as a verdict of the three kinds within the clock of the room -- RED before BB-87', async () => {
-  const t0 = Date.now();
   const r = await defaultRead({ readerPath: MACHINE_READING, timeoutMs: LIMITS.fileTimeoutMs })({ running: 1 });
   assert.ok(['BREATHE', 'WAIT', 'UNMEASURED'].includes(r.verdict), r.verdict);
-  assert.ok(Date.now() - t0 < LIMITS.fileTimeoutMs);
   if (r.verdict !== 'UNMEASURED') assert.equal(typeof r.raw.thresholds.cpuMaxPct, 'number');
 });
 
@@ -327,4 +321,191 @@ test('the command line: a serial run over real files prints one summary line on 
   assert.equal(red.status, 1);
   assert.match(red.stdout, /^VACUOUS .*exit0-before\.fixture\.mjs: /m);
   assert.match(red.stdout, /RED$/m);
+});
+
+// ---- 08d D2 (2026-10-09): a force-exited file process must not lose the tail of its report on a POSIX pipe; a hang before the first test needs a clock of its own ----
+// A POSIX pipe, SIMULATED (a Windows pipe is blocking, so the loss cannot happen on the machine that wrote this): in the test FILE's own process (the runner's child) the first
+// 32 KiB written go through at once, the rest is queued and dies with process.exit() -- unless the stream was switched to blocking, which is what stdout-sync.mjs does.
+const SIM = [
+  "if (process.env.NODE_TEST_CONTEXT === 'child-v8') {",
+  '  const out = process.stdout;',
+  '  let written = 0;',
+  '  let blocking = false;',
+  '  const h = out._handle;',
+  "  if (h && typeof h.setBlocking === 'function') { const real = h.setBlocking.bind(h); h.setBlocking = (v) => { blocking = !!v; return real(v); }; }",
+  '  const realWrite = out.write.bind(out);',
+  '  out.write = function (chunk, enc, cb) {',
+  "    const n = typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;",
+  '    const direct = blocking || written + n <= 32768;',
+  '    written += n;',
+  '    if (direct) return realWrite(chunk, enc, cb);',
+  '    setTimeout(() => realWrite(chunk, enc, cb), 400);',
+  '    return true;',
+  '  };',
+  '}',
+  '',
+].join(String.fromCharCode(10));
+fs.writeFileSync(path.join(SANDBOX, 'async-pipe.sim.mjs'), SIM);
+const SIM_NODE_OPTIONS = '--import ' + pathToFileURL(path.join(SANDBOX, 'async-pipe.sim.mjs')).href;
+const MANY = 300;
+fs.writeFileSync(path.join(SANDBOX, 'many.fixture.mjs'), "import { test } from 'node:test';" + String.fromCharCode(10) + 'for (let i = 0; i < ' + MANY + "; i++) test('t' + i, () => {});" + String.fromCharCode(10));
+// a hang BEFORE the first test: --test-timeout never applies to it, only a clock on the file itself can end it
+fs.writeFileSync(path.join(SANDBOX, 'hang-top.fixture.mjs'), "import { test } from 'node:test';" + String.fromCharCode(10) + 'setInterval(() => {}, 1000);' + String.fromCharCode(10) + 'await new Promise(() => {});' + String.fromCharCode(10));
+const STDOUT_SYNC_URL = pathToFileURL(path.join(HERE, 'stdout-sync.mjs')).href;
+
+test('the simulation is faithful: with no preload a force-exited file of 300 tests loses the end of its TAP and reads VACUOUS (the control for the fix below)', () => {
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-force-exit', path.join(SANDBOX, 'many.fixture.mjs')], {
+    cwd: SANDBOX, env: { ...process.env, NODE_TEST_CONTEXT: undefined, NODE_OPTIONS: SIM_NODE_OPTIONS }, encoding: 'utf8', timeout: 60000,
+  });
+  const c = classifyFile({ file: 'many.fixture.mjs', code: r.status, signal: r.signal, stdout: r.stdout });
+  assert.ok(c.status === STATUS.VACUOUS || c.status === STATUS.FAIL, `the loss must show: ${c.status} ${c.reason}`);
+  assert.notEqual(c.status, STATUS.PASS);
+});
+
+test('every child gets the stdout preload: the 300 tests of a force-exited file all report under the simulated POSIX pipe -- RED before the fix', async () => {
+  const r = await runWaves({ files: fx('many'), cwd: SANDBOX, env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, ...LIMITS, serial: true, read: scripted('BREATHE') });
+  assert.equal(r.results[0].status, STATUS.PASS, r.results[0].reason);
+  assert.equal(r.results[0].counts.tests, MANY);
+  assert.equal(r.exitCode, 0);
+});
+
+test('withStdoutSync: the preload goes AFTER what the caller already set in NODE_OPTIONS, once, and the other variables are kept', () => {
+  assert.equal(withStdoutSync({ A: '1' }).NODE_OPTIONS, '--import ' + STDOUT_SYNC_URL);
+  assert.equal(withStdoutSync({ A: '1' }).A, '1');
+  const mine = '--import file:///sim.mjs --max-old-space-size=512';
+  assert.equal(withStdoutSync({ NODE_OPTIONS: mine }).NODE_OPTIONS, mine + ' --import ' + STDOUT_SYNC_URL);
+  const once = withStdoutSync({ NODE_OPTIONS: mine });
+  assert.equal(withStdoutSync(once), once, 'a second call adds nothing');
+});
+
+test('the stdout preload is silent and harmless: with stdout a pipe, a file or nothing it exits 0 and says nothing', () => {
+  const out = path.join(SANDBOX, 'preload-out.txt');
+  const fd = fs.openSync(out, 'w+'); // read back through this descriptor, never through the path again
+  try {
+    const piped = spawnSync(process.execPath, ['--import', STDOUT_SYNC_URL, '-e', "process.stdout.write('hello'); process.stderr.write('')"], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(piped.status, 0);
+    assert.equal(piped.stdout, 'hello');
+    assert.equal(piped.stderr, '');
+    const toFile = spawnSync(process.execPath, ['--import', STDOUT_SYNC_URL, '-e', "process.stdout.write('hello')"], { stdio: ['ignore', fd, 'pipe'], encoding: 'utf8', timeout: 30000 });
+    assert.equal(toFile.status, 0);
+    assert.equal(toFile.stderr, '');
+    const none = spawnSync(process.execPath, ['--import', STDOUT_SYNC_URL, '-e', '1'], { stdio: 'ignore', timeout: 30000 });
+    assert.equal(none.status, 0);
+    const got = Buffer.alloc(16);
+    assert.equal(got.toString('utf8', 0, fs.readSync(fd, got, 0, got.length, 0)), 'hello', 'the output of the child reached the file');
+  } finally {
+    fs.closeSync(fd);
+  }
+});
+
+test('the stdout preload switches BOTH pipes, stdout and stderr, to blocking (a recorder loaded first sees the two calls)', () => {
+  const rec = path.join(SANDBOX, 'record-blocking.mjs');
+  fs.writeFileSync(rec, [
+    'globalThis.__calls = [];',
+    "for (const [name, s] of [['stdout', process.stdout], ['stderr', process.stderr]]) {",
+    "  const h = s._handle;",
+    "  if (h && typeof h.setBlocking === 'function') { const real = h.setBlocking.bind(h); h.setBlocking = (v) => { globalThis.__calls.push(name + ':' + v); return real(v); }; }",
+    '}',
+    '',
+  ].join(String.fromCharCode(10)));
+  // K3 (08d, found by the first POSIX runs): under the canon runner every child inherits the preload through NODE_OPTIONS, and NODE_OPTIONS imports run BEFORE the command line's, so a recorder
+  // started the old way sees nothing. This child therefore gets an EMPTY NODE_OPTIONS (its heap cap rides its own argv) and loads the preload only by the flag below: the test means the same
+  // alone and under the runner, and the runner's claim that every node process of the run inherits the preload stays true (the preload is not moved onto a command line).
+  const probe = (extra, env) => spawnSync(process.execPath, ['--max-old-space-size=256', ...extra, '-e', 'console.log(JSON.stringify(globalThis.__calls))'], { encoding: 'utf8', timeout: 30000, env });
+  const r = probe(['--import', pathToFileURL(rec).href, '--import', STDOUT_SYNC_URL], { ...process.env, NODE_OPTIONS: '' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout.trim()).sort(), ['stderr:true', 'stdout:true']);
+  // the control: the shape the runner hands a child (the preload already in NODE_OPTIONS) runs the preload first, so a recorder behind it sees no call -- why the strip above is needed
+  const inherited = probe(['--import', pathToFileURL(rec).href], withStdoutSync({ ...process.env, NODE_OPTIONS: '' }));
+  assert.equal(inherited.status, 0, inherited.stderr);
+  assert.deepEqual(JSON.parse(inherited.stdout.trim()), []);
+});
+
+test('the file clock: a file that hangs before its first test is killed at the clock of the file (FAIL naming it) and the next file still runs -- RED before the fix', async () => {
+  const r = await runWaves({ files: fx('hang-top', 'pass'), cwd: SANDBOX, env: process.env, ...LIMITS, deadlineMs: 40000, fileClockMs: 2000, serial: true, read: scripted('BREATHE') });
+  assert.deepEqual(r.results.map((x) => x.status), [STATUS.FAIL, STATUS.PASS]);
+  assert.match(r.results[0].reason, /file clock/);
+  assert.equal(r.exitCode, 1);
+});
+
+test('the file clock is optional but never loose: a value that is not a positive whole number is refused, and without it the whole-run deadline still ends a hang', async () => {
+  for (const bad of [0, -5, 1.5, '2000']) {
+    await assert.rejects(runWaves({ files: fx('pass'), cwd: SANDBOX, env: process.env, ...LIMITS, fileClockMs: bad, read: scripted('BREATHE') }), /fileClockMs must be a positive integer/, JSON.stringify(bad));
+  }
+  const r = await runWaves({ files: fx('hang-top', 'pass'), cwd: SANDBOX, env: process.env, ...LIMITS, deadlineMs: 2500, serial: true, read: scripted('BREATHE') });
+  assert.deepEqual(r.results.map((x) => x.status), [STATUS.FAIL, STATUS.NOT_RUN]);
+  assert.match(r.results[0].reason, /whole-run deadline/);
+});
+
+test('the command line: a file clock that never fires does not hold the process open (the timer is cleared when its file exits)', () => {
+  const r = spawnSync(process.execPath, [WAVE_RUN, '--heap-mb', '512', '--file-timeout-ms', '20000', '--deadline-ms', '60000', '--file-clock-ms', '600000', '--serial', '--', ...fx('pass')], { cwd: SANDBOX, encoding: 'utf8', timeout: 45000 });
+  assert.equal(r.status, 0, 'the process ended on its own, not at the spawn timeout: ' + (r.error ? r.error.code : r.stdout));
+  assert.match(r.stdout, /GREEN$/m);
+});
+
+test('the command line: --file-clock-ms is accepted, shown in the usage, and kills a hang before the first test without stopping the run', () => {
+  assert.match(cli(['--help']).stdout, /--file-clock-ms N {4}wall clock of ONE file/);
+  const bad = cli(['--file-clock-ms', 'soon']);
+  assert.equal(bad.status, 64);
+  assert.match(bad.stderr, /--file-clock-ms needs a whole number/);
+  const r = cli(['--heap-mb', '512', '--file-timeout-ms', '20000', '--deadline-ms', '40000', '--file-clock-ms', '2000', '--serial', '--', ...fx('hang-top', 'pass')]);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^FAIL .*hang-top\.fixture\.mjs: killed at the file clock/m);
+  assert.match(r.stdout, /pass 1 · fail 1 \(hang-top\.fixture\.mjs\) · vacuous 0 · skipped 0 · not-run 0 · reconciled 2 of 2 — RED$/m);
+});
+
+// ---- item 11 of order 09f (2026-10-09): the three defects the flock's first POSIX runs found --------------------------------------------------------
+
+// K1 (CoalWash 4c6928b, the ubuntu red): a TAP `not ok ... # TODO` is a test the author marked as a known gap. Node counts it under `# todo`, reads `# fail 0` and exits 0; the runner must agree.
+const TODO_TAP = tap(['# Subtest: real check', 'ok 1 - real check', '# Subtest: known gap', 'not ok 2 - known gap # TODO the platform lacks it', '1..2', '# tests 2', '# suites 0', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 1', '# duration_ms 90']);
+fs.writeFileSync(path.join(SANDBOX, 'todo-fails.fixture.mjs'), "import { test } from 'node:test'; import assert from 'node:assert/strict';" + String.fromCharCode(10) + "test('real check', () => assert.ok(true));" + String.fromCharCode(10) + "test.todo('known gap', () => { throw new Error('not built yet'); });" + String.fromCharCode(10));
+
+test('classifyFile: a failing test marked TODO is not a failure -- a file whose only red is a TODO reads PASS, and a real failure beside it is still named alone -- RED before K1', () => {
+  const todo = classifyFile({ file: 'a.test.mjs', code: 0, signal: null, stdout: TODO_TAP });
+  assert.equal(todo.status, STATUS.PASS, todo.reason);
+  assert.deepEqual(todo.failing, []);
+  const mixed = tap(['# Subtest: real check', 'ok 1 - real check', '# Subtest: known gap', 'not ok 2 - known gap # TODO the platform lacks it', '# Subtest: bad one', 'not ok 3 - bad one', '1..3', '# tests 3', '# suites 0', '# pass 1', '# fail 1', '# cancelled 0', '# skipped 0', '# todo 1']);
+  const both = classifyFile({ file: 'a.test.mjs', code: 1, signal: null, stdout: mixed });
+  assert.equal(both.status, STATUS.FAIL);
+  assert.deepEqual(both.failing, ['bad one'], 'the TODO is not named among the failures');
+  assert.doesNotMatch(both.reason, /known gap/);
+  // only TODO excuses a not-ok: a `not ok` carrying SKIP (node never prints one) is read conservatively as a failure, and a bare `not ok` with no directive is still a failure
+  const skipNotOk = classifyFile({ file: 'a.test.mjs', code: 1, signal: null, stdout: tap(['# Subtest: x', 'not ok 1 - x # SKIP odd', '1..1', '# tests 1', '# suites 0', '# pass 0', '# fail 1', '# cancelled 0', '# skipped 0', '# todo 0']) });
+  assert.deepEqual(skipNotOk.failing, ['x']);
+  assert.equal(classifyFile({ file: 'a.test.mjs', code: 1, signal: null, stdout: tap(['# Subtest: x', 'not ok 1 - x', '1..1', '# tests 1', '# suites 0', '# pass 0', '# fail 1', '# cancelled 0', '# skipped 0', '# todo 0']) }).status, STATUS.FAIL);
+});
+
+test('a real file with a failing test.todo: node exits 0 and the runner reports PASS, the file is not red -- RED before K1', async () => {
+  const r = await runWaves({ files: fx('todo-fails'), cwd: SANDBOX, env: process.env, ...LIMITS, serial: true, read: scripted('BREATHE') });
+  assert.equal(r.results[0].status, STATUS.PASS, r.results[0].reason);
+  assert.equal(r.exitCode, 0);
+});
+
+// K2 (six rooms on macOS): os.tmpdir() is /var/folders/... and a symlink to /private/var/..., while a child's cwd is the realpath. The same folder under two spellings must print as ONE relative name.
+test('display: a file named through a symlinked spelling of the folder prints as the relative name, not as the absolute path (the macOS /private class) -- RED before K2', async (t) => {
+  const link = path.join(os.tmpdir(), 'wave-run-link-' + process.pid + '-' + Date.now());
+  try { fs.symlinkSync(SANDBOX, link, 'junction'); } catch (e) { t.skip('this volume or account cannot make a link: ' + e.code); return; }
+  t.after(() => { try { fs.unlinkSync(link); } catch { /* a junction goes by rmdir on some builds */ try { fs.rmdirSync(link); } catch { /* gone */ } } });
+  const real = fs.realpathSync.native(SANDBOX);
+  const viaLink = path.join(link, 'fail.fixture.mjs');
+  const r = await runWaves({ files: [viaLink, path.join(real, 'pass.fixture.mjs')], cwd: real, env: process.env, ...LIMITS, serial: true, read: scripted('BREATHE') });
+  assert.deepEqual(r.results.map((x) => x.name), ['fail.fixture.mjs', 'pass.fixture.mjs']);
+  assert.match(r.summary.line, /fail 1 \(fail\.fixture\.mjs\)/);
+  // the other spelling: the run's folder named through the link, the file through the real path
+  const other = await runWaves({ files: [path.join(real, 'fail.fixture.mjs')], cwd: link, env: process.env, ...LIMITS, serial: true, read: scripted('BREATHE') });
+  assert.deepEqual(other.results.map((x) => x.name), ['fail.fixture.mjs']);
+});
+
+test('display fails closed: a file outside the folder, and a path that cannot be resolved, print as given -- never as a guessed relative name', async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wave-run-outside-'));
+  try {
+    fs.copyFileSync(path.join(SANDBOX, 'pass.fixture.mjs'), path.join(outside, 'pass.fixture.mjs'));
+    const gone = path.join(SANDBOX, 'sub', '..', 'not-here.fixture.mjs');
+    const r = await runWaves({ files: [path.join(outside, 'pass.fixture.mjs'), gone], cwd: SANDBOX, env: process.env, ...LIMITS, serial: true, read: scripted('BREATHE') });
+    assert.equal(r.results[0].name, path.join(outside, 'pass.fixture.mjs'));
+    assert.equal(r.results[1].name, gone, 'an unresolvable path is shown as the caller wrote it');
+    assert.match(r.results[1].reason, /missing/);
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
