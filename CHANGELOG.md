@@ -4,9 +4,14 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 
 ## [2.8.2] - 2026-10-09
 
-The Antigravity update note no longer spells out a config path.
+The journal folder pin now guards every delete and second write.
 
-The plugin dist changes in `commands/update.md` and the version string; the CodeQL fixes below are the room's own test tooling.
+The plugin dist changes in `lib/contained-dir.js`, `lib/handoff-journal.js`, `lib/resume-engine.js`, `commands/update.md` and the version string; the CodeQL fixes below are the room's own test tooling.
+
+### Security
+
+- **A link swapped in at the journal folder no longer redirects a delete or a second write** *(shipped: `lib/resume-engine.js`, `lib/contained-dir.js`, `lib/handoff-journal.js`)*. In 2.8.1 several acts still ran under one earlier check. The folder's pin is now asked again before each of these: the quarantine's removal of the original journal (and only after a copy that succeeded), each unlink and the rmdir of the legacy-phantom clean-up, each scratch file and each worktree the resume-time orphan sweep deletes, the rename into the journal name (in `save()` and in the shared atomic writer), and the self-ignore `.gitignore` write at construction (the folder is resolved again after it is made). A changed answer stops that act and fails closed: nothing is written or deleted through the swapped folder. **Behaviour change:** a quarantine whose copy fails for another reason (a full disk, a directory at the quarantine name) now leaves the corrupt journal in place; 2.8.1 removed it. Not covered: the instant between a pin answer and its own act; the two pid-named temp removals (the failure path of the atomic write and `lib/repo-fs.js`'s exclusive temp create), which remove only the temp this process just wrote, never recursively and never a name it did not create; and the `mkdir` at construction, which runs right after its own check. — test: `lib/handoff-journal.test.js`, `scripts/lib/cwk137.test.mjs`
+- **Erratum for `[2.8.1]`: its Security bullet says a refused quarantine leaves the corrupt journal where it is, and that was not true for every interleaving.** As shipped, one check covered both the quarantine's copy and its delete, so a link swapped in between the two let the delete remove the journal in the link's target (another project's recovery state, if the link pointed there). 2.8.2 closes it (the first item above); the `[2.8.1]` entry stays as published. — test: `lib/handoff-journal.test.js`
 
 ### Changed
 
