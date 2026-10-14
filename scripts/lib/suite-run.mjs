@@ -190,6 +190,25 @@ export async function cli({ repo, tests, dirs, expectFile, argv, limits, io = { 
     const { result, names } = await runPinned({ file, ...run });
     out(JSON.stringify(names, null, 2));
     err(`test runner: ${file} is ${result.status} with ${names.length} top-level name(s)`);
+    // 14a E1 (CodeRabbit t90): a list taken to refresh the manifest is never returned as good when it is partial. Two ways it is: the run is not PASS or SKIP (a failing or killed file keeps the
+    // names it reached), and a PASS that is short -- a file that exits 0 from a timer after its first test leaves a TAP complete in form (plan, "# tests 1", exit 0), so the TAP cannot tell,
+    // and the only witness left is what the list is about to replace: the names recorded for the file, or its count floor (the same two judgements runSuite applies).
+    if (result.status !== STATUS.PASS && result.status !== STATUS.SKIP) {
+      err(`test runner: ${file} did not pass (${result.reason}); the list above is partial or empty and must not be used`);
+      return 1;
+    }
+    const recorded = expect && expect.names && Object.hasOwn(expect.names, file) ? expect.names[file] : null;
+    const missing = Array.isArray(recorded) ? judgeNames(recorded, names).missing : [];
+    if (missing.length) {
+      err(`test runner: the list above is missing ${missing.length} name(s) the manifest records for ${file}: ${listSome(missing)}. A file that exits early reports only the tests that finished; if you removed these tests on purpose, edit scripts/test-expect.json by hand`);
+      return 1;
+    }
+    const floor = expect && expect.floors && Object.hasOwn(expect.floors, file) ? expect.floors[file] : null;
+    const judged = Number.isInteger(floor) ? applyFloor(result, floor) : result;
+    if (judged.status === STATUS.FAIL) {
+      err(`test runner: ${file}: ${judged.reason}`);
+      return 1;
+    }
     return 0;
   }
   if (arg) { err(`test runner: unknown argument ${arg}`); return 64; }

@@ -384,6 +384,48 @@ test('cli: --names prints the top-level names of one roster file as JSON and ret
   assert.match(unknown.err, /unknown argument --wat/);
 });
 
+// 14a E1 (CodeRabbit t90, the reviewer's W4): a list taken to refresh the manifest must never come back with exit 0 when it is partial. Two ways: the run is not PASS or SKIP (a failing
+// file, a killed one), and the run is PASS yet short -- a file that exits 0 from a timer after its first test leaves a TAP that is complete in form (plan, "# tests 1", exit 0), so the
+// TAP alone cannot tell; what can is the manifest the list is about to replace (the names recorded for the file, or its count floor).
+test('cli: --names returns 1 when the run is not PASS or SKIP, whatever the list holds (a failing file), and says the list must not be used', async () => {
+  const roster = { 'scripts/a.test.mjs': 'fail' };
+  const r = await drive(plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1 }, names: {} } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /scripts\/a\.test\.mjs is FAIL/);
+  assert.match(r.err, /must not be used/);
+});
+
+test('cli: --names returns 1 on a PASS that is short of the recorded names (exit 0 from a timer after the first test), naming the missing ones', async () => {
+  const roster = { 'scripts/a.test.mjs': 'exit-after-first' };
+  const r = await drive(plantRepo({ roster, expect: { floors: {}, names: { 'scripts/a.test.mjs': ['alpha', 'beta', 'gamma'] } } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /beta, gamma/);
+  assert.match(r.err, /edit scripts\/test-expect\.json by hand/);
+});
+
+test('cli: --names returns 1 on a PASS that is below the count floor of a floor file, saying how many ran', async () => {
+  const roster = { 'scripts/a.test.mjs': 'exit-after-first' };
+  const r = await drive(plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 3 }, names: {} } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /below its floor of 3/);
+});
+
+test('cli: --names (control) still returns 0 when the list is complete or longer than the recorded one', async () => {
+  const roster = { 'scripts/a.test.mjs': 'four' };
+  const longer = await drive(plantRepo({ roster, expect: { floors: {}, names: { 'scripts/a.test.mjs': ['alpha', 'beta', 'gamma'] } } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(longer.code, 0, longer.err);
+  assert.deepEqual(JSON.parse(longer.out), ['alpha', 'beta', 'gamma', 'delta']);
+  const floored = await drive(plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 4 }, names: {} } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(floored.code, 0, floored.err);
+});
+
+test('cli: --names (control) returns 0 for a file whose tests are all skipped (SKIP is a status the list may be taken from)', async () => {
+  const roster = { 'scripts/a.test.mjs': 'skip' };
+  const r = await drive(plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1 }, names: {} } }), roster, ['--names', 'scripts/a.test.mjs']);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(r.out), ['alpha']);
+});
+
 test('scripts/test.mjs is wired to the judge: --names on a roster file prints JSON, an unknown argument exits 64', () => {
   const ok = spawnSync(process.execPath, ['scripts/test.mjs', '--names', 'scripts/lib/jsonc.test.mjs'], { cwd: REPO, encoding: 'utf8', timeout: 60000 });
   assert.equal(ok.status, 0);

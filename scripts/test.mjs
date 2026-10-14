@@ -4,8 +4,10 @@
 // verify.mjs.
 //
 // 08e RUNNER BUILD: the suite is judged by what the TAP says, never by an exit code alone (testing.md: a gate judges a run by the TAP test names it expects).
-//   - Each file runs as its own `node --test --test-reporter=tap --test-force-exit` child through scripts/lib/wave-run.mjs (the canon, BB-87), the next file admitted only while a
-//     fresh machine reading says BREATHE; a file that exits 0 before its tests registered is VACUOUS, not a pass.
+//   - Each file runs as its own `node --test --test-reporter=tap --test-force-exit` child. The files with a count floor go through scripts/lib/wave-run.mjs (the canon, BB-87), the next
+//     file admitted only while a fresh machine reading says BREATHE; a file that exits 0 before its tests registered is VACUOUS, not a pass. The files with a NAMES list (the census and the
+//     two secret scanners) are NOT in the waves: scripts/lib/suite-run.mjs runs them one at a time AFTER the waves (runPinned), keeping each one's TAP, with no machine reading before
+//     them, under the same heap cap, per-file clock and whole-run deadline.
 //   - scripts/test-expect.json holds a count FLOOR for every file, or, for the census and the secret scanners, the NAMES the file must report (scripts/lib/suite-run.mjs).
 //   - The whole run has a deadline that kills the process TREE of every running child, and (09b) each file has its own wall clock, --file-clock-ms: a file that hangs before its first
 //     test is FAIL at its own clock and the rest of the roster still runs, where the deadline alone would end the whole run.
