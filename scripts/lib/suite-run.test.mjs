@@ -260,9 +260,11 @@ test('the per-file clock (the canon --file-clock-ms) ends a file that hangs befo
 
 // 14a thread 4231557167: after the kill the result must not wait for ever for a `close` that never comes. The seam: `killer` replaces the real kill with one that does nothing, so the child
 // lives on and its pipe stays open, which is what a POSIX grandchild in its own session does to the real kill. The fallback ends the file as FAIL, naming it.
+// The fixtures keep the event loop alive with an interval: a test that awaits a never-settling promise on an EMPTY loop is cancelled by the Node 22 runner within ~140 ms (CI run 38611537566),
+// so the child exits at once instead of hanging and the fallback is never reached.
 fs.writeFileSync(path.join(SANDBOX, 'selfpid.fixture.mjs'), [
   "import { test } from 'node:test'; import fs from 'node:fs';",
-  "test('alpha', async () => { fs.writeFileSync(process.env.SELF_PID_FILE, String(process.pid)); await new Promise(() => {}); });",
+  "test('alpha', async () => { fs.writeFileSync(process.env.SELF_PID_FILE, String(process.pid)); setInterval(() => {}, 1000); await new Promise(() => {}); });",
   '',
 ].join(String.fromCharCode(10)));
 test('runPinned: a kill that leaves the child alive does not wait for ever -- FAIL "did not stop after the kill" after the grace, never a hang -- RED before 14a', async () => {
@@ -304,7 +306,7 @@ test('runPinned: a hang whose detached grandchild holds the pipe after the real 
   const pidFile = path.join(SANDBOX, 'detached-gc.pid');
   fs.writeFileSync(path.join(SANDBOX, 'detached-gc.fixture.mjs'), [
     "import { test } from 'node:test'; import { spawn } from 'node:child_process'; import fs from 'node:fs';",
-    "test('alpha', async () => { const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 40000)'], { detached: true, stdio: 'inherit' }); fs.writeFileSync(process.env.GC_PID_FILE, String(g.pid)); await new Promise(() => {}); });",
+    "test('alpha', async () => { const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 40000)'], { detached: true, stdio: 'inherit' }); fs.writeFileSync(process.env.GC_PID_FILE, String(g.pid)); setInterval(() => {}, 1000); await new Promise(() => {}); });",
     '',
   ].join(String.fromCharCode(10)));
   const got = await Promise.race([
