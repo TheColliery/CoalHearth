@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.3] - 2026-10-14
+
+The three journal reads now ask the folder pin before they read.
+
+The plugin dist changes in `lib/handoff-journal.js`, `lib/resume-engine.js` and the version string; the new test file is the room's own tooling.
+
+### Security
+
+- **A link swapped in at the journal folder no longer feeds the SessionStart block** *(shipped: `lib/handoff-journal.js`, `lib/resume-engine.js`)*. Every write and delete under `<project root>/.claude/coalhearth/` has asked the folder's pin since 2.8.1 and 2.8.2, but the journal's three reads did not: `HandoffJournal.load`, `HandoffJournal._loadOrQuarantine` and `ResumeEngine.detectAbortedSession` read with the folder itself as the containment root, so a folder swapped for a link after the hook built the journal made that root the link's target, and the file behind the link was read. `detectAbortedSession` hands what it reads to the block the SessionStart hook prints into the model's context. Each of the three now asks the pin first; a refused read returns nothing, keeps the caller's state, and quarantines or marks nothing. Not covered: the instant between the pin answer and the open of the file, the same window the writes name. — test: `lib/read-pin.test.js`
+
 ## [2.8.2] - 2026-10-09
 
 The journal folder pin now guards every delete and second write.
