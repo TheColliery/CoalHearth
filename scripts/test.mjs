@@ -55,6 +55,7 @@ const TESTS = [
   'lib/contained-dir.test.js',
   'lib/repo-fs.test.js',
   'lib/journal-cap.test.js',
+  'lib/read-pin.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
   'bin/user-prompt-submit.test.js',

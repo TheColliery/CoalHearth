@@ -26,6 +26,7 @@
     "lib/contained-dir.test.js": 5,
     "lib/repo-fs.test.js": 15,
     "lib/journal-cap.test.js": 9,
+    "lib/read-pin.test.js": 15,
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,
     "bin/user-prompt-submit.test.js": 7,

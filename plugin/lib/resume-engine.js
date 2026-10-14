@@ -90,6 +90,9 @@ class ResumeEngine {
   detectAbortedSession() {
     if (!this.outputDir) return null; // fail-closed: no contained dir -> boot clean
     const journalPath = path.join(this.outputDir, JOURNAL_FILE);
+    // 14a (the E2-4 class, READ side): what this returns becomes the SessionStart block the model reads. The pin every write asks is asked before the read: a folder swapped for a link since
+    // it was checked returns nothing (boot clean), and nothing is quarantined or marked.
+    if (!this._pinned()) return null;
     // CWK-137 (R14): bounded, contained read (lib/repo-fs.js) -- a FIFO at the journal path used to hang SessionStart.
     const raw = readRepoFileBounded(journalPath, this.outputDir, MAX_JOURNAL_BYTES);
     if (raw === null) return null; // no journal (or one we refuse to read) -> nothing to resume, boot clean
