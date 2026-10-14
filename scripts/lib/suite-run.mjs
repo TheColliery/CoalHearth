@@ -81,7 +81,10 @@ function killTree(child) { // wave-run.mjs does not export its own; the same two
   try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') child.kill('SIGKILL'); }
 }
 
-export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs, fileClockMs }) {
+// 14a thread 4231557167: after a kill the result waits for the child's `close`. On POSIX a grandchild in its own session can keep the pipe open past the process-group kill, so `close` never
+// comes and the run hangs unbounded; wave-run.mjs races that wait against a timer, and so does this: killGraceMs (default fileTimeoutMs, as the canon waits) after the kill the file is FAIL
+// 'did not stop after the kill'. `killer` is the kill function (default killTree), a seam so the fallback is testable where the real kill always succeeds (Windows taskkill /T).
+export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs, deadlineMs, fileClockMs, killGraceMs = fileTimeoutMs, killer = killTree }) {
   return new Promise((resolve) => {
     const syncEnv = withStdoutSync(env);
     const childEnv = { ...syncEnv, NODE_OPTIONS: nodeOptionsWithHeap(syncEnv.NODE_OPTIONS, heapMb) };
@@ -97,15 +100,23 @@ export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs,
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
-    const timer = setTimeout(() => { killedBy = 'killed at the whole-run deadline'; killTree(child); }, deadlineMs);
+    let grace = null;
+    const kill = () => {
+      killer(child);
+      if (!grace) grace = setTimeout(() => finish(null, null, null, 'did not stop after the kill'), killGraceMs);
+    };
+    const timer = setTimeout(() => { killedBy = 'killed at the whole-run deadline'; kill(); }, deadlineMs);
     // the canon's per-file clock, same words as wave-run.mjs: it ends this file alone and names the clock, which the deadline above would only do at the end of the run
-    const clock = fileClockMs === undefined ? null : setTimeout(() => { if (!killedBy) { killedBy = `killed at the file clock (${fileClockMs} ms)`; killTree(child); } }, fileClockMs);
-    const finish = (code, signal, startError) => {
+    const clock = fileClockMs === undefined ? null : setTimeout(() => { if (!killedBy) { killedBy = `killed at the file clock (${fileClockMs} ms)`; kill(); } }, fileClockMs);
+    const finish = (code, signal, startError, stuck) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       if (clock) clearTimeout(clock);
-      const r = startError
+      if (grace) clearTimeout(grace);
+      const r = stuck
+        ? { file, status: STATUS.FAIL, reason: stuck, counts: null, failing: [] }
+        : startError
         ? { file, status: STATUS.FAIL, reason: `could not start: ${startError}`, counts: null, failing: [] }
         : classifyFile({ file, code, signal, stdout: out, killedBy });
       r.name = file;

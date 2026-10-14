@@ -239,9 +239,11 @@ test('the pinned lane is GIVEN only the budget the earlier files left: after a s
   });
   assert.equal(byName(r, 'slow.fixture.mjs').status, STATUS.PASS);
   assert.deepEqual(given.map((e) => e.file), ['slow.fixture.mjs', 'top-hang.fixture.mjs']);
-  assert.ok(given[0].deadlineMs > 5000 && given[0].deadlineMs <= 6000, 'the first pinned file is given what the run has: ' + given[0].deadlineMs);
-  // the slow file's own test waits 2500 ms, so at least that much is gone whatever the host does: a LOWER bound on elapsed time, which a loaded box can only widen
-  assert.ok(given[1].deadlineMs > 0 && given[1].deadlineMs <= 6000 - 2000, 'the hang is given the remainder, not the whole deadline: ' + given[1].deadlineMs);
+  // 14a thread 4231557196: relations only, no wall-clock window. How long the first file waited to start is the host's business (a loaded box can take over a second), so the lower bound
+  // `> 5000` is gone; what must hold at any speed is that the first budget never exceeds the deadline, and that the second is positive and strictly smaller than the first (the slow file's
+  // own 2500 ms wait is the reason, and a box can only make it larger).
+  assert.ok(given[0].deadlineMs <= 6000, 'the first pinned file is given at most what the run has: ' + given[0].deadlineMs);
+  assert.ok(given[1].deadlineMs > 0 && given[1].deadlineMs < given[0].deadlineMs, 'the hang is given the remainder, not the whole deadline: ' + given[1].deadlineMs + ' vs ' + given[0].deadlineMs);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
   assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true);
 });
@@ -254,6 +256,67 @@ test('the per-file clock (the canon --file-clock-ms) ends a file that hangs befo
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the file clock \(2000 ms\)/);
   assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.PASS, 'the roster went on after the file that hung');
   assert.equal(await gone(Number(fs.readFileSync(pidFile, 'utf8'))), true, 'the grandchild died with the tree');
+});
+
+// 14a thread 4231557167: after the kill the result must not wait for ever for a `close` that never comes. The seam: `killer` replaces the real kill with one that does nothing, so the child
+// lives on and its pipe stays open, which is what a POSIX grandchild in its own session does to the real kill. The fallback ends the file as FAIL, naming it.
+fs.writeFileSync(path.join(SANDBOX, 'selfpid.fixture.mjs'), [
+  "import { test } from 'node:test'; import fs from 'node:fs';",
+  "test('alpha', async () => { fs.writeFileSync(process.env.SELF_PID_FILE, String(process.pid)); await new Promise(() => {}); });",
+  '',
+].join(String.fromCharCode(10)));
+test('runPinned: a kill that leaves the child alive does not wait for ever -- FAIL "did not stop after the kill" after the grace, never a hang -- RED before 14a', async () => {
+  const pidFile = path.join(SANDBOX, 'selfpid.pid');
+  const t0 = Date.now();
+  const got = await Promise.race([
+    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: { ...process.env, SELF_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 20000, fileClockMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
+    new Promise((r) => setTimeout(() => r('HUNG'), 12000).unref()),
+  ]);
+  try {
+    assert.notEqual(got, 'HUNG', 'runPinned resolved');
+    assert.equal(got.status, STATUS.FAIL);
+    assert.equal(got.reason, 'did not stop after the kill');
+    const took = Date.now() - t0;
+    assert.ok(took < 10000, 'resolved within the grace, not at the outer watchdog');
+    assert.ok(took >= 1500 + 800 - 200, 'it waited the grace after the kill (a lower bound on elapsed time, which a slow box can only widen): ' + took);
+  } finally {
+    try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+  }
+});
+
+test('runPinned: the same fallback after the WHOLE-RUN deadline kill (no per-file clock set)', async () => {
+  const pidFile = path.join(SANDBOX, 'selfpid-deadline.pid');
+  const got = await Promise.race([
+    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: { ...process.env, SELF_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
+    new Promise((r) => setTimeout(() => r('HUNG'), 12000).unref()),
+  ]);
+  try {
+    assert.notEqual(got, 'HUNG', 'runPinned resolved');
+    assert.equal(got.status, STATUS.FAIL);
+    assert.equal(got.reason, 'did not stop after the kill');
+  } finally {
+    try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+  }
+});
+
+test('runPinned: a hang whose detached grandchild holds the pipe after the real kill still resolves FAIL (POSIX: the process-group kill does not reach a grandchild in its own session)', async (t) => {
+  if (process.platform === 'win32') { t.skip('taskkill /T takes the whole tree on Windows (measured 14a); the POSIX leg is read on CI'); return; }
+  const pidFile = path.join(SANDBOX, 'detached-gc.pid');
+  fs.writeFileSync(path.join(SANDBOX, 'detached-gc.fixture.mjs'), [
+    "import { test } from 'node:test'; import { spawn } from 'node:child_process'; import fs from 'node:fs';",
+    "test('alpha', async () => { const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 40000)'], { detached: true, stdio: 'inherit' }); fs.writeFileSync(process.env.GC_PID_FILE, String(g.pid)); await new Promise(() => {}); });",
+    '',
+  ].join(String.fromCharCode(10)));
+  const got = await Promise.race([
+    runPinned({ file: 'detached-gc.fixture.mjs', cwd: SANDBOX, env: { ...process.env, GC_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 30000, fileClockMs: 1500, killGraceMs: 1500 }).then((x) => x.result),
+    new Promise((r) => setTimeout(() => r('HUNG'), 15000).unref()),
+  ]);
+  try {
+    assert.notEqual(got, 'HUNG');
+    assert.equal(got.status, STATUS.FAIL);
+  } finally {
+    try { process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+  }
 });
 
 test('the same clock in the names lane: the hang is killed at the file clock with its tree, and the next names file still runs and passes', async () => {
@@ -426,12 +489,15 @@ test('cli: --names (control) returns 0 for a file whose tests are all skipped (S
   assert.deepEqual(JSON.parse(r.out), ['alpha']);
 });
 
+// 14a thread 4231557209: a spawned runner (and the test child it runs) gets a sandboxed HOME / USERPROFILE / TEMP / TMP / TMPDIR / CLAUDE_CONFIG_DIR, never the operator's real ones.
+const SANDBOX_ENV = { ...process.env, HOME: SANDBOX, USERPROFILE: SANDBOX, TEMP: SANDBOX, TMP: SANDBOX, TMPDIR: SANDBOX, CLAUDE_CONFIG_DIR: path.join(SANDBOX, '.claude') };
+
 test('scripts/test.mjs is wired to the judge: --names on a roster file prints JSON, an unknown argument exits 64', () => {
-  const ok = spawnSync(process.execPath, ['scripts/test.mjs', '--names', 'scripts/lib/jsonc.test.mjs'], { cwd: REPO, encoding: 'utf8', timeout: 60000 });
+  const ok = spawnSync(process.execPath, ['scripts/test.mjs', '--names', 'scripts/lib/jsonc.test.mjs'], { cwd: REPO, encoding: 'utf8', timeout: 60000, env: SANDBOX_ENV });
   assert.equal(ok.status, 0);
   const names = JSON.parse(ok.stdout);
   assert.ok(Array.isArray(names) && names.length > 0 && names.every((n) => typeof n === 'string'));
-  const unknown = spawnSync(process.execPath, ['scripts/test.mjs', '--wat'], { cwd: REPO, encoding: 'utf8', timeout: 60000 });
+  const unknown = spawnSync(process.execPath, ['scripts/test.mjs', '--wat'], { cwd: REPO, encoding: 'utf8', timeout: 60000, env: SANDBOX_ENV });
   assert.equal(unknown.status, 64);
 });
 
@@ -447,7 +513,7 @@ test('scripts/test.mjs without its judge is a clean message and a red exit, neve
   const lone = path.join(SANDBOX, 'lone-repo');
   fs.mkdirSync(path.join(lone, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(REPO, 'scripts', 'test.mjs'), path.join(lone, 'scripts', 'test.mjs'));
-  const r = spawnSync(process.execPath, ['scripts/test.mjs'], { cwd: lone, encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(process.execPath, ['scripts/test.mjs'], { cwd: lone, encoding: 'utf8', timeout: 60000, env: SANDBOX_ENV });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /test runner: cannot load scripts\/lib\/suite-run\.mjs \(ERR_MODULE_NOT_FOUND\)/);
   assert.doesNotMatch(r.stderr, /\n\s+at /, 'no stack frame');
