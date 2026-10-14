@@ -1,5 +1,5 @@
 name: "Bug report"
-description: "A hook, the journal/resume engine, the budget nudge, or a script misbehaves"
+description: "A hook, the journal/resume engine, the subagent-resolution nudge, or a script misbehaves"
 title: "[bug] <component>: <one-line summary>"
 labels: ["bug"]
 body:
@@ -10,7 +10,7 @@ body:
       options:
         - warm-resume / recovery block (session-start.js + resume-engine.js)
         - journaling (post-tool-use.js + handoff-journal.js + state-snapshot.js)
-        - budget guardrail nudge (budget-tracker.js)
+        - subagent-resolution nudge (user-prompt-submit.js)
         - orphan sweep (resume-engine.js)
         - self-update (session-start.js schedule + commands/update.md)
         - config (load-config.js / config-schema.mjs / schema.json)
