@@ -565,3 +565,21 @@ test('CWK2-027 verify.mjs negative path: a shell-string SessionStart command in 
   assert.equal(bad.status, 1, 'a shell-string command must FAIL, got:\n' + bad.stdout + bad.stderr);
   assert.ok(bad.stdout.includes('does not wire SessionStart in exec form'), 'the FAIL names the event, got:\n' + bad.stdout);
 });
+
+// 15b E1 t105 (finding 1): a handler that keeps command "node" and the right args but loses or changes its `type` is not a Claude Code command hook. hooks-exec-form.test.mjs rejects
+// it, so the gate must too, or verify.mjs run alone reports wiring the manifest test refuses.
+for (const [label, mutate] of [['missing', (h) => { delete h.type; }], ['changed to "prompt"', (h) => { h.type = 'prompt'; }]]) {
+  test(`15b t105 verify.mjs negative path: a hooks/hooks.json handler with its type ${label} FAILs the gate by event name`, (t) => {
+    const tmp = mkTmp();
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    seed(tmp);
+    assert.equal(run(tmp).status, 0, 'setup: a pristine copy passes');
+    const hj = path.join(tmp, 'hooks', 'hooks.json');
+    const manifest = JSON.parse(fs.readFileSync(hj, 'utf8'));
+    mutate(manifest.hooks.PostToolUse[0].hooks[0]);
+    fs.writeFileSync(hj, JSON.stringify(manifest, null, 2));
+    const bad = run(tmp);
+    assert.equal(bad.status, 1, 'a handler without type "command" must FAIL, got:\n' + bad.stdout + bad.stderr);
+    assert.ok(bad.stdout.includes('does not wire PostToolUse in exec form'), 'the FAIL names the event, got:\n' + bad.stdout);
+  });
+}

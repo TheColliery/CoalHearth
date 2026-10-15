@@ -53,6 +53,20 @@ test('the Antigravity twin is the named divergence: its commands carry no ${CLAU
   }
 });
 
+// hooks-safety.md section 4/7: PostToolUse is journal-only and prints NOTHING. SessionStart and UserPromptSubmit may print agent context: one JSON object that carries hookSpecificOutput,
+// or plain text opening with the hook's own prefix ([CoalHearth] nudge, or the warm-resume block). Anything else (an error line, a stack frame) is a stray print and fails. Measured on
+// 6657ca5 with the sandboxed env above: PostToolUse and the first UserPromptSubmit print '', SessionStart prints the '[CoalHearth] ' self-update line.
+const CONTEXT_PREFIXES = ['[CoalHearth] ', '> [!IMPORTANT]'];
+function assertSanctionedStdout(event, stdout) {
+  if (event === 'PostToolUse') return assert.equal(stdout, '', 'PostToolUse is journal-only: any stdout is a stray print');
+  if (stdout === '') return;
+  if (stdout.trimStart().startsWith('{')) {
+    const o = JSON.parse(stdout);
+    return assert.ok(o && typeof o === 'object' && o.hookSpecificOutput && typeof o.hookSpecificOutput === 'object', `${event}: JSON output must carry hookSpecificOutput`);
+  }
+  assert.ok(CONTEXT_PREFIXES.some((p) => stdout.startsWith(p)), `${event}: plain output must open with the hook's own prefix, got ${JSON.stringify(stdout.slice(0, 80))}`);
+}
+
 const PAYLOAD = {
   SessionStart: (cwd) => ({ hook_event_name: 'SessionStart', session_id: 't-exec', cwd, source: 'startup' }),
   PostToolUse: (cwd) => ({ hook_event_name: 'PostToolUse', session_id: 't-exec', cwd, tool_name: 'Read', tool_input: { file_path: path.join(cwd, 'notes.txt') }, tool_response: {} }),
@@ -81,7 +95,7 @@ for (const [label, root] of TREES) {
         { cwd: proj, env, input: JSON.stringify(PAYLOAD[event](proj)), encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL', windowsHide: true, shell: false });
       assert.equal(r.status, 0, `stderr: ${r.stderr}`);
       assert.equal(r.stderr, '');
-      if (r.stdout.trim().startsWith('{')) JSON.parse(r.stdout); // sanctioned output is one JSON object, plain agent-context text, or nothing
+      assertSanctionedStdout(event, r.stdout);
     });
   }
 }
