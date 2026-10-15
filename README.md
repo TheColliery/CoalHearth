@@ -91,7 +91,7 @@ claude plugin marketplace add TheColliery/CoalHearth
 claude plugin install coalhearth@coalhearth
 ```
 
-That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start.
+That's it — the hooks activate on your next session. No API keys, no network, no configuration required to start. It needs Claude Code 2.1.139 or later, the release that added the hook `args` field.
 
 ### Antigravity — validated on the plugin path, headless (`agy` 1.3.1, 2026-10-08); the global and project `hooks.json` paths stay unproven
 
