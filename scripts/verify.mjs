@@ -60,13 +60,16 @@ try {
   if (pj.name === 'coalhearth') ok("plugin.json name = 'coalhearth'"); else fail(`plugin.json name = '${pj.name}' (want 'coalhearth')`);
   if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(pj.version || '')) ok(`plugin.json version '${pj.version}' is semver`);
   else fail(`plugin.json version '${pj.version}' not semver`);
-  const hj = fs.readFileSync(path.join(repo, 'hooks', 'hooks.json'), 'utf8');
-  if (hj.includes('${CLAUDE_PLUGIN_ROOT}/bin/session-start.js')) ok('hooks.json wires SessionStart via ${CLAUDE_PLUGIN_ROOT}/bin');
-  else fail('hooks.json does not wire SessionStart under ${CLAUDE_PLUGIN_ROOT}/bin');
-  if (hj.includes('${CLAUDE_PLUGIN_ROOT}/bin/post-tool-use.js')) ok('hooks.json wires PostToolUse via ${CLAUDE_PLUGIN_ROOT}/bin');
-  else fail('hooks.json does not wire PostToolUse under ${CLAUDE_PLUGIN_ROOT}/bin');
-  if (hj.includes('${CLAUDE_PLUGIN_ROOT}/bin/user-prompt-submit.js')) ok('hooks.json wires UserPromptSubmit via ${CLAUDE_PLUGIN_ROOT}/bin');
-  else fail('hooks.json does not wire UserPromptSubmit under ${CLAUDE_PLUGIN_ROOT}/bin');
+  // CWK2-027: the entries are read, not grepped: each event wires ONE handler in exec form (command 'node' alone, the script in args), no shell string, no shell, no onFailure.
+  const hj = JSON.parse(fs.readFileSync(path.join(repo, 'hooks', 'hooks.json'), 'utf8'));
+  for (const [event, script] of [['SessionStart', 'session-start.js'], ['PostToolUse', 'post-tool-use.js'], ['UserPromptSubmit', 'user-prompt-submit.js']]) {
+    const want = '${CLAUDE_PLUGIN_ROOT}/bin/' + script;
+    const handlers = ((hj.hooks || {})[event] || []).flatMap((g) => (g && Array.isArray(g.hooks) ? g.hooks : []));
+    const good = handlers.length === 1 && handlers[0].command === 'node' && Array.isArray(handlers[0].args) && handlers[0].args.length === 1 && handlers[0].args[0] === want
+      && !('shell' in handlers[0]) && !('onFailure' in handlers[0]);
+    if (good) ok(`hooks.json wires ${event} in exec form (node + args ${want})`);
+    else fail(`hooks.json does not wire ${event} in exec form: want command 'node' with args [${want}], no shell or onFailure`);
+  }
 } catch (e) { fail(`plugin manifest: ${e.message}`); }
 
 // 08b (CWK-202 pilot): the Antigravity plugin (agy-customizations/docs/plugins.md + hooks.md). plugin.json names the plugin; hooks.json uses only AG's five events, command

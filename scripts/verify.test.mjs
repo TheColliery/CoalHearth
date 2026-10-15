@@ -546,3 +546,22 @@ test('08b AG FIXBACK 1, verify.mjs: a script at the folder root whose name start
     fs.rmSync(box, { recursive: true, force: true });
   }
 });
+
+// CWK2-027: the gate reads the hook entries and FAILs a shell-string command (the PowerShell expansion class), naming the event.
+test('CWK2-027 verify.mjs negative path: a shell-string SessionStart command in hooks/hooks.json FAILs the gate by event name', (t) => {
+  const tmp = mkTmp();
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  seed(tmp);
+  const clean = run(tmp);
+  assert.equal(clean.status, 0, 'setup: a pristine copy passes, got:\n' + clean.stdout + clean.stderr);
+  assert.ok(clean.stdout.includes('wires SessionStart in exec form'), 'the pristine run names the exec-form check');
+  const hj = path.join(tmp, 'hooks', 'hooks.json');
+  const manifest = JSON.parse(fs.readFileSync(hj, 'utf8'));
+  const h = manifest.hooks.SessionStart[0].hooks[0];
+  h.command = 'node "' + h.args[0] + '"';
+  delete h.args;
+  fs.writeFileSync(hj, JSON.stringify(manifest, null, 2));
+  const bad = run(tmp);
+  assert.equal(bad.status, 1, 'a shell-string command must FAIL, got:\n' + bad.stdout + bad.stderr);
+  assert.ok(bad.stdout.includes('does not wire SessionStart in exec form'), 'the FAIL names the event, got:\n' + bad.stdout);
+});

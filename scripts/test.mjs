@@ -50,6 +50,7 @@ const TESTS = [
   'scripts/lib/wave-run.test.mjs',
   'scripts/lib/suite-run.test.mjs',
   'scripts/build-plugin.test.mjs',
+  'scripts/hooks-exec-form.test.mjs',
   'scripts/verify.test.mjs',
   'lib/handoff-journal.test.js',
   'lib/state-snapshot.test.js',
