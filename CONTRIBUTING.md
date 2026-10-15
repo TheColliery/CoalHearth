@@ -82,7 +82,7 @@ CoalHearth is **hook-only by design** — the hooks ARE the product (a session-s
 | `bin/` | Hook entrypoints: `session-start.js` (resume + self-update schedule) · `post-tool-use.js` (journal). |
 | `lib/` | Core (CJS, required by the hooks): `handoff-journal`, `resume-engine`, `state-snapshot`, `journal-step`, `load-config`, `repo-fs` (the bounded, contained reader every repo-planted file goes through). |
 | `config/schema.json` | Draft-07 JSON-Schema mirror of the config (derived from `scripts/lib/config-schema.mjs`). |
-| `hooks/hooks.json` | Hook wiring via `${CLAUDE_PLUGIN_ROOT}/bin/…`. |
+| `hooks/hooks.json` | Hook wiring in the exec form: `command: "node"` with the script path `${CLAUDE_PLUGIN_ROOT}/bin/…` in `args`, no shell string (the Antigravity `hooks.json` at the root keeps its own relative commands). |
 | `commands/update.md` | The `/coalhearth:update` self-update procedure (agent-side; the hook only schedules). |
 | `commands/stats.md` | The `/coalhearth:stats` measurement command (read-only journal/resume report). |
 | `scripts/` | Tool scripts: `build-plugin.mjs`, `verify.mjs`, `test.mjs`, `lib/` (ESM logic + hermetic tests). |

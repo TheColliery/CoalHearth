@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.4] - 2026-10-15
+
+The Claude Code hook entries now use the exec form.
+
+The plugin dist changes in `hooks/hooks.json` and the version string; the new test and the stricter `verify.mjs` check are the room's own tooling.
+
+### Fixed
+
+- **The three Claude Code hook entries (SessionStart, PostToolUse, UserPromptSubmit) are now the exec form** *(shipped: `hooks/hooks.json`)*. Each entry is `"command": "node"` with the script path `${CLAUDE_PLUGIN_ROOT}/bin/<script>.js` in `args`, instead of one shell string. Why: Claude Code 2.1.299 refuses an action a plugin hook can block when the hook cannot be handed it, and on Windows without Git for Windows the shell-form string reached PowerShell, which expanded `${CLAUDE_PLUGIN_ROOT}` to nothing (measured by the CoalWash room); the vendor's hooks reference recommends the exec form for any hook that references a path placeholder. The Antigravity hook file (`hooks.json` at the repository root and in the dist) is unchanged: it carries no placeholder, its commands are relative (`node bin/ag-...`). `scripts/verify.mjs` now checks the form per event (it parses the JSON instead of searching the text for the path). — test: `scripts/hooks-exec-form.test.mjs`
+
 ## [2.8.3] - 2026-10-14
 
 The three journal reads now ask the folder pin before they read.
