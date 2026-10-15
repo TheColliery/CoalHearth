@@ -96,6 +96,14 @@ for (const [label, root] of TREES) {
       assert.equal(r.status, 0, `stderr: ${r.stderr}`);
       assert.equal(r.stderr, '');
       assertSanctionedStdout(event, r.stdout);
+      // 15b t105 LOW-1: the shape check above only judges how the output OPENS, so a stray line printed AFTER the hook's normal output passed. In this sandbox (empty HOME, no update stamp,
+      // no journal) SessionStart is deterministic: exactly the one self-update line (measured). Assert that exactly. The multi-line outputs (the warm-resume block, the UserPromptSubmit
+      // nudge) cannot be reached from here and are covered by the prefix predicate only, not by this exact check.
+      if (event === 'SessionStart') {
+        const lines = r.stdout.trimEnd().split(/\r?\n/);
+        assert.equal(lines.length, 1, `SessionStart prints exactly one line in the sandbox, got ${lines.length}: ${JSON.stringify(r.stdout.slice(0, 200))}`);
+        assert.ok(lines[0].startsWith('[CoalHearth] [self-update due]'), `SessionStart opens with the self-update line, got ${JSON.stringify(lines[0].slice(0, 80))}`);
+      }
     });
   }
 }
