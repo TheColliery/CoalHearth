@@ -87,7 +87,7 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              README.md|CHANGELOG.md|CONTRIBUTING.md|PRIVACY.md|SECURITY.md|LICENSE) ;;
+              README.md|CHANGELOG.md|CONTRIBUTING.md|PRIVACY.md|SECURITY.md|LICENSE|NOTICE) ;;
               *) docs_only=false ;;
             esac
           done <<< "$changed"

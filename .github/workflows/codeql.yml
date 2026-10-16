@@ -81,7 +81,7 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              *.md|LICENSE) ;;
+              *.md|LICENSE|NOTICE) ;;
               *) docs_only=false ;;
             esac
           done <<< "$changed"
@@ -147,7 +147,7 @@ jobs:
           {
             echo "## CodeQL — NO ANALYSIS RAN. This is not a clean bill of health."
             echo
-            echo "Every changed file is markdown or LICENSE, so CodeQL was not initialised:"
+            echo "Every changed file is markdown, LICENSE or NOTICE, so CodeQL was not initialised:"
             echo "**no query was executed and no SARIF was uploaded** for this push. Read"
             echo "it as *'there was nothing to analyze'*, never as *'the analysis passed'*."
             echo
