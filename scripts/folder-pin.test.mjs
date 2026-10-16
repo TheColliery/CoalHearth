@@ -45,6 +45,15 @@ function dirLink(target, p) {
   try { fs.symlinkSync(target, p, process.platform === 'win32' ? 'junction' : 'dir'); return true; } catch { return false; }
 }
 const SKIP = (t) => t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ') -- CI-measured on ubuntu/macOS');
+// t121 (CodeRabbit, 15b5): a spawn that fails or times out has status null, and a missing script exits 1 for an unrelated reason, so `notStrictEqual(r.status, 0)` plus an untouched target can pass
+// without configure.mjs ever refusing the link. The refusal is OBSERVED: the spawn completed (no error, no signal), the exact refusal status configure.mjs sets for it (process.exitCode = 1),
+// and the message that names which refusal it was.
+function assertRefusal(r, message) {
+  assert.equal(r.error, undefined, 'the spawn itself must complete: ' + (r.error && r.error.message));
+  assert.equal(r.signal, null, 'the child was not killed by a signal: ' + r.signal);
+  assert.equal(r.status, 1, 'configure.mjs refuses with exit status 1, got ' + r.status + '\n' + r.stdout + r.stderr);
+  assert.match(r.stderr, message, 'the refusal says which one it was:\n' + r.stderr);
+}
 const TARGET = (proj) => path.join(proj, '.claude', 'coal', 'coalhearth.json');
 
 // where -> plant a link there whose target is a folder INSIDE the project; returns false when the volume refuses the link
@@ -71,7 +80,7 @@ for (const where of Object.keys(PLANTS)) {
     const { proj } = project(t);
     if (!PLANTS[where](proj)) return SKIP(t);
     const r = spawnSync(process.execPath, [script, '--language', 'th'], { cwd: proj, encoding: 'utf8', env: sandboxedEnv(), timeout: 30000, killSignal: 'SIGKILL' });
-    assert.notStrictEqual(r.status, 0, 'refused loudly, got ' + r.status + '\n' + r.stdout + r.stderr);
+    assertRefusal(r, /refused to write the config/);
     assert.strictEqual(fs.existsSync(LANDED[where](proj)), false, 'nothing landed in the link target');
   });
 
@@ -83,7 +92,7 @@ for (const where of Object.keys(PLANTS)) {
     const body = '{"language":"MARKER-37"}';
     fs.writeFileSync(real, body);
     const r = spawnSync(process.execPath, [script, '--language', 'th'], { cwd: proj, encoding: 'utf8', env: sandboxedEnv(), timeout: 30000, killSignal: 'SIGKILL' });
-    assert.notStrictEqual(r.status, 0, 'refused loudly, got ' + r.status + '\n' + r.stdout + r.stderr);
+    assertRefusal(r, /cannot be read safely \(refused\)/);
     assert.strictEqual(fs.readFileSync(real, 'utf8'), body, 'the file behind the link is untouched');
   });
 }

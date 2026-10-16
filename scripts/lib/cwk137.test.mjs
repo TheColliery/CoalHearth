@@ -517,7 +517,11 @@ test('CWK-137 + CWK2-037: a directory link at .claude that stays INSIDE the proj
   fs.mkdirSync(inside);
   if (!link(inside, path.join(root, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
   const r = configure(root, ['--language', 'th']);
-  assert.notEqual(r.status, 0, 'refused loudly: ' + r.stdout + r.stderr);
+  // t121: observe the refusal itself (assertRefusal in scripts/folder-pin.test.mjs): the spawn completed, the exact status configure.mjs sets, and the message that names the refusal.
+  assert.equal(r.error, undefined, 'the spawn itself must complete: ' + (r.error && r.error.message));
+  assert.equal(r.signal, null, 'the child was not killed by a signal: ' + r.signal);
+  assert.equal(r.status, 1, 'configure.mjs refuses with exit status 1, got ' + r.status + '\n' + r.stdout + r.stderr);
+  assert.match(r.stderr, /refused to write the config/, r.stderr);
   assert.equal(fs.existsSync(path.join(inside, 'coal')), false, 'nothing landed in the link target');
 });
 
