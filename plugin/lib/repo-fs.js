@@ -52,7 +52,7 @@ function isContained(child, parent) {
 // first link, or { ok: false, why } for a path that is not lexically under the root or a component that cannot be lstat-ed (fail CLOSED, never a throw). A component that does not exist ends
 // the walk as plain: nothing below a missing folder can redirect anything (the write guard asks this BEFORE it creates the folders). Residual, named: the check and the later open are two
 // steps, so a link swapped in between is not caught here (the fd re-check in readRepoBytes only re-checks kind and size). Entry-level rule kept as it was: a file symlink is honoured when its
-// realpath stays inside the root (the exemplar's stricter 'inside its own folder' rule is not adopted: state-snapshot reads AGENTS.md at the root, which a repo may link to a sibling folder).
+// realpath stays inside the root (the exemplar's stricter 'inside its own folder' rule is not adopted: a file link at a config name can only point at another file of the same project, which the repository could carry at the config path itself, and the write replaces the link (temp + rename), never writes through it).
 function folderChain(p, root) {
   const rel = path.relative(path.resolve(root), path.resolve(p));
   if (rel === '' || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return { ok: false, why: 'outside' };
