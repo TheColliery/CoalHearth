@@ -11,7 +11,7 @@
     "scripts/lib/git-env.test.mjs": 10,
     "scripts/git-env-pins.test.mjs": 7,
     "scripts/release-notes.test.mjs": 24,
-    "scripts/verify-release-shape.test.mjs": 14,
+    "scripts/verify-release-shape.test.mjs": 17,
     "scripts/lib/release-shape.test.mjs": 31,
     "scripts/lib/hooks.test.mjs": 19,
     "scripts/lib/cwk137.test.mjs": 44,
