@@ -6,6 +6,7 @@
 //      realpathSync.native and must lie inside the project root's realpathSync.native. A junction or symlink at `.claude`,
 //      or anywhere above the target, that leads outside is REFUSED before anything is created or written. An unresolvable
 //      root fails closed.
+//   1b. (CWK2-037) the folder pin: a link ANYWHERE between the project root and the target's folder is refused even when it leads to another folder inside the project.
 //   2. temp-then-rename (node/runtime.md 5): the bytes go to a per-pid temp created exclusive, then renameSync replaces
 //      the destination ENTRY. A link planted at the destination (or at the `.bak`) is replaced, never written through. A
 //      failed rename keeps the old file, removes the temp, and never falls back to an in-place write. (CoalMine's
@@ -15,7 +16,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const repoFs = createRequire(import.meta.url)('../../lib/repo-fs.js');
-export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained } = repoFs;
+export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained, folderChain } = repoFs;
 
 export class RepoWriteRefused extends Error {
   constructor(message) {
@@ -37,6 +38,11 @@ function deepestExisting(p) {
 
 // Throws RepoWriteRefused unless `target` would be created/replaced inside `root`'s real directory.
 export function checkRepoWriteTarget(target, root) {
+  // CWK2-037: the FOLDER PIN comes first (see folderChain in lib/repo-fs.js): a link at any folder between the root and the target is refused wherever it points, a target inside the project
+  // included, because the containment compare below only asks that the resolved folder stay inside the project. A folder that does not exist yet ends the walk (nothing to redirect).
+  const chain = folderChain(path.resolve(target), root);
+  if (!chain.ok && chain.link) throw new RepoWriteRefused(`${target} sits behind a link at ${chain.link}`);
+  if (!chain.ok && chain.why === 'error') throw new RepoWriteRefused(`${target} cannot be checked against the project root ${root}`); // 'outside' (not lexically under the root) is judged by the realpath containment below
   let realRoot;
   try { realRoot = fs.realpathSync.native(root); } catch { throw new RepoWriteRefused(`the project root ${root} cannot be resolved`); }
   let realAnc;

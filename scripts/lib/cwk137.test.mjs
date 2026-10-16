@@ -134,7 +134,7 @@ test('CWK-137: an over-bound GLOBAL config is skipped and reported (both twins)'
   }
 });
 
-test('CWK-137: a project config reached through a junction/symlink that ESCAPES the project is refused; one that stays inside is honored (both twins)', (t) => {
+test('CWK-137: a project config reached through a junction/symlink that ESCAPES the project is refused; one that stays inside is refused too since CWK2-037, the folder pin (both twins)', (t) => {
   const root = project(t);
   const home = mk(t);
   const outside = mk(t, 'ch-cwk137-out-');
@@ -154,12 +154,13 @@ test('CWK-137: a project config reached through a junction/symlink that ESCAPES 
     assert.equal(merged.journal, undefined, name + ': a config outside the project is never loaded through the link');
     assert.deepEqual(unreadableOf(api, { cwd: root, home }), [unreadableLine(cfg, 'unreadable')], name);
   }
-  // control: the same link aimed INSIDE the project stays allowed
+  // CWK2-037: the same link aimed INSIDE the project is refused too (this leg used to assert 'honored'); the real folder chain is the control (lib/folder-pin.test.js)
   removeLink(path.join(root, '.claude', 'coal'), root, path.join(outside, 'coal', 'coalhearth.json'));
   assert.ok(link(inside, path.join(root, '.claude', 'coal'), true));
   for (const [name, api] of TWINS) {
     const merged = api.loadMergedConfig ? api.loadMergedConfig({ cwd: root, home }) : api.loadConfig({ cwd: root, home });
-    assert.equal(merged.journal.atomicityRetries, 4, name + ': a contained link is honored');
+    assert.equal(merged.journal, undefined, name + ': a contained link is refused since CWK2-037');
+    assert.deepEqual(unreadableOf(api, { cwd: root, home }), [unreadableLine(cfg, 'unreadable')], name);
   }
 });
 
@@ -510,14 +511,14 @@ test('CWK-137: configure never writes THROUGH a directory link at .claude that l
   assert.match(r.stderr, /Remove the link/i, 'says what to do next');
 });
 
-test('CWK-137 (control): a directory link at .claude that stays INSIDE the project is written through normally', (t) => {
+test('CWK-137 + CWK2-037: a directory link at .claude that stays INSIDE the project is REFUSED by the writer too (it used to be written through; the folder pin refuses any link on the chain)', (t) => {
   const root = project(t);
   const inside = path.join(root, 'real-claude');
   fs.mkdirSync(inside);
   if (!link(inside, path.join(root, '.claude'), true)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
   const r = configure(root, ['--language', 'th']);
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(inside, 'coal', 'coalhearth.json'), 'utf8')).language, 'th');
+  assert.notEqual(r.status, 0, 'refused loudly: ' + r.stdout + r.stderr);
+  assert.equal(fs.existsSync(path.join(inside, 'coal')), false, 'nothing landed in the link target');
 });
 
 test('CWK-137: configure never writes THROUGH a hard link at the config path -- the entry is replaced, the other name keeps its bytes', (t) => {
