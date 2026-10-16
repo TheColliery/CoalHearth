@@ -52,6 +52,7 @@ const TESTS = [
   'scripts/build-plugin.test.mjs',
   'scripts/hooks-exec-form.test.mjs',
   'scripts/folder-pin.test.mjs',
+  'scripts/front-door-links.test.mjs',
   'scripts/verify.test.mjs',
   'lib/handoff-journal.test.js',
   'lib/state-snapshot.test.js',
