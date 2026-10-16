@@ -40,8 +40,8 @@ writes a **job summary saying plainly that nothing ran**: no dist-sync check, no
 query, no SARIF. Read that as *"there was nothing to check"*, never as *"the checks passed"* — in
 the checks list the two are indistinguishable, and the summary is the only place they differ.
 
-The two filters are deliberately **not** the same width. CodeQL skips every `.md`; CI skips only
-the six non-shipped root docs, because a **shipped** markdown file (`commands/*.md`) reaches
+The two filters are deliberately **not** the same width. CodeQL skips every `.md` file, `LICENSE` and `NOTICE`; CI skips only
+the seven non-shipped root files (`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `PRIVACY.md`, `SECURITY.md`, `LICENSE` and `NOTICE`), because a **shipped** markdown file (`commands/*.md`) reaches
 `plugin/` and must still pass the dist-sync gate. Widening either one to match the other silently
 drops coverage.
 
