@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.5] - 2026-10-16
+
+A link at a project config folder is now refused wherever it points.
+
+The plugin dist changes in `lib/repo-fs.js` and the version string; the new tests, the write guard in `scripts/lib/repo-fs.mjs` (a repo script, not part of the dist) and the test roster are the room's own tooling.
+
+### Security
+
+- **A link planted at a folder above the project config no longer redirects the config read or the `configure.mjs` write** *(shipped: `lib/repo-fs.js`; repo script: `scripts/lib/repo-fs.mjs`)*. A cloned repository could carry a directory link (a Windows junction or a POSIX symlink) at `.claude`, at `.claude/coal`, or at the same folders under `.agents` or `.gemini`, aimed at another folder of the same project. The reader asked only that the config file's real path lie inside the project, so `loadConfig` read the `coalhearth.json` found in that other folder, and `scripts/configure.mjs` wrote the config and its `.bak` there. A link aimed outside the project was already refused (2.6.1). Fix: `folderChain` in `lib/repo-fs.js` examines every folder between the project root and the file with `lstat` and refuses a link at any of them, wherever it points; the read and the write guard both ask it. The project root itself is not walked, so a project opened through a linked path still reads its own files; a folder that does not exist yet ends the check as plain; a folder that cannot be examined is refused. A file link at an entry inside the project is still honored when its target is a regular file inside the project, because the state snapshot reads `AGENTS.md` at the root, which a repository may link to a sibling folder. Affected: v2.6.1 through v2.8.4, read in the code of each tag (the first tag with the contained reader that honors a directory link inside the project); the behavior was run on the v2.8.4 line only. Verified on Windows 11 with Node 24.19 with a junction at `.claude` and at `.claude/coal`; the POSIX symlink legs run on the CI legs. A link swapped in between the check and the open or write is not covered, as for the other link classes. The advisory record is in `SECURITY.md`. Fixed in commit `e418b42` — test: `lib/folder-pin.test.js`, `scripts/folder-pin.test.mjs`.
+
 ## [2.8.4] - 2026-10-15
 
 The Claude Code hook entries now use the exec form.
