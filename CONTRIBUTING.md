@@ -34,7 +34,7 @@ node scripts/test.mjs           # zero-dependency test suite (node --test, expli
 
 ### What CI does on a docs-only change
 
-Both required checks — `all-green` (CI) and `analyze (javascript)` (CodeQL) — **always run**, on
+Two of the three required checks — `all-green` (CI) and `analyze (javascript)` (CodeQL) — **always run**, on
 every push. A change touching only non-shipped docs still reports them green, and each workflow
 writes a **job summary saying plainly that nothing ran**: no dist-sync check, no tests, no CodeQL
 query, no SARIF. Read that as *"there was nothing to check"*, never as *"the checks passed"* — in
@@ -45,21 +45,20 @@ the seven non-shipped root files (`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`
 `plugin/` and must still pass the dist-sync gate. Widening either one to match the other silently
 drops coverage.
 
-A third workflow, `link-check`, is **NOT a required check** — it isn't in the branch ruleset —
-but it still runs on every push and pull request, docs-only or not, and it does real work: it
+A third workflow, `link-check`, **is a required check**: its job, `check`, is one of the three contexts the branch ruleset requires (`all-green`, `analyze (javascript)` and `check`). It runs on every push and pull request, docs-only or not, and it does real work: it
 walks every tracked `.md` file outside `plugin/` (the generated dist copy) and
 `scripts/fixtures/` (the engine's own planted-defect test fixtures), and fails on a broken
 internal link or a heading anchor that doesn't resolve. There's no `paths:` filter on it (most of this room's citations point at
 non-markdown targets, so a filter scoped to `.md` would miss the change that breaks them), so a
 docs-only push doesn't get a free pass from `link-check` the way it does from CI and CodeQL — a
-broken link in the very doc you're editing goes red on this check, even though it can't block a
-merge on its own.
+broken link in the very doc you're editing goes red on this check, and because the context is required it can block a
+merge.
 
 Every job in every workflow declares a `timeout-minutes`, sized from that job's own recent runs, so a hung job ends as a failure instead of holding a runner for the 360-minute default; every checkout sets `persist-credentials: false`, because no step in this repository pushes.
 
 A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
 can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
-docs-only or not. Unlike the two required checks it does **not** report "nothing ran": on a
+docs-only or not. Unlike those two required checks it does **not** report "nothing ran": on a
 docs-only push it still runs the **whole test suite** (every `*.test.mjs`, `*.test.cjs` and
 `*.test.js` on disk, under Node's experimental coverage flag) and publishes one line-coverage
 report, which GitHub shows as a coverage comment on a pull request. A red run there is a real
@@ -67,7 +66,7 @@ failure to fix — a test broke — not a gate. Its upload step is `fail-on-erro
 refused upload (say, Code Quality isn't switched on for the repository) shows as an `::error::`
 annotation inside a green run, not a red one.
 
-A fifth workflow, `front-door-links`, is **NOT a required check** either, and it is the outward half beside `link-check`: `link-check` reads the links that stay inside the repository, this one fetches the links that leave it (`http` and `https`) in the front doors that exist here (`README.md`, `SECURITY.md`, `CONTRIBUTING.md` and `PRIVACY.md`; it also reads `CODE_OF_CONDUCT.md`, `GOVERNANCE.md` and `ACCESSIBILITY.md` if they are ever added) and fails on a page that no longer answers, a deep link that a redirect sends to a site root, or a "publishing soon" note beside a page that is live. Links inside code spans and fenced blocks are examples and are not fetched. It runs on a push to `main` or a pull request that changes one of those files, the engine (`scripts/front-door-links.mjs`, `scripts/lib/front-door-links.mjs`) or the workflow file, and on a weekly clock (Monday 06:17 UTC), because a docs page can go away while the README stands still; it can also be run by hand (`workflow_dispatch`, or `node scripts/front-door-links.mjs README.md` before a README ships a new link). It reads only public pages, holds no secret, and a network failure on the day of a run shows as a red run to read, not a gate. The engine and its test are copied from the org canon by blob and are not edited here.
+A fifth workflow, `front-door-links`, is **NOT a required check** (its job id is `front-door-links`, and the ruleset does not list it), and it is the outward half beside `link-check`: `link-check` reads the links that stay inside the repository, this one fetches the links that leave it (`http` and `https`) in the front doors that exist here (`README.md`, `SECURITY.md`, `CONTRIBUTING.md` and `PRIVACY.md`; it also reads `CODE_OF_CONDUCT.md`, `GOVERNANCE.md` and `ACCESSIBILITY.md` if they are ever added) and fails on a page that no longer answers, a deep link that a redirect sends to a site root, or a "publishing soon" note beside a page that is live. Links inside code spans and fenced blocks are examples and are not fetched. It runs on a push to `main` or a pull request that changes one of those files, the engine (`scripts/front-door-links.mjs`, `scripts/lib/front-door-links.mjs`) or the workflow file, and on a weekly clock (Monday 06:17 UTC), because a docs page can go away while the README stands still; it can also be run by hand (`workflow_dispatch`, or `node scripts/front-door-links.mjs README.md` before a README ships a new link). It reads only public pages, holds no secret, and a network failure on the day of a run shows as a red run to read, not a gate. The engine and its test are copied from the org canon by blob and are not edited here.
 
 ---
 
