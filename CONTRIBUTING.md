@@ -58,7 +58,7 @@ Every job in every workflow declares a `timeout-minutes`, sized from that job's 
 
 A fourth workflow, `coverage`, is **report only** — not a required check, no threshold, and it
 can't block a merge — and it too runs on every push and pull request with no `paths:` filter,
-docs-only or not. Unlike those two required checks it does **not** report "nothing ran": on a
+docs-only or not. Unlike the `all-green` and `analyze (javascript)` checks it does **not** report "nothing ran": on a
 docs-only push it still runs the **whole test suite** (every `*.test.mjs`, `*.test.cjs` and
 `*.test.js` on disk, under Node's experimental coverage flag) and publishes one line-coverage
 report, which GitHub shows as a coverage comment on a pull request. A red run there is a real
