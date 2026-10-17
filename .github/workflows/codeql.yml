@@ -10,7 +10,7 @@ name: CodeQL
 # classification therefore lives in a STEP, and the expensive CodeQL steps are what skip.
 #
 # THE ASYMMETRY WITH ci.yml IS INTENTIONAL AND MUST BE PRESERVED: CodeQL skips ALL markdown
-# (`**.md`), CI skips only the six NON-SHIPPED docs. A shipped `commands/*.md` reaches
+# (`**.md`), CI skips only the seven NON-SHIPPED docs. A shipped `commands/*.md` reaches
 # plugin/, so CI must run dist-sync on it; no markdown ever needs a security scan. Widening
 # this list to match CI's, or narrowing CI's to match this, silently drops coverage.
 
