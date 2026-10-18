@@ -264,6 +264,8 @@
       "witness P-CM-13 [CoalMine 09a row 13]: every fixture is a counted spawn with NO finding and no pin (1 fixture)",
       "witness CM-14 [CoalMine 09a row 14]: every fixture is a counted spawn WITH a finding (2 fixtures)",
       "witness P-CM-14 [CoalMine 09a row 14]: every fixture is a counted spawn with NO finding and no pin (2 fixtures)",
+      "witness CF-18a [CoalFace 18a t163]: every fixture is a counted spawn WITH a finding (5 fixtures)",
+      "witness P-CF-18a [CoalFace 18a t163]: every fixture is a counted spawn with NO finding and no pin (2 fixtures)",
       "every id of the witness list is carried by a row: F1-F60 and R1-R3 by a vector, R4 and R5 by a named ceiling, P3-P7 by a vector, and P1 and P2 by the canon carriers",
       "the named ceilings are what they say: R4 (a spawner named with a unicode escape) and R5 (a command built by concatenation) are NOT counted, each with its reason",
       "no pin ships with the canon, and a pin matches only the bytes it names: any edit re-arms the census on that file",
