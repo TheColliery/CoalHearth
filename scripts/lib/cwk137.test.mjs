@@ -610,6 +610,36 @@ test('CWK-137: configure never READS a project config through a directory link t
   assert.match(r.stderr, /cannot be read safely \(refused\)/, 'the escaping read is refused, not merged into a rewrite');
 });
 
+// 18h fixback LOW-4: a link at the config path whose target is in ANOTHER folder inside the project is refused by the entry rule (CWK2-026), and the message must name that cause.
+// The link is INJECTED by a --require preload (lstat/stat/realpath.native/open answer for the entry as if it were a symlink), so the leg runs where a file symlink is refused.
+test('CWK2-026: configure refuses a config-path link to a file in ANOTHER project folder, and the message names that cause', (t) => {
+  const root = project(t);
+  const target = path.join(root, 'elsewhere', 'coalhearth.json');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify({ language: 'fr' }));
+  fs.mkdirSync(path.dirname(OWN_CFG(root)), { recursive: true });
+  const pre = path.join(mk(t, 'ch-cwk137-pre-'), 'inject-link.cjs');
+  fs.writeFileSync(pre, [
+    "const fs = require('node:fs'); const path = require('node:path');",
+    "const entry = path.resolve(process.env.CH_FAKE_ENTRY); const target = process.env.CH_FAKE_TARGET;",
+    "const same = (p) => typeof p === 'string' && path.resolve(p) === entry;",
+    "const lstat = fs.lstatSync, stat = fs.statSync, open = fs.openSync, rp = fs.realpathSync.native;",
+    "fs.lstatSync = function (p, ...a) { return same(p) ? Object.assign(Object.create(lstat.call(fs, target)), { isSymbolicLink: () => true, isFile: () => false }) : lstat.call(this, p, ...a); };",
+    "fs.statSync = function (p, ...a) { return same(p) ? stat.call(this, target, ...a) : stat.call(this, p, ...a); };",
+    "fs.openSync = function (p, ...a) { return same(p) ? open.call(this, target, ...a) : open.call(this, p, ...a); };",
+    "fs.realpathSync.native = function (p, ...a) { return same(p) ? rp.call(this, target, ...a) : rp.call(this, p, ...a); };",
+  ].join(String.fromCharCode(10)));
+  const r = spawnSync(process.execPath, [CONFIGURE, '--language', 'th'], {
+    cwd: root, encoding: 'utf8', timeout: 60000,
+    env: { ...sandboxedEnv({ CH_FAKE_ENTRY: OWN_CFG(root), CH_FAKE_TARGET: target }), NODE_OPTIONS: '--max-old-space-size=2048 --require ' + pre.split(path.sep).join('/') },
+  });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /cannot be read safely \(refused\)/);
+  assert.match(r.stderr, /a link to a file outside the project or in another folder/, 'names the cross-folder cause');
+  assert.equal(fs.existsSync(OWN_CFG(root)), false, 'nothing was written at the config path');
+  assert.equal(fs.readFileSync(target, 'utf8'), JSON.stringify({ language: 'fr' }), 'the link target is untouched');
+});
+
 // R14 FIXBACK (INSPECT LOW-1, M8c): the write guard fails CLOSED on a root it cannot resolve, exactly like its read-side twin.
 // configure.mjs always passes an existing root, so the branch is reachable only through a race (the root removed between the
 // walk and the write); a unit test is the only thing that holds it.

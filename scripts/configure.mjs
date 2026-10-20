@@ -252,7 +252,7 @@ function main() {
     rawConfig = content;
   } else if (got.why !== 'absent' && got.why !== 'dir') {
     process.exitCode = 1;
-    console.error(`Error: the existing config ${readPath} cannot be read safely (${got.why}) \u2014 nothing was written and it is untouched. Remove or fix it (a file over ${MAX_CONFIG_BYTES} bytes, a link out of the project, a special file or a permission problem), then run this again.`);
+    console.error(`Error: the existing config ${readPath} cannot be read safely (${got.why}) \u2014 nothing was written and it is untouched. Remove or fix it (a file over ${MAX_CONFIG_BYTES} bytes, a link to a file outside the project or in another folder, a linked folder above it, a special file or a permission problem), then run this again.`);
     return;
   }
   if (rawConfig !== null) {
