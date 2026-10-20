@@ -3,9 +3,10 @@
 // multi-gigabyte file does the same slowly) and a write that follows a link out of the project.
 //
 // READ -- readRepoBytes / readRepoText / readRepoFileBounded. The order is load-bearing:
-//   1. lstat kind gate BEFORE any open. A regular file proceeds. A symlink proceeds only when its realpath.native
-//      lies inside the root's realpath.native AND it resolves to a regular file. A FIFO, device, socket, directory,
-//      or an escaping/dangling/looping link is decided without opening anything.
+//   1. lstat kind gate BEFORE any open. A regular file proceeds. Under a root, a symlink proceeds only when its
+//      realpath.native lies inside the root's realpath.native, in the entry's OWN folder (CWK2-026, see repoEntryInfo),
+//      AND it resolves to a regular file. A FIFO, device, socket, directory, or an escaping/other-folder/dangling/
+//      looping link is decided without opening anything.
 //   2. open(O_RDONLY | O_NONBLOCK) (0 where the flag does not exist: Windows), so a FIFO swapped in after the lstat
 //      still cannot block.
 //   3. fstat the OPENED fd: regular file again, then the size bound. Over the bound = SKIPPED, never truncated: a
@@ -51,8 +52,10 @@ function isContained(child, parent) {
 // Windows junction as a symbolic link (measured 2026-10-15, CoalLedger 9f48634), so one lstat test covers both kinds. Returns { ok: true } for a plain chain, { ok: false, link } naming the
 // first link, or { ok: false, why } for a path that is not lexically under the root or a component that cannot be lstat-ed (fail CLOSED, never a throw). A component that does not exist ends
 // the walk as plain: nothing below a missing folder can redirect anything (the write guard asks this BEFORE it creates the folders). Residual, named: the check and the later open are two
-// steps, so a link swapped in between is not caught here (the fd re-check in readRepoBytes only re-checks kind and size). Entry-level rule kept as it was: a file symlink is honoured when its
-// realpath stays inside the root (the exemplar's stricter 'inside its own folder' rule is not adopted: a file link at a config name can only point at another file of the same project, which the repository could carry at the config path itself, and the write replaces the link (temp + rename), never writes through it).
+// steps, so a link swapped in between is not caught here (the fd re-check in readRepoBytes only re-checks kind and size). ENTRY-LEVEL RULE (CWK2-026, 18h; it was the looser 'anywhere inside the root' rule until then, the exemplar's stricter one not adopted): under a root, a file symlink at the entry is honoured only when its
+// target's realpath lies in the entry's OWN folder, path.dirname(realpath(entry)) === realpath(path.dirname(entry)), both sides through realpathSync.native. Every other link is refused, wherever it points,
+// a file in another folder of the project included: a config name that quietly hands another folder's file to the reader is the entry-level twin of the folder-chain link above. The common same-folder link
+// (AGENTS.md -> CLAUDE.md at the root) is kept. The write is unchanged: it replaces the link (temp + rename), never writes through it. root null (the user's own home files) follows links as before.
 function folderChain(p, root) {
   const rel = path.relative(path.resolve(root), path.resolve(p));
   if (rel === '' || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return { ok: false, why: 'outside' };
@@ -78,7 +81,12 @@ function repoEntryInfo(p, root) {
     try { realRoot = fs.realpathSync.native(root); } catch { return { kind: 'refused' }; } // an unresolvable root fails CLOSED
   }
   try {
-    if (realRoot !== null && !isContained(fs.realpathSync.native(p), realRoot)) return { kind: 'refused' };
+    if (realRoot !== null) {
+      const realP = fs.realpathSync.native(p);
+      if (!isContained(realP, realRoot)) return { kind: 'refused' };
+      // CWK2-026: a link is honoured only in the entry's own folder (a plain file always is: its realpath's folder is its folder's realpath)
+      if (lst.isSymbolicLink() && path.dirname(realP) !== fs.realpathSync.native(path.dirname(p))) return { kind: 'refused' };
+    }
     const st = lst.isSymbolicLink() ? fs.statSync(p) : lst;
     if (st.isFile()) return { kind: 'file' };
     if (st.isDirectory()) return { kind: 'dir' };
