@@ -116,7 +116,7 @@ Last scan: CoalHearth **v2.8.5** dist (`plugin/`, commit `d0de5c1`, the `v2.8.5`
 - **Atomic journal writes** (an exclusive temp-write + rename, with retry/backoff: a link planted at the temp name is replaced, never written through); a corrupt journal is quarantined aside rather than crashing the boot; the writer keeps the journal under the reader's 4 MiB bound by dropping its oldest recorded paths and counting them, and a journal over the bound that this tool did not write is not read and is replaced by a fresh one on the next recorded step; a disk-quota error prunes old logs and keeps the core state.
 
 ## Config parsing
-- The `.coalhearth.json` read is bounded and contained (see "Bounded, contained reads" above). `scripts/configure.mjs` refuses a config that is over 1 MiB, not a regular file, or reached through a link that leaves the project or through a link at a folder above it (since v2.8.5), and writes the config and its `.bak` through an exclusive temp renamed into place.
+- The `.coalhearth.json` read is bounded and contained (see "Bounded, contained reads" above). `scripts/configure.mjs` refuses a config that is over 1 MiB, not a regular file, or reached through a link that leaves the project or through a link at a folder above it (since v2.8.5), or a file link at the config path whose target is outside the file's own folder (since v2.8.6), and writes the config and its `.bak` through an exclusive temp renamed into place.
 - The `.coalhearth.json` parse is **prototype-pollution-guarded** — `__proto__` / `constructor` / `prototype` keys are dropped at parse time, so an untrusted project config (e.g. one shipped by a cloned repo) cannot pollute `Object.prototype` through the config merge.
 
 ## Repository and CI hygiene
