@@ -311,9 +311,17 @@ export function classifyTrackedIndexResult(r) {
   }
   if (r.status === 0) return { ok: true, stdout: typeof r.stdout === 'string' ? r.stdout : '' };
   const stderrLine = typeof r.stderr === 'string' ? r.stderr.split('\n')[0].trim() : '';
-  // "not a git repository (or any of the parent directories): .git" is git's own, STABLE
-  // wording for "I searched upward from cwd and found no .git at all" -- the ordinary,
-  // GIT_DIR-unset no-repo case, which stays case 1 (degrade). ANY other non-zero exit reads
+  // git has TWO wordings for "I searched upward from cwd and found no .git at all" -- the
+  // ordinary, GIT_DIR-unset no-repo case, which stays case 1 (degrade): "not a git repository
+  // (or any of the parent directories): .git" when the walk reaches the filesystem root, and
+  // "not a git repository (or any parent up to mount point <path>)" (a second stderr line
+  // follows: "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).")
+  // when the walk stops at a mount boundary, as on a CI runner whose temp directory sits on
+  // its own mount (PR #25, ubuntu: the single-wording classifier read it as case 2 and the
+  // no-repo test exited 1). Both were read from git 2.56's own binary strings, and they are
+  // the only no-repository wordings a plain `ls-files` prints; the sibling "not a git
+  // repository, but the field ..." is an object-data message `ls-files` never prints.
+  // ANY other non-zero exit reads
   // as case 2: a BROKEN GIT_DIR names its OWN bad path instead ("not a git repository:
   // '<path>'", with no "(or any of the parent directories)" clause -- empirically confirmed,
   // see the return), and safe.directory's dubious-ownership refusal is a different message
@@ -321,7 +329,7 @@ export function classifyTrackedIndexResult(r) {
   // context is broken, not merely absent -- text-matching the bare phrase "not a git
   // repository" would have wrongly classified the broken-GIT_DIR case as case 1 too, since
   // that phrase appears in BOTH messages; only the parenthetical distinguishes them.
-  const noRepoFound = /not a git repository \(or any of the parent directories\)/.test(stderrLine);
+  const noRepoFound = /not a git repository \(or any (?:of the parent directories\)|parent up to mount point )/.test(stderrLine);
   return {
     ok: false,
     degrade: noRepoFound,

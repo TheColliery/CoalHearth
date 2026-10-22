@@ -233,6 +233,26 @@ test('classifyTrackedIndexResult: git ran and found no repository at all (the pa
   assert.match(v.message, /not a git repository/);
 });
 
+test('classifyTrackedIndexResult: git ran and stopped at a mount boundary (the mount-point wording, PR #25) DEGRADES -- case 1', () => {
+  // The exact stderr of the red ubuntu run: git's second no-repository wording, with its
+  // "Stopping at filesystem boundary" line after it (the classifier reads the first line).
+  const v = classifyTrackedIndexResult({ status: 128, stdout: '', stderr: 'fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n' });
+  assert.equal(v.ok, false);
+  assert.equal(v.degrade, true);
+  assert.equal(v.message, 'this directory is not a git repository');
+});
+
+test('classifyTrackedIndexResult: the dubious-ownership refusal and a lookalike "not a git repository, but ..." line still FAIL LOUD -- case 2', () => {
+  for (const line of [
+    "fatal: detected dubious ownership in repository at '/work/repo'",
+    "fatal: not a git repository, but the field 'x' requires access to object data",
+  ]) {
+    const v = classifyTrackedIndexResult({ status: 128, stdout: '', stderr: line + '\n' });
+    assert.equal(v.degrade, false, line);
+    assert.match(v.message, /exited 128/, line);
+  }
+});
+
 test('classifyTrackedIndexResult: git ran and the command failed for any OTHER reason -- FAIL LOUD, does NOT degrade -- case 2', () => {
   // The split is NOT "does stderr contain the phrase not a git repository" -- empirically
   // confirmed (see the return): a broken GIT_DIR ALSO produces that phrase, just WITHOUT the
