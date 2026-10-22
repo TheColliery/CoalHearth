@@ -16,7 +16,7 @@
     "scripts/lib/hooks.test.mjs": 19,
     "scripts/lib/cwk137.test.mjs": 45,
     "scripts/lib/engine.test.mjs": 45,
-    "scripts/lib/wave-run.test.mjs": 39,
+    "scripts/lib/wave-run.test.mjs": 40,
     "scripts/lib/suite-run.test.mjs": 37,
     "scripts/build-plugin.test.mjs": 11,
     "scripts/hooks-exec-form.test.mjs": 9,
