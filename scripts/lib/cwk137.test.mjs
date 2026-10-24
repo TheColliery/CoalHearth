@@ -629,9 +629,12 @@ test('CWK2-026: configure refuses a config-path link to a file in ANOTHER projec
     "fs.openSync = function (p, ...a) { return same(p) ? open.call(this, target, ...a) : open.call(this, p, ...a); };",
     "fs.realpathSync.native = function (p, ...a) { return same(p) ? rp.call(this, target, ...a) : rp.call(this, p, ...a); };",
   ].join(String.fromCharCode(10)));
-  const r = spawnSync(process.execPath, [CONFIGURE, '--language', 'th'], {
+  // r23c (t207, the 18r LOW-2): the preload rides argv, not NODE_OPTIONS. NODE_OPTIONS splits on spaces unless quoted,
+  // so a TEMP folder with a space in its name (os.tmpdir() here) broke the --require path and the child died before the
+  // assertion. argv entries are passed whole, and the preload still applies to this configure process.
+  const r = spawnSync(process.execPath, ['--require', pre, CONFIGURE, '--language', 'th'], {
     cwd: root, encoding: 'utf8', timeout: 60000,
-    env: { ...sandboxedEnv({ CH_FAKE_ENTRY: OWN_CFG(root), CH_FAKE_TARGET: target }), NODE_OPTIONS: '--max-old-space-size=2048 --require ' + pre.split(path.sep).join('/') },
+    env: { ...sandboxedEnv({ CH_FAKE_ENTRY: OWN_CFG(root), CH_FAKE_TARGET: target }), NODE_OPTIONS: '--max-old-space-size=2048' },
   });
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /cannot be read safely \(refused\)/);
