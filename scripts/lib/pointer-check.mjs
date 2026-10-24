@@ -308,8 +308,18 @@ export function deriveCandidateRoots({ surfaces = [], agentHomes = new Set() }) 
 // non-0 status short of a spawn error fell through to "read stdout" (empty, since git wrote
 // nothing useful there on a real error), silently produced an empty `ignoredRoots`, and the
 // gate printed a git-derived "0 gitignored" count over a run that derived no facts at all.
+// r23c -- THE PIPE RACE, one answer in two forms. When git exits BEFORE it reads stdin (a core.bare=true
+// repo refuses at once with 128), a spawnSync still writing `input` gets the pipe error AND the real status:
+// EPIPE on POSIX, EOF on Windows (measured 2026-10-24: EOF beside 128 at 65,550 bytes, 4 MB and 16 MB). The
+// child answered, so its exit is the verdict, not a spawn failure. Only that pairing (a pipe code, an integer
+// status other than 0 or 1) is read that way: a pipe error beside status 0 or 1 may mean git never saw all of
+// its input, and a non-pipe error beside any status is a real spawn failure. Both stay fail-closed. The code is
+// keyed on error.code, never on error.message (node/runtime.md §7).
+const STDIN_CLOSED_CODES = new Set(['EPIPE', 'EOF']);
 export function classifyCheckIgnoreResult(ci) {
-  if (ci.error) {
+  const childExitedFirst = Boolean(ci.error) && STDIN_CLOSED_CODES.has(ci.error.code)
+    && Number.isInteger(ci.status) && ci.status !== 0 && ci.status !== 1;
+  if (ci.error && !childExitedFirst) {
     return { ok: false, message: `git check-ignore --stdin failed to spawn: ${ci.error.message}` };
   }
   if (ci.status !== 0 && ci.status !== 1) {
