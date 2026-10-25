@@ -367,12 +367,15 @@ test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a NON-pipe error beside sta
   assert.match(v.message, /failed to spawn: spawnSync git ENOENT/);
 });
 
-test('classifyCheckIgnoreResult: CWK2-061 FAIL-CLOSED -- a pipe word in error.message with a non-pipe error.code stays "failed to spawn" (keyed on the code, never the message)', () => {
-  const v = classifyCheckIgnoreResult({ error: Object.assign(new Error('write EPIPE'), { code: 'ENOENT' }), status: 128, stdout: '', stderr: NO_WORK_TREE });
-  assert.equal(v.ok, false);
-  assert.match(v.message, /failed to spawn: write EPIPE/);
-  assert.doesNotMatch(v.message, /exited 128/);
-});
+// r25a INSPECT LOW-1: one leg per pipe word, so a mutant that reads EOF from error.message (M13) is killed by name.
+for (const word of ['EPIPE', 'EOF']) {
+  test(`classifyCheckIgnoreResult: CWK2-061 FAIL-CLOSED -- a "${word}" word in error.message with a non-pipe error.code stays "failed to spawn" (keyed on the code, never the message)`, () => {
+    const v = classifyCheckIgnoreResult({ error: Object.assign(new Error(`write ${word}`), { code: 'ENOENT' }), status: 128, stdout: '', stderr: NO_WORK_TREE });
+    assert.equal(v.ok, false);
+    assert.match(v.message, new RegExp(`failed to spawn: write ${word}`));
+    assert.doesNotMatch(v.message, /exited 128/);
+  });
+}
 
 // r23c REAL-GIT leg: no fake pipe error. A core.bare=true repo makes git refuse before it reads stdin (exit 128);
 // an input past the 64 KB pipe buffer then makes the parent's write fail with the pipe code. Measured on this box

@@ -6,7 +6,7 @@
     "scripts/lib/config-load.test.mjs": 85,
     "scripts/lib/config-keys.test.mjs": 31,
     "scripts/lib/link-check.test.mjs": 88,
-    "scripts/lib/pointer-check.test.mjs": 55,
+    "scripts/lib/pointer-check.test.mjs": 56,
     "scripts/lib/jsonc.test.mjs": 4,
     "scripts/lib/git-env.test.mjs": 10,
     "scripts/git-env-pins.test.mjs": 7,
