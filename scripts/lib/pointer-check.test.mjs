@@ -367,6 +367,13 @@ test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a NON-pipe error beside sta
   assert.match(v.message, /failed to spawn: spawnSync git ENOENT/);
 });
 
+test('classifyCheckIgnoreResult: CWK2-061 FAIL-CLOSED -- a pipe word in error.message with a non-pipe error.code stays "failed to spawn" (keyed on the code, never the message)', () => {
+  const v = classifyCheckIgnoreResult({ error: Object.assign(new Error('write EPIPE'), { code: 'ENOENT' }), status: 128, stdout: '', stderr: NO_WORK_TREE });
+  assert.equal(v.ok, false);
+  assert.match(v.message, /failed to spawn: write EPIPE/);
+  assert.doesNotMatch(v.message, /exited 128/);
+});
+
 // r23c REAL-GIT leg: no fake pipe error. A core.bare=true repo makes git refuse before it reads stdin (exit 128);
 // an input past the 64 KB pipe buffer then makes the parent's write fail with the pipe code. Measured on this box
 // 2026-10-24: EOF beside status 128 at 65,550 bytes and at 4 MB and 16 MB, status 128 with no error at 9 bytes.
