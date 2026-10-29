@@ -5,6 +5,10 @@ CoalHearth is a zero-dependency, hook-pair-keyed plugin — validated on Claude 
 ## Reporting
 Report a security issue in this repo through GitHub's private vulnerability reporting — [Security → Report a vulnerability](https://github.com/TheColliery/CoalHearth/security/advisories/new) — never a public issue. In scope: the shipped hooks (`bin/session-start.js`, `bin/post-tool-use.js`, `bin/user-prompt-submit.js`, and the Antigravity/config-only adapters), the `lib/` journal + resume core, the installer and other `scripts/`, and the `plugin/` dist built from them. Out of scope: a vulnerability in a project's own rules/config file that CoalHearth merely reads as untrusted data (a hostile `AGENTS.md` or `.coalhearth.json`) — that is the project's own security question, not this tool's. The boundary is what CoalHearth does with such a file, not what the file says: a hostile file must not make a hook hang, allocate without bound, or write or delete outside the project, or delete project files it does not own, and one that does is in scope (see the advisory below). This is a one-person-maintained project: expect the report to be read and acknowledged, triaged against the scope above, and disclosed once a fix ships, with no fixed response-time SLA. A public GitHub issue remains the right channel for an ordinary, non-security bug.
 
+## What counts as a vulnerability
+
+An advisory is published only for a finding an outsider can exploit through input they control, whatever its level: a repository the user cloned, a file sent to them, a reply from the network. A path only the user feeds (their own config, a command they type) does not count. An unsure finding counts and goes to CoalBoard to decide.
+
 ---
 
 ## Security Advisories
