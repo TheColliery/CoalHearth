@@ -583,3 +583,30 @@ for (const [label, mutate] of [['missing', (h) => { delete h.type; }], ['changed
     assert.ok(bad.stdout.includes('does not wire PostToolUse in exec form'), 'the FAIL names the event, got:\n' + bad.stdout);
   });
 }
+
+// r29a LOW-1: the factory-config read goes through the bounded reader, and a refusal is a named FAIL. These legs hold that reason.
+test('verify.mjs negative path: a factory config that is absent FAILs by its named reason', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.rmSync(path.join(tmp, 'platform-configs', '.coalhearth.json'));
+    const r = run(tmp);
+    assert.notStrictEqual(r.status, 0, 'an absent factory config must FAIL the gate, got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /FAIL factory config: cannot be read safely \(absent\)/, 'the FAIL names the reason, got:\n' + r.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('verify.mjs negative path: a factory config over MAX_CONFIG_BYTES FAILs by its named reason', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.writeFileSync(path.join(tmp, 'platform-configs', '.coalhearth.json'), 'x'.repeat(1024 * 1024 + 1));
+    const r = run(tmp);
+    assert.notStrictEqual(r.status, 0, 'an over-bound factory config must FAIL the gate, got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /FAIL factory config: cannot be read safely \(too-large\)/, 'the FAIL names the reason, got:\n' + r.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
