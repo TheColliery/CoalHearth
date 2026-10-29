@@ -31,6 +31,7 @@
     "lib/repo-fs.test.js": 15,
     "lib/folder-pin.test.js": 26,
     "lib/journal-cap.test.js": 9,
+    "lib/resume-engine.test.js": 2,
     "lib/read-pin.test.js": 15,
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,
