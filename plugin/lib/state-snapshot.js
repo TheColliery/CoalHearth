@@ -13,7 +13,7 @@
 const path = require('node:path');
 const { readRepoFileBounded, MAX_DOC_BYTES } = require('./repo-fs.js');
 
-const CHECKLIST_RE = /^\s*[-*]\s+\[( |x|X)\]\s+(.+)$/;
+const CHECKLIST_RE = /^\s*[-*]\s+\[( |x|X)\]\s+(\S.*)$/; // the capture starts at a non-space: `\s` and `.` overlap on whitespace, so a failed match re-read the run
 
 // task.md convention: first `# ` or `## Goal` heading = the goal; a checklist of
 // `- [ ] task` / `- [x] task` lines = the checklist; unchecked items double as
@@ -40,7 +40,7 @@ function parseTaskMd(dir) {
       continue;
     }
     if (!goal) {
-      const heading = line.match(/^#{1,2}\s+(.+)$/);
+      const heading = line.match(/^#{1,2}\s+(\S.*)$/);
       if (heading) goal = heading[1].trim();
     }
   }
@@ -113,7 +113,7 @@ function parseConstraints(dir) {
   if (!section) return [];
   return section[2]
     .split(/\r?\n/)
-    .map((l) => l.match(/^\s*[-*]\s+(.+)$/))
+    .map((l) => l.match(/^\s*[-*]\s+(\S.*)$/))
     .filter(Boolean)
     .map((m) => m[1].trim());
 }

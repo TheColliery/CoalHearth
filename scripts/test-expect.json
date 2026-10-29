@@ -34,6 +34,7 @@
     "lib/resume-engine.test.js": 2,
     "lib/journal-depth.test.js": 4,
     "lib/handoff-lock.test.js": 2,
+    "lib/state-snapshot-linear.test.js": 5,
     "lib/read-pin.test.js": 15,
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,

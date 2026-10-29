@@ -65,6 +65,7 @@ const TESTS = [
   'lib/resume-engine.test.js',
   'lib/journal-depth.test.js',
   'lib/handoff-lock.test.js',
+  'lib/state-snapshot-linear.test.js',
   'lib/read-pin.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
