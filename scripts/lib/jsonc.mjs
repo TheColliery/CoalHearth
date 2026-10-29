@@ -4,7 +4,7 @@
 // the next token). Shared by verify.mjs and any future config loader.
 
 export function stripJsonc(content) {
-  return content.replace(/"(?:\\.|[^"\\])*"|\/\/.*|\/\*[\s\S]*?\*\//g, (m) => (m[0] === '"' ? m : ''));
+  return content.replace(/"(?:\\[\s\S]|[^"\\])*(?:"|\\?$)|\/\/.*|\/\*[\s\S]*?(\*\/|$)/g, (m, close) => (m[0] === '"' || (m[1] === '*' && close !== '*/') ? m : ''));
 }
 
 // Prototype-pollution guard (ECC ts-security / OWASP Node.js): a poisoned project

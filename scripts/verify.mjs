@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateConfig } from './lib/config-schema.mjs';
 import { stripJsonc } from './lib/jsonc.mjs';
+import { MAX_CONFIG_BYTES, readRepoText } from './lib/repo-fs.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let fails = 0;
@@ -219,7 +220,10 @@ console.log('plugin.json own description:');
 
 console.log('config (factory vs schema):');
 try {
-  let c = fs.readFileSync(path.join(repo, 'platform-configs', '.coalhearth.json'), 'utf8');
+  // Read through the bounded reader: an over-sized or link-supplied factory config is a named FAIL, never an unbounded read.
+  const got = readRepoText(path.join(repo, 'platform-configs', '.coalhearth.json'), repo, MAX_CONFIG_BYTES);
+  if (got.text === null) throw new Error(`cannot be read safely (${got.why}); the bound is ${MAX_CONFIG_BYTES} bytes`);
+  let c = got.text;
   if (c.charCodeAt(0) === 0xFEFF) c = c.slice(1);
   const cfg = JSON.parse(stripJsonc(c));
   const errors = validateConfig(cfg);
