@@ -14,6 +14,7 @@ const { readRepoFileBounded, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
 // One source of truth for the journal file layout + the atomic writer (H6/H7 one-flock:
 // mark-resumed and quarantine go through the SAME per-pid temp+rename as HandoffJournal.save).
 const { atomicWriteJournal, JOURNAL_NAME: JOURNAL_FILE, CORRUPT_NAME: CORRUPT_FILE } = require('./handoff-journal.js');
+const { parseJournal } = require('./journal-depth.js');
 
 // Only 'in_progress' is ever written now. 'limit_reached' was the status the retired budget
 // guardrail was meant to set on a limit-hit, but NO code path ever wrote it (buildStateSnapshot
@@ -99,7 +100,7 @@ class ResumeEngine {
 
     let data;
     try {
-      data = JSON.parse(raw);
+      data = parseJournal(raw);
     } catch {
       this._quarantine(journalPath, raw);
       return null; // corrupt -> quarantined, boot clean (FMEA §5)
@@ -139,7 +140,7 @@ class ResumeEngine {
    */
   markResumed(data) {
     if (!this.outputDir) return false;
-    return atomicWriteJournal(this.outputDir, JOURNAL_FILE, JSON.stringify({ ...data, status: 'resumed' }, null, 2), this._pinned);
+    return atomicWriteJournal(this.outputDir, JOURNAL_FILE, JSON.stringify({ ...data, status: 'resumed' }), this._pinned);
   }
 
   /**

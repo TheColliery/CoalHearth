@@ -63,6 +63,7 @@ const TESTS = [
   'lib/folder-pin.test.js',
   'lib/journal-cap.test.js',
   'lib/resume-engine.test.js',
+  'lib/journal-depth.test.js',
   'lib/read-pin.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
