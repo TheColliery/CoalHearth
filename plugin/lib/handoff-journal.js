@@ -227,6 +227,7 @@ class HandoffJournal {
     if (!this.outputDir) return noop;
     const lockPath = path.join(this.outputDir, LOCK_NAME);
     const deadline = Date.now() + LOCK_WAIT_MS;
+    let vanished = 0; // vanished-lock retries this acquire took (see the ENOENT branch below)
     for (;;) {
       // 08c unit 2 FIXBACK 1 (INSPECT LOW-1): the pin is asked at the top of EVERY iteration, not once before the loop -- the poll can run for LOCK_WAIT_MS, and a later create
       // would otherwise write the lock file through a folder swapped since. A refused pin returns lock-free; the save that follows refuses on the same pin.
@@ -259,7 +260,13 @@ class HandoffJournal {
             // stat/steal failure (EPERM/EBUSY under contention on Windows) used to `continue` here with no
             // deadline check and no sleep -- an unbounded full-CPU spin in a synchronous hook. It now falls
             // through to the bounded poll below, like every other contention branch.
-            if (statErr && statErr.code === 'ENOENT' && Date.now() < deadline) continue; // past the deadline the bounded exit below takes it
+            // The first vanished-lock retry is immediate: the holder released between our create and our stat, so the lock is free now. A
+            // repeat in the same acquire is a stand-in, a link at the lock name that points nowhere, so it pauses one poll, as the
+            // contention path does: one stat per poll, not a spin. Past the deadline the bounded exit below takes it.
+            if (statErr && statErr.code === 'ENOENT' && Date.now() < deadline) {
+              if (vanished++ > 0) this._sleepSync(LOCK_POLL_MS);
+              continue;
+            }
           }
         }
         // EPERM, or a live (non-stale) EEXIST holder: someone else has it -> poll.
