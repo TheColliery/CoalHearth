@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.8] - 2026-10-30
+
+An Antigravity manifest and logo now ship with the plugin.
+
+The root `plugin.json` carries the fields Antigravity reads for the plugin's listing, and the plugin ships its logo. The Claude Code route and its hooks are unchanged. The plugin dist changes in `plugin.json`, `assets/` and the version string; the new test is the room's own tooling.
+
+### Changed
+- **The Antigravity manifest carries its listing fields and a logo.** The root `plugin.json` now has `displayName`, `description`, `version`, `logo` and `author`, and the logo ships as `plugin/assets/logo.svg`. Antigravity's validator reads the built plugin with no missing-logo note; it still reports the `commands` entry and the `hooks/hooks.json` entry it reported before, because those files are part of the Claude Code route. — test: scripts/agy-validate.test.mjs
+
 ## [2.8.7] - 2026-10-29
 
 Parsing stays bounded on malformed input, and remote paths go unread.

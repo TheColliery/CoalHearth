@@ -2,7 +2,7 @@
   "name": "coalhearth",
   "displayName": "CoalHearth",
   "description": "CoalHearth — session warm-resume + handover journal. Journals session state continuously so a limit-hit or crash can resume from a handoff prompt instead of a manual rebuild. Honest frame: reduces limit-hit damage, does not prevent or guarantee against it. Zero-dependency, offline by default, no API keys.",
-  "version": "2.8.7",
+  "version": "2.8.8",
   "logo": "assets/logo.svg",
   "author": "HetCreep"
 }
