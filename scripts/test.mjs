@@ -56,6 +56,7 @@ const TESTS = [
   'scripts/front-door-links.test.mjs',
   'scripts/verify.test.mjs',
   'scripts/temp-root-guard.test.mjs',
+  'scripts/agy-validate.test.mjs',
   'lib/handoff-journal.test.js',
   'lib/state-snapshot.test.js',
   'lib/load-config.test.js',

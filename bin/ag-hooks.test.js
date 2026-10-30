@@ -775,7 +775,10 @@ function runAgHandler(handler, home, stdin) {
 
 test("08b AG plugin: plugin.json names the plugin and hooks.json follows the documented shape (events, handler fields, matcher, relative commands to files that exist)", () => {
   const { manifest, hooks } = readAgPlugin();
-  assert.deepStrictEqual(manifest, { name: 'coalhearth' }, 'plugin.json carries the name and nothing AG does not read');
+  // r29b: the AG manifest carries the marketplace fields (plugin.json, AG's validator reads them); the test pins the key set, not one exact object.
+  const AG_MANIFEST_KEYS = ['name', 'displayName', 'description', 'version', 'logo', 'author'];
+  assert.equal(manifest.name, 'coalhearth', 'plugin.json names the plugin');
+  assert.deepStrictEqual(Object.keys(manifest).filter((k) => !AG_MANIFEST_KEYS.includes(k)), [], 'plugin.json carries a key AG does not read');
   assert.ok(Object.keys(hooks).length >= 1, 'at least one named hook');
   for (const [hookName, spec] of Object.entries(hooks)) {
     for (const [key, value] of Object.entries(spec)) {

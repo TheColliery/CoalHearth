@@ -27,7 +27,8 @@ function mkTmp() {
 // .github/ISSUE_TEMPLATE (the version-pin check), and .githooks/ (a hash-comments
 // pointer-drift surface -- r31 fixback, added so the git-fixture tests below exercise
 // a genuinely non-empty hash-comments row rather than always reading 0 from an absent dir).
-const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin', 'platform-configs', 'scripts', 'plugin', '.github', '.githooks'];
+// r29b: assets/ holds the AG manifest's logo, a DIST_ITEM (build-plugin.mjs), so the pristine fixture carries it too.
+const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin', 'platform-configs', 'scripts', 'plugin', '.github', '.githooks', 'assets'];
 // Root DOCS the config-key gate (CWK-060) names as hand-picked surfaces. Added when that gate
 // landed and this fixture went RED on its own incompleteness -- the sandbox copied directories
 // only, so every root .md was absent and the gate correctly reported a wiring bug. That red is

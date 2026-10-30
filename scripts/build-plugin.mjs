@@ -26,6 +26,8 @@ export const DIST_ITEMS = [
   // .claude-plugin/plugin.json and hooks/hooks.json, never these two paths.
   'plugin.json',
   'hooks.json',
+  // r29b: the AG manifest's logo (plugin.json "logo": "assets/logo.svg") resolves inside the folder AG installs, so the dist carries assets/ too.
+  'assets',
 ];
 
 // TEXT_EXTS grounded in what actually ships: every extension found under
