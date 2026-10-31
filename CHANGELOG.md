@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+### Fixed
+- **A repeated vanish of the lock file within the wait now pauses one poll between attempts.** The 2.8.7 entry did not state this, but the shipped code does it: the retry after a lock file vanishes runs at once the first time, and a repeat within the wait waits one poll before the next attempt. — test: lib/handoff-lock.test.js
+
+### Changed
+- **The plugin build refuses a link on its path.** A maintainer who runs the build now gets a named refusal, and the build stops before it removes anything, when a source folder, a path component above a dist item or the dist root holds a link. The check names the link rather than following it. The plugin dist is unchanged. — test: scripts/build-plugin.test.mjs
+- **Internal — the agy validate leg fails a run that exits non-zero or is killed.** The leg now asserts the exit status and the absence of a signal, not only the report. — test: scripts/agy-validate.test.mjs
+
 ## [2.8.8] - 2026-10-30
 
 An Antigravity manifest and logo now ship with the plugin.
@@ -21,7 +30,7 @@ Five reads that could run long on unusual input now finish in bounded time: the 
 - **A config with many unclosed comment or string openers no longer slows the hooks.** Before: the JSONC strip rescanned to the end of the input for each unclosed opener, so a 48 KB input took about 208 ms (unclosed block openers), 606 ms (unclosed string escapes) or 1.43 s (a backslash at the end of the input) to strip. The strip now runs in linear time: the same inputs take under 2 ms (best of three runs), and a malformed config still fails to parse. — test: scripts/lib/jsonc-linear.test.mjs
 - **The session-start recovery block no longer checks a transcript path that is not on this machine.** Before: the block called stat on the recorded transcript path whatever its form, so a path on another machine was looked up there. Now only an absolute local path is checked; a relative path or a path on another machine is not checked, and it never raises the transcript-gone note. — test: lib/resume-engine.test.js
 - **A journal nested past eight levels is treated as unreadable.** Before: the journal reader parsed any depth. Now a deeper journal is refused at the read and handled as an unparseable one, and the resume mark is written without indentation: 278 bytes against 430 for the realistic journal. — test: lib/journal-depth.test.js
-- **The lock's retry for a vanished lock file stops at its deadline.** Before: the retry could keep going past the lock wait when the lock file kept disappearing. Now it gives up at the deadline and takes the existing bounded exit. A repeated vanish within the wait now pauses one poll between attempts instead of retrying at once. — test: lib/handoff-lock.test.js
+- **The lock's retry for a vanished lock file stops at its deadline.** Before: the retry could keep going past the lock wait when the lock file kept disappearing. Now it gives up at the deadline and takes the existing bounded exit. — test: lib/handoff-lock.test.js
 - **The checklist, heading and constraint line matches stay linear on long lines.** Before: a 32 KB line took about 1.7 s to match in the checklist reader, 1.4 s in the heading reader, 3.1 s with tabs and a lone carriage return, and 2.5 s in the constraint reader. Now a 1 MB line matches in under 14 ms. A checklist line whose text is only whitespace no longer adds an empty checklist item or an empty next step. — test: lib/state-snapshot-linear.test.js
 
 ### Changed
