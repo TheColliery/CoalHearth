@@ -196,12 +196,16 @@ test('08b: DIST_ITEMS carries the Antigravity plugin.json and hooks.json, and th
 // Each witness runs on a scratch copy of the DIST_ITEM sources, so a planted link never touches the room.
 // A leg whose link kind this volume cannot make skips visibly (probed, never decided by platform).
 // ---------------------------------------------------------------------------
+// A helper that allocates and can then throw removes its own folder before it rethrows. The caller registers the removal
+// (rmAfter) on the line right after the helper returns, so no later statement in a leg can strand a folder.
 function scratchSources(prefix) {
-  const src = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-  for (const rel of DIST_ITEMS) {
-    fs.mkdirSync(path.dirname(path.join(src, rel)), { recursive: true });
-    fs.cpSync(path.join(repoRoot, rel), path.join(src, rel), { recursive: true });
-  }
+  const src = scratchDir(prefix);
+  try {
+    for (const rel of DIST_ITEMS) {
+      fs.mkdirSync(path.dirname(path.join(src, rel)), { recursive: true });
+      fs.cpSync(path.join(repoRoot, rel), path.join(src, rel), { recursive: true });
+    }
+  } catch (e) { fs.rmSync(src, { recursive: true, force: true }); throw e; }
   return src;
 }
 // true when this volume can make the link kind; the probe runs inside the named scratch folder only.
@@ -214,8 +218,11 @@ function canLink(dir, kind) {
   } catch { return false; }
 }
 function scratchDir(prefix) {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try { return fs.realpathSync(dir); } catch (e) { fs.rmSync(dir, { recursive: true, force: true }); throw e; }
 }
+// Registers a scratch folder's removal the moment it exists, before the next statement that can throw.
+const rmAfter = (t, dir) => t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 function allFiles(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -230,9 +237,11 @@ const LINK_REFUSAL = /link or junction/;
 
 test('buildDist refuses a folder link inside a source it copies, names it, and copies none of its bytes', (t) => {
   const src = scratchSources('ch-src-dirlink-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-dirlink-');
+  rmAfter(t, dist);
   const outside = scratchDir('ch-out-dirlink-');
-  t.after(() => { for (const d of [src, dist, outside]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, outside);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   fs.writeFileSync(path.join(outside, 'secret.txt'), 'OUTSIDE-FOLDER-BYTES');
   fs.symlinkSync(outside, path.join(src, 'lib', 'linked-out'), 'junction');
@@ -242,9 +251,11 @@ test('buildDist refuses a folder link inside a source it copies, names it, and c
 
 test('buildDist refuses a file link inside a source, and never writes through it', (t) => {
   const src = scratchSources('ch-src-filelink-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-filelink-');
+  rmAfter(t, dist);
   const outside = scratchDir('ch-out-filelink-');
-  t.after(() => { for (const d of [src, dist, outside]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, outside);
   if (!canLink(src, 'file')) { t.skip('this volume refuses file symlinks without privilege (probe: symlink EPERM)'); return; }
   const target = path.join(outside, 'outside.js');
   fs.writeFileSync(target, 'OUTSIDE-ORIGINAL');
@@ -255,9 +266,11 @@ test('buildDist refuses a file link inside a source, and never writes through it
 
 test('buildDist refuses a dotfile link inside a source it copies', (t) => {
   const src = scratchSources('ch-src-dotlink-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-dotlink-');
+  rmAfter(t, dist);
   const outside = scratchDir('ch-out-dotlink-');
-  t.after(() => { for (const d of [src, dist, outside]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, outside);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   fs.writeFileSync(path.join(outside, 'dot-secret.txt'), 'OUTSIDE-DOTFILE-BYTES');
   fs.symlinkSync(outside, path.join(src, 'bin', '.hidden-link'), 'junction');
@@ -267,9 +280,11 @@ test('buildDist refuses a dotfile link inside a source it copies', (t) => {
 
 test('buildDist refuses a junction at .claude-plugin, the parent of a DIST_ITEM, and keeps the outside bytes out of plugin/', (t) => {
   const src = scratchSources('ch-src-parent-cp-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-parent-cp-');
+  rmAfter(t, dist);
   const outside = scratchDir('ch-out-parent-cp-');
-  t.after(() => { for (const d of [src, dist, outside]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, outside);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   fs.writeFileSync(path.join(outside, 'plugin.json'), 'OUTSIDE-PARENT-CP-BYTES');
   fs.rmSync(path.join(src, '.claude-plugin'), { recursive: true, force: true });
@@ -280,10 +295,12 @@ test('buildDist refuses a junction at .claude-plugin, the parent of a DIST_ITEM,
 
 test('buildDist refuses a linked dist ROOT before it removes anything, and leaves the link target intact', (t) => {
   const src = scratchSources('ch-src-distroot-');
+  rmAfter(t, src);
   const outside = scratchDir('ch-out-distroot-');
+  rmAfter(t, outside);
   const holder = scratchDir('ch-holder-distroot-');
+  rmAfter(t, holder);
   const distRoot = path.join(holder, 'plugin');
-  t.after(() => { for (const d of [src, outside, holder]) fs.rmSync(d, { recursive: true, force: true }); });
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   fs.writeFileSync(path.join(outside, 'keep.txt'), 'OUTSIDE-DIST-ROOT-TARGET');
   fs.symlinkSync(outside, distRoot, 'junction');
@@ -293,8 +310,9 @@ test('buildDist refuses a linked dist ROOT before it removes anything, and leave
 
 test('checkDist names a dangling link in a DIST_ITEM instead of passing it as absent', (t) => {
   const src = scratchSources('ch-src-dangle-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-dangle-');
-  t.after(() => { for (const d of [src, dist]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, dist);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   buildDist(dist, src);
   const gone = path.join(src, 'gone-target');
@@ -308,8 +326,9 @@ test('checkDist names a dangling link in a DIST_ITEM instead of passing it as ab
 
 test('checkDist names a folder link in the DIST that points at its own parent, and does not descend into it', (t) => {
   const src = scratchSources('ch-src-loop-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-loop-');
-  t.after(() => { for (const d of [src, dist]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, dist);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   buildDist(dist, src);
   const parent = path.join(dist, 'bin');
@@ -321,8 +340,9 @@ test('checkDist names a folder link in the DIST that points at its own parent, a
 
 test('checkDist names a FILE link in the dist, even where the bytes behind it match the source', (t) => {
   const src = scratchSources('ch-src-distfile-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-distfile-');
-  t.after(() => { for (const d of [src, dist]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, dist);
   if (!canLink(src, 'file')) { t.skip('this volume refuses file symlinks without privilege (probe: symlink EPERM)'); return; }
   buildDist(dist, src);
   const victim = path.join(dist, 'bin', 'session-start.js');
@@ -337,9 +357,11 @@ test('checkDist names a FILE link in the dist, even where the bytes behind it ma
 
 test('checkDist names a junction at a parent component of a DIST_ITEM instead of comparing through it', (t) => {
   const src = scratchSources('ch-src-parent-chk-');
+  rmAfter(t, src);
   const dist = scratchDir('ch-dist-parent-chk-');
+  rmAfter(t, dist);
   const outside = scratchDir('ch-out-parent-chk-');
-  t.after(() => { for (const d of [src, dist, outside]) fs.rmSync(d, { recursive: true, force: true }); });
+  rmAfter(t, outside);
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   buildDist(dist, src);
   fs.writeFileSync(path.join(outside, 'plugin.json'), 'OUTSIDE-PARENT-CHK-BYTES');
@@ -352,13 +374,57 @@ test('checkDist names a junction at a parent component of a DIST_ITEM instead of
 
 test('checkDist names a linked dist ROOT instead of following it', (t) => {
   const src = scratchSources('ch-src-distroot-chk-');
+  rmAfter(t, src);
   const outside = scratchDir('ch-out-distroot-chk-');
+  rmAfter(t, outside);
   const holder = scratchDir('ch-holder-distroot-chk-');
+  rmAfter(t, holder);
   const distRoot = path.join(holder, 'plugin');
-  t.after(() => { for (const d of [src, outside, holder]) fs.rmSync(d, { recursive: true, force: true }); });
   if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
   fs.symlinkSync(outside, distRoot, 'junction');
   const out = checkDist(distRoot, src);
   assert.ok(out.some((l) => /symlink/.test(l) && /plugin/.test(l)),
     `checkDist must name the linked dist root; got: ${JSON.stringify(out)}`);
+});
+
+// Cleanup proof: a copy that fails inside scratchSources must not leave its folder behind. The caller registers its cleanup
+// only after the helper returns, so the helper removes its own folder before it rethrows.
+test('a copy that fails inside scratchSources leaves no temp folder behind', (t) => {
+  const probes = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('ch-src-probe-'));
+  const before = probes().length;
+  t.after(() => { for (const n of probes()) fs.rmSync(path.join(os.tmpdir(), n), { recursive: true, force: true }); });
+  t.mock.method(fs, 'cpSync', () => { throw new Error('forced copy failure'); });
+  assert.throws(() => scratchSources('ch-src-probe-'), /forced copy failure/);
+  assert.equal(probes().length, before, 'the folder mkdtemp made is gone before the throw reaches the caller');
+});
+
+// A link two levels below a DIST_ITEM. Every earlier leg planted its link one level down, so a check that looked only one
+// level into an item would pass them all; these legs need the walk to reach the link at depth three.
+test('buildDist refuses a junction two levels below a DIST_ITEM, and copies none of its bytes', (t) => {
+  const src = scratchSources('ch-src-deep-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-dist-deep-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-out-deep-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
+  fs.writeFileSync(path.join(outside, 'deep-secret.txt'), 'OUTSIDE-DEEP-BYTES');
+  fs.mkdirSync(path.join(src, 'lib', 'deep', 'deeper'), { recursive: true });
+  fs.symlinkSync(outside, path.join(src, 'lib', 'deep', 'deeper', 'linked-out'), 'junction');
+  assert.throws(() => buildDist(dist, src), LINK_REFUSAL, 'a link at lib/deep/deeper is refused, and the refusal names it');
+  assert.equal(anyFileHolds(dist, 'OUTSIDE-DEEP-BYTES'), false, 'the deep link reaches no dist file');
+});
+
+test('checkDist names a junction two levels below a DIST_ITEM instead of passing over it', (t) => {
+  const src = scratchSources('ch-src-deepchk-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-dist-deepchk-');
+  rmAfter(t, dist);
+  if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
+  buildDist(dist, src);
+  fs.mkdirSync(path.join(src, 'lib', 'deep', 'deeper'), { recursive: true });
+  fs.symlinkSync(path.join(src, 'lib', 'deep'), path.join(src, 'lib', 'deep', 'deeper', 'linked-up'), 'junction');
+  const out = checkDist(dist, src);
+  assert.ok(out.some((l) => /symlink/.test(l) && l.includes('linked-up')),
+    `checkDist must name the deep link; got: ${JSON.stringify(out)}`);
 });

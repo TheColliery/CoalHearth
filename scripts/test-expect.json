@@ -19,7 +19,7 @@
     "scripts/lib/engine.test.mjs": 45,
     "scripts/lib/wave-run.test.mjs": 40,
     "scripts/lib/suite-run.test.mjs": 37,
-    "scripts/build-plugin.test.mjs": 21,
+    "scripts/build-plugin.test.mjs": 24,
     "scripts/hooks-exec-form.test.mjs": 9,
     "scripts/folder-pin.test.mjs": 9,
     "scripts/front-door-links.test.mjs": 5,
