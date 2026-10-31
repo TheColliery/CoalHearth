@@ -5,11 +5,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 ## [Unreleased]
 
 ### Fixed
-- **A repeated vanish of the lock file within the wait now pauses one poll between attempts.** The 2.8.7 entry did not state this, but the shipped code does it: the retry after a lock file vanishes runs at once the first time, and a repeat within the wait waits one poll before the next attempt. — test: lib/handoff-lock.test.js
-
-### Changed
-- **The plugin build refuses a link on its path.** A maintainer who runs the build now gets a named refusal, and the build stops before it removes anything, when a source folder, a path component above a dist item or the dist root holds a link. The check names the link rather than following it. The plugin dist is unchanged. — test: scripts/build-plugin.test.mjs
-- **Internal — the agy validate leg fails a run that exits non-zero or is killed.** The leg now asserts the exit status and the absence of a signal, not only the report. — test: scripts/agy-validate.test.mjs
+- **The 2.8.7 lock note the entry omitted: a repeated vanish within the wait pauses one poll between attempts.** The shipped code in 2.8.7 does this; the retry after a lock file vanishes runs at once the first time, and a repeat within the wait waits one poll before the next attempt. — test: lib/handoff-lock.test.js
 
 ## [2.8.8] - 2026-10-30
 
