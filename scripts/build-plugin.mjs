@@ -58,10 +58,41 @@ function filesMatch(a, b) {
   return crlfToLf(bufA) === crlfToLf(bufB);
 }
 
-export function buildDist(distRoot = dist) {
+// A link or junction is never copied, followed or written through. Every folder on the path to a source is
+// lstat-ed, component by component, so a link at a PARENT folder is found as well as the entry's own. A link at the dist root is refused
+// before the old dist is removed, so the removal never reaches through one. The walks use lstat, so a link is named and never followed.
+// A path that is absent or whose parent is a file (ENOTDIR) is not a link: the copy or the check reports that on its own.
+function lstatOrNull(p) {
+  try { return fs.lstatSync(p); } catch (e) { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null; throw e; }
+}
+
+// The first link on the path from `root` down to `rel`, component by component with lstat. `root` itself is not walked. Null when none.
+function firstLinkAbove(root, rel) {
+  let cur = '';
+  for (const part of rel.split(path.sep)) {
+    cur = cur ? path.join(cur, part) : part;
+    const st = lstatOrNull(path.join(root, cur));
+    if (st === null) return null;
+    if (st.isSymbolicLink()) return cur;
+  }
+  return null;
+}
+
+// Throws, naming the link, when a source the build copies holds a link at any folder on its path, or anywhere under it.
+function assertNoLinks(root, rel) {
+  const link = firstLinkAbove(root, rel);
+  if (link !== null) throw new Error(`${link}: a link or junction in the source tree is refused (the build copies files, never links)`);
+  const st = lstatOrNull(path.join(root, rel));
+  if (st && st.isDirectory()) for (const n of fs.readdirSync(path.join(root, rel))) assertNoLinks(root, path.join(rel, n));
+}
+
+export function buildDist(distRoot = dist, srcRoot = repo) {
+  const root = lstatOrNull(distRoot);
+  if (root && root.isSymbolicLink()) throw new Error(`${path.basename(distRoot)}: a link or junction at the dist root is refused (the build removes and rewrites plugin/, and never through a link)`);
+  for (const rel of DIST_ITEMS) assertNoLinks(srcRoot, rel); // before the old dist is removed: a refused build leaves plugin/ as it was
   fs.rmSync(distRoot, { recursive: true, force: true });
   for (const rel of DIST_ITEMS) {
-    const src = path.join(repo, rel);
+    const src = path.join(srcRoot, rel);
     const dst = path.join(distRoot, rel);
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.cpSync(src, dst, { recursive: true, filter: (s) => !/\.test\.[cm]?js$/.test(s) }); // recursive always; EXCLUDE *.test.* — dev-only tests never ship in the clean plugin/ dist (work-review LOW #3, clean-clone)
@@ -71,26 +102,44 @@ export function buildDist(distRoot = dist) {
 // Every source file under DIST_ITEMS must exist in distRoot AND match byte-for-byte,
 // distRoot must hold nothing under those items without a source (orphan), and no
 // top-level entry may exist that no DIST_ITEM accounts for. Returns [] when in sync.
-export function checkDist(distRoot = dist) {
+// A link anywhere on the way (the dist root, a parent folder, an entry) is named and skipped, never followed.
+export function checkDist(distRoot = dist, srcRoot = repo) {
   const out = [];
+  const linkedRoot = lstatOrNull(distRoot);
+  if (linkedRoot && linkedRoot.isSymbolicLink()) {
+    out.push(`symlink plugin/ root (refused, not followed): ${path.basename(distRoot)}`);
+    return out;
+  }
   const filesUnder = (root, rel) => {
     if (/\.test\.[cm]?js$/.test(rel)) return []; // tests are excluded from the dist (build filter) -> exclude here too, both directions, so sync holds
-    const abs = path.join(root, rel);
-    if (!fs.existsSync(abs)) return [];
-    if (fs.statSync(abs).isDirectory()) return fs.readdirSync(abs).flatMap((n) => filesUnder(root, path.join(rel, n)));
+    const st = lstatOrNull(path.join(root, rel));
+    if (!st) return [];
+    if (st.isSymbolicLink()) { out.push(`symlink in DIST_ITEM (refused, not followed): ${rel}`); return []; }
+    if (st.isDirectory()) return fs.readdirSync(path.join(root, rel)).flatMap((n) => filesUnder(root, path.join(rel, n)));
     return [rel];
   };
+  // A link at a parent folder of the item: the item is named and skipped in this tree, instead of compared or walked through it.
+  const linkAboveItem = (root, item) => {
+    const link = firstLinkAbove(root, item);
+    if (link === null) return false;
+    out.push(`symlink in DIST_ITEM (refused, not followed): ${link}`);
+    return true;
+  };
   for (const item of DIST_ITEMS) {
-    for (const rel of filesUnder(repo, item)) {
+    const srcLinked = linkAboveItem(srcRoot, item);
+    for (const rel of srcLinked ? [] : filesUnder(srcRoot, item)) {
       const d = path.join(distRoot, rel);
-      if (!fs.existsSync(d)) out.push(`missing in plugin/: ${rel}`);
+      const dst = lstatOrNull(d);
+      if (!dst) out.push(`missing in plugin/: ${rel}`);
+      else if (dst.isSymbolicLink()) out.push(`symlink in plugin/ (refused, not followed): ${rel}`);
       // R19 FIXBACK 1 (the sibling of thread 12): a dist entry that is not a file where the source holds one (a directory) made filesMatch's
       // readFileSync throw EISDIR and the rest of the drift report was lost. It is a finding, and the scan goes on.
-      else if (!fs.statSync(d).isFile()) out.push(`invalid in plugin/ (not a file): ${rel}`);
-      else if (!filesMatch(path.join(repo, rel), d)) out.push(`stale in plugin/: ${rel}`);
+      else if (!dst.isFile()) out.push(`invalid in plugin/ (not a file): ${rel}`);
+      else if (!filesMatch(path.join(srcRoot, rel), d)) out.push(`stale in plugin/: ${rel}`);
     }
-    for (const rel of filesUnder(distRoot, item)) {
-      if (!fs.existsSync(path.join(repo, rel))) out.push(`orphan in plugin/ (no source): ${rel}`);
+    const distLinked = linkAboveItem(distRoot, item);
+    for (const rel of distLinked ? [] : filesUnder(distRoot, item)) {
+      if (!lstatOrNull(path.join(srcRoot, rel))) out.push(`orphan in plugin/ (no source): ${rel}`);
     }
   }
   // CWK-120 #9: a FILE-shaped DIST_ITEM (.claude-plugin/plugin.json) accounts for ITS OWN path only. Its parent directory
@@ -105,18 +154,21 @@ export function checkDist(distRoot = dist) {
   }
   for (const [dir, allowed] of allowedByDir) {
     const abs = path.join(distRoot, dir);
-    if (!fs.existsSync(abs)) continue;
+    const st = lstatOrNull(abs);
+    if (!st) continue;
+    if (st.isSymbolicLink()) { out.push(`symlink in plugin/ (refused, not followed): ${dir}`); continue; }
     // R19 (CodeRabbit PR #19 thread 12): an entry that exists but is not a directory made readdirSync throw ENOTDIR and the drift
     // report never returned. It is a finding now, and the scan goes on.
-    if (!fs.statSync(abs).isDirectory()) { out.push(`invalid in plugin/ (not a directory): ${dir}`); continue; }
+    if (!st.isDirectory()) { out.push(`invalid in plugin/ (not a directory): ${dir}`); continue; }
     for (const name of fs.readdirSync(abs)) {
       if (!allowed.has(name)) out.push(`orphan in plugin/ (no DIST_ITEM): ${path.join(dir, name)}`);
     }
   }
   const allowedTops = new Set(DIST_ITEMS.map((rel) => rel.split(path.sep)[0]));
-  if (fs.existsSync(distRoot) && !fs.statSync(distRoot).isDirectory()) {
+  const rootSt = lstatOrNull(distRoot);
+  if (rootSt && !rootSt.isDirectory()) {
     out.push(`invalid plugin/ (not a directory): ${path.basename(distRoot)}`); // same rule at the top level
-  } else if (fs.existsSync(distRoot)) {
+  } else if (rootSt) {
     for (const name of fs.readdirSync(distRoot)) {
       if (!allowedTops.has(name)) out.push(`orphan top-level in plugin/ (no DIST_ITEM): ${name}`);
     }
@@ -134,7 +186,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (f.length) { console.error('plugin/ dist OUT OF SYNC:\n' + f.map((x) => '  ' + x).join('\n') + '\n-> run: node scripts/build-plugin.mjs'); process.exitCode = 1; }
     else console.log('plugin/ dist in sync with source.');
   } else {
-    buildDist();
-    console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json) from source.');
+    try {
+      buildDist();
+      console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json) from source.');
+    } catch (e) {
+      console.error('plugin/ dist NOT built: ' + e.message); // a named refusal, never a stack trace (scripts-quality.md 1)
+      process.exitCode = 1;
+    }
   }
 }
