@@ -375,10 +375,13 @@ test("ResumeEngine.generateHandoffPrompt flags a GC'd transcript + points at Coa
 
 // The trusted registry (CWK2-078): the sweep removes only what CoalHearth placed. A leg names its planted artifacts in a throwaway config
 // home, pointed to by CLAUDE_CONFIG_DIR for the leg and restored when it ends.
+// The sweep compares native real paths. An entry is the native real path of the artifact's folder plus its own name: realpath of the
+// artifact itself would name a link artifact's target.
+const realEntry = (p) => path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p));
 function trustPlanted(t, paths) {
   const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cfg-')));
   fs.mkdirSync(path.join(cfg, 'coal', 'coalhearth'), { recursive: true });
-  fs.writeFileSync(path.join(cfg, 'coal', 'coalhearth', 'owned-artifacts.json'), JSON.stringify(paths));
+  fs.writeFileSync(path.join(cfg, 'coal', 'coalhearth', 'owned-artifacts.json'), JSON.stringify(paths.map(realEntry)));
   const prev = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = cfg;
   t.after(() => {

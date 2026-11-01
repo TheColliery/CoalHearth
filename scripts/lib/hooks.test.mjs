@@ -52,10 +52,13 @@ function clean(...dirs) {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 }
 // The trusted registry (CWK2-078): the sweep removes only what CoalHearth placed, so a case names its planted artifacts in the sandbox home.
+// The sweep compares native real paths. An entry is the native real path of the artifact's folder plus its own name: realpath of the
+// artifact itself would name a link artifact's target.
+const realEntry = (p) => path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p));
 function trust(home, paths) {
   const dir = path.join(home, '.claude', 'coal', 'coalhearth');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'owned-artifacts.json'), JSON.stringify(paths));
+  fs.writeFileSync(path.join(dir, 'owned-artifacts.json'), JSON.stringify(paths.map(realEntry)));
 }
 function run(hook, cwd, home, stdin = '') {
   return spawnSync(process.execPath, [hook], {
