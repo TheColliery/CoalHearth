@@ -12,9 +12,6 @@ The plugin dist changes in `lib/resume-engine.js` and `lib/load-config.js`, so t
 - **The 2.8.7 lock note the entry omitted: a repeated vanish within the wait pauses one poll between attempts.** The shipped code in 2.8.7 does this; the retry after a lock file vanishes runs at once the first time, and a repeat within the wait waits one poll before the next attempt. — test: lib/handoff-lock.test.js
 - **The resume clean-up no longer removes a leftover worker folder or probe file on the journal's word alone.** Before: a resume removed a worker folder or a probe file in the project whenever the journal marked the session interrupted. Now such an entry is removed only when a registry in the user's config home (`coal/coalhearth/owned-artifacts.json`) names it. No shipped code creates a worker folder or a probe file, so nothing is removed until a creator is built. — test: lib/read-pin.test.js
 
-### Changed
-- **Internal — link extraction in the docs check is one left-to-right scanner, linear in the input length.** A link inside a code span is an example and is no longer checked, as in the CoalMine scanner. — test: scripts/lib/link-check-linear.test.mjs
-
 ## [2.8.8] - 2026-10-30
 
 An Antigravity manifest and logo now ship with the plugin.
