@@ -10,7 +10,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { containedOutputDir, findWorkspaceRoot, anchorRoot, makePinCheck } = require('./contained-dir.js');
-const { readRepoFileBounded, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
+const { readRepoFileBounded, MAX_CONFIG_BYTES, MAX_JOURNAL_BYTES } = require('./repo-fs.js');
+const { claudeBaseDir } = require('./load-config.js');
+const os = require('node:os');
 // One source of truth for the journal file layout + the atomic writer (H6/H7 one-flock:
 // mark-resumed and quarantine go through the SAME per-pid temp+rename as HandoffJournal.save).
 const { atomicWriteJournal, JOURNAL_NAME: JOURNAL_FILE, CORRUPT_NAME: CORRUPT_FILE } = require('./handoff-journal.js');
@@ -63,6 +65,20 @@ const SCRATCH_DIRS = ['.claude/coalhearth/scratch', '.agents/coalhearth/scratch'
 const SCRATCH_FILE_RE = /^(?:__)?probe_.*\.(?:mjs|js|cjs)$/;
 const WORKTREE_DIRS = ['.claude/coalhearth/worktrees', '.agents/coalhearth/worktrees'];
 const STALE_WORKTREE_RE = /^ch-worker-/; // CoalHearth-owned stale worker worktree dirs
+
+// The registry of artifacts CoalHearth itself placed: the orphan sweep's trust anchor (CWK2-078). It lives in the user's own config home, never in
+// the project, so a cloned repository cannot write it. Absent, unreadable or malformed -> nothing is trusted and the sweep removes nothing.
+// Nothing writes it yet: CoalHearth creates no worker folder and no probe file, so the sweep's delete loops are inert until a creator is built.
+const OWNED_REGISTRY = path.join('coal', 'coalhearth', 'owned-artifacts.json');
+function trustedArtifacts() {
+  const trusted = new Set();
+  try {
+    const text = readRepoFileBounded(path.join(claudeBaseDir(os.homedir()), OWNED_REGISTRY), null, MAX_CONFIG_BYTES);
+    const list = text === null ? [] : JSON.parse(text);
+    if (Array.isArray(list)) for (const p of list) if (typeof p === 'string' && p) trusted.add(path.resolve(p));
+  } catch { /* fail closed: an unreadable registry trusts nothing */ }
+  return trusted;
+}
 
 class ResumeEngine {
   /**
@@ -312,6 +328,7 @@ Verify the above against the working tree, then continue — or restart the task
     }
     let scratch = 0;
     let worktrees = 0;
+    const trusted = trustedArtifacts(); // read once: a path the registry does not name is never removed
 
     // resolve-and-contain, PHYSICAL: realpath the candidate — a lexical path.resolve
     // catches `..` but NOT a symlink escape (a scratch dir symlinked outside root
@@ -358,6 +375,7 @@ Verify the above against the working tree, then continue — or restart the task
         if (!SCRATCH_FILE_RE.test(name)) continue;
         const file = path.join(dir, name);
         if (!contained(file)) continue;
+        if (!trusted.has(path.resolve(file))) continue; // no trusted registry entry names it: a repository journal alone never deletes
         // 08e FIXBACK 2: the ownership pin of this directory is asked again before EACH delete (one question used to cover them all); a changed answer stops the directory (fail closed)
         if (ownedDir(relDir) !== dir) break;
         try {
@@ -384,6 +402,7 @@ Verify the above against the working tree, then continue — or restart the task
         if (!STALE_WORKTREE_RE.test(name)) continue;
         const wt = path.join(base, name);
         if (!contained(wt)) continue;
+        if (!trusted.has(path.resolve(wt))) continue; // as for the scratch files: only a registry entry earns a recursive delete
         if (ownedDir(relDir) !== base) break; // 08e FIXBACK 2: as for the scratch files, asked again before each (recursive) delete
         try {
           if (fs.statSync(wt).isDirectory()) {

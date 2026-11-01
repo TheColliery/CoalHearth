@@ -51,6 +51,12 @@ function sandbox() {
 function clean(...dirs) {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 }
+// The trusted registry (CWK2-078): the sweep removes only what CoalHearth placed, so a case names its planted artifacts in the sandbox home.
+function trust(home, paths) {
+  const dir = path.join(home, '.claude', 'coal', 'coalhearth');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'owned-artifacts.json'), JSON.stringify(paths));
+}
 function run(hook, cwd, home, stdin = '') {
   return spawnSync(process.execPath, [hook], {
     cwd,
@@ -136,6 +142,7 @@ test('case 2: worker death in fan-out -> main journal intact + unrecoverable-wor
     const scratchDir = path.join(cwd, '.claude', 'coalhearth', 'scratch');
     fs.mkdirSync(scratchDir, { recursive: true });
     fs.writeFileSync(path.join(scratchDir, 'probe_worker.mjs'), '// dead worker scratch');
+    trust(home, [path.join(scratchDir, 'probe_worker.mjs')]);
 
     const ss = run(SESSION_START, cwd, home);
     assertGraceful(ss);
@@ -232,6 +239,7 @@ test('case 6: orphan scratch files -> scoped sweep, real files outside scope unt
     fs.writeFileSync(path.join(cwd, 'scripts', 'probe_user.mjs'), 'user file');
     // Out-of-scope dir entirely (must survive): a probe-named file NOT in an allow-listed dir.
     fs.writeFileSync(path.join(cwd, 'probe_root.mjs'), 'not in a scratch dir');
+    trust(home, [path.join(scratchDir, '__probe_a.mjs'), path.join(scratchDir, 'probe_b.js')]);
 
     const ss = run(SESSION_START, cwd, home);
     assertGraceful(ss);
@@ -369,6 +377,7 @@ test('case 11: orphan worktree -> scoped sweep of CoalHearth-owned stale worktre
     const stale = path.join(wtBase, 'ch-worker-dead');
     fs.mkdirSync(stale, { recursive: true });
     fs.writeFileSync(path.join(stale, 'leftover.txt'), 'orphan worktree content');
+    trust(home, [stale]);
     // A NON-CoalHearth-named dir in the same base must survive (never a blind wipe).
     const keep = path.join(wtBase, 'user-owned');
     fs.mkdirSync(keep, { recursive: true });

@@ -373,7 +373,21 @@ test("ResumeEngine.generateHandoffPrompt flags a GC'd transcript + points at Coa
   fs.rmSync(d, { recursive: true, force: true });
 });
 
-test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', () => {
+// The trusted registry (CWK2-078): the sweep removes only what CoalHearth placed. A leg names its planted artifacts in a throwaway config
+// home, pointed to by CLAUDE_CONFIG_DIR for the leg and restored when it ends.
+function trustPlanted(t, paths) {
+  const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cfg-')));
+  fs.mkdirSync(path.join(cfg, 'coal', 'coalhearth'), { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'coal', 'coalhearth', 'owned-artifacts.json'), JSON.stringify(paths));
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = cfg;
+  t.after(() => {
+    if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prev;
+    fs.rmSync(cfg, { recursive: true, force: true });
+  });
+}
+
+test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the user tree, never a blind delete', (t) => {
   const root = tmp();
   try {
     // In-scope scratch = a CoalHearth-OWNED dir (NEVER the user's own scripts/):
@@ -393,6 +407,7 @@ test('ResumeEngine.sweepOrphans removes OWNED scratch/worktrees only, never the 
     // Out-of-scope probe file at root (must survive — not in an allow-listed dir):
     fs.writeFileSync(path.join(root, 'probe_root.mjs'), 'x');
 
+    trustPlanted(t, [path.join(scratch, 'probe_x.mjs'), path.join(scratch, '__probe_y.js'), path.join(wt, 'ch-worker-1')]);
     const counts = new ResumeEngine({ outputDirectory: path.join(root, '.claude', 'coalhearth') }, {}, root).sweepOrphans(root);
 
     assert.strictEqual(counts.scratch, 2, 'both OWNED scratch files counted');
@@ -447,7 +462,7 @@ test('ResumeEngine.sweepOrphans never escapes root even if a scratch dir is a sy
 // hooks-safety.md §8 binds the delete path exactly as it binds the write path.
 // RED-PROOF: restore `sweepOrphans(workspaceRoot = process.cwd())` and this goes red
 // (0 swept — the sweep looks in the subdir, the orphan is at the root).
-test('ResumeEngine.sweepOrphans anchors to the project root, not a drifted cwd', () => {
+test('ResumeEngine.sweepOrphans anchors to the project root, not a drifted cwd', (t) => {
   const root = fs.realpathSync.native(tmp());
   const sub = path.join(root, 'sub', 'dir');
   const prevCwd = process.cwd();
@@ -459,6 +474,7 @@ test('ResumeEngine.sweepOrphans anchors to the project root, not a drifted cwd',
     fs.writeFileSync(path.join(scratch, 'probe_orphan.mjs'), 'left by a killed worker');
 
     process.chdir(sub); // the drift the phantom-slug fix taught the WRITE path about
+    trustPlanted(t, [path.join(scratch, 'probe_orphan.mjs')]);
     const counts = new ResumeEngine({}, {}).sweepOrphans();
 
     assert.strictEqual(counts.scratch, 1, 'the orphan under the anchored project root is swept');
@@ -508,6 +524,7 @@ test('ResumeEngine.sweepOrphans contains correctly when the root carries an 8.3 
     fs.mkdirSync(scratch, { recursive: true });
     fs.writeFileSync(path.join(scratch, 'probe_x.mjs'), 'x');
 
+    trustPlanted(t, [path.join(scratch, 'probe_x.mjs')]);
     const counts = new ResumeEngine({}, {}, root).sweepOrphans(shortRoot);
 
     assert.strictEqual(counts.scratch, 1, 'an 8.3-spelled root must still contain-and-sweep');
@@ -786,7 +803,7 @@ test('ResumeEngine.sweepOrphans: a link planted at the PARENT .claude/coalhearth
   }
 });
 
-test('ResumeEngine.sweepOrphans: the legitimate sweep of REAL owned directories still works beside the link refusal', () => {
+test('ResumeEngine.sweepOrphans: the legitimate sweep of REAL owned directories still works beside the link refusal', (t) => {
   const root = tmp();
   try {
     fs.mkdirSync(path.join(root, '.git'));
@@ -795,6 +812,7 @@ test('ResumeEngine.sweepOrphans: the legitimate sweep of REAL owned directories 
       fs.writeFileSync(path.join(root, tool, 'coalhearth', 'scratch', 'probe_a.mjs'), 'x');
       fs.mkdirSync(path.join(root, tool, 'coalhearth', 'worktrees', 'ch-worker-9'), { recursive: true });
     }
+    trustPlanted(t, ['.claude', '.agents'].flatMap((tool) => [path.join(root, tool, 'coalhearth', 'scratch', 'probe_a.mjs'), path.join(root, tool, 'coalhearth', 'worktrees', 'ch-worker-9')]));
     const counts = new ResumeEngine({}, {}, root).sweepOrphans(root);
     assert.deepStrictEqual(counts, { scratch: 2, worktrees: 2 });
     assert.strictEqual(fs.existsSync(path.join(root, '.claude', 'coalhearth', 'scratch', 'probe_a.mjs')), false);

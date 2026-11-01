@@ -750,6 +750,19 @@ test('FB2 phantom: the pin is asked before every delete and before the rmdir (to
   assert.deepEqual(fs.existsSync(legacy), false, 'an ordinary phantom is still mopped and its folder removed');
 });
 
+// The trusted registry (CWK2-078): the sweep removes only what CoalHearth placed. The fixture points CLAUDE_CONFIG_DIR at a throwaway
+// folder and names the artifacts it planted there; the variable is restored when the leg ends.
+function trustPlanted(t, paths) {
+  const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ch-cfg-')));
+  fs.mkdirSync(path.join(cfg, 'coal', 'coalhearth'), { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'coal', 'coalhearth', 'owned-artifacts.json'), JSON.stringify(paths));
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = cfg;
+  t.after(() => {
+    if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = prev;
+    fs.rmSync(cfg, { recursive: true, force: true });
+  });
+}
 function sweepFixture(t, relDir, names, asDirs) {
   const root = project(t);
   const owned = path.join(root, relDir);
@@ -758,6 +771,7 @@ function sweepFixture(t, relDir, names, asDirs) {
   const otherRoot = path.join(root, 'otherdir'); // another directory OF THE SAME PROJECT: the per-file containment check cannot tell it from the owned one
   fs.mkdirSync(otherRoot);
   for (const n of [...names, 'keep.mjs']) { if (asDirs && n !== 'keep.mjs') { fs.mkdirSync(path.join(otherRoot, n)); fs.writeFileSync(path.join(otherRoot, n, 'f.txt'), 'x'); } else fs.writeFileSync(path.join(otherRoot, n), n); }
+  trustPlanted(t, names.map((n) => path.join(owned, n)));
   const e = new ResumeEngine({}, {}, root);
   return { root, owned, otherRoot, run: () => e.sweepOrphans(root) };
 }

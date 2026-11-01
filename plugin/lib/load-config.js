@@ -422,4 +422,4 @@ function loadConfig(opts) {
   return merged;
 }
 
-module.exports = { loadConfig, configNotices, findProjectRoot, projectConfigCandidates, projectConfigPath };
+module.exports = { loadConfig, configNotices, findProjectRoot, projectConfigCandidates, projectConfigPath, claudeBaseDir };
