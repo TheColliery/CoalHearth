@@ -68,7 +68,67 @@ import { execFileSync } from 'node:child_process';
 import { gitEnv } from './git-env.mjs';
 
 const EXTERNAL_RE = /^([a-z][a-z0-9+.-]*:|\/\/)/i; // a URI scheme (http:, mailto:, tel:, ...) or protocol-relative `//`
-const LINK_RE = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
+// Link extraction is one left-to-right scanner, linear on every input shape. The regex it replaces re-read a label to the next
+// closing bracket from every opening bracket, which is quadratic on a line of brackets. Ported from CoalMine 3.23.9.
+function stripFencedBlocks(text) {
+  return text.replace(/```[\s\S]*?```/g, (m) => '\n'.repeat((m.match(/\n/g) || []).length));
+}
+
+// Fenced blocks and inline code spans are removed for link extraction: a link shown inside a code span is an example, not a claim.
+export function stripCode(text) {
+  return stripFencedBlocks(text).replace(/`[^`\n]*`/g, '');
+}
+
+const isSpace = (c) => /\s/.test(c);
+// `counter`, when given, receives one step per character visit, so a test can count the work instead of reading a clock.
+export function extractLinks(text, counter) {
+  const s = stripCode(text);
+  const n = s.length;
+  const links = [];
+  let steps = 0;
+  let p = 0;
+  while (p < n) {
+    steps++;
+    if (s[p] !== '[') { p++; continue; }
+    let j = p + 1;
+    while (j < n && s[j] !== '[' && s[j] !== ']') { steps++; j++; }
+    if (j >= n || s[j] !== ']' || j + 1 >= n || s[j + 1] !== '(') { p = j; continue; }
+    const d = j + 2;
+    let e = d;
+    let target;
+    if (s[d] === '<') {
+      // Divergence from the CoalMine scanner (named in the commit): an angle-bracket destination may hold spaces, and it ends at its own '>' on the same line.
+      e = d + 1;
+      while (e < n && s[e] !== '>' && s[e] !== '<' && s[e] !== '\n') { steps++; e++; }
+      if (e >= n || s[e] !== '>' || e === d + 1) { p = j; continue; }
+      target = s.slice(d + 1, e);
+      e++;
+    } else {
+      while (e < n && s[e] !== ')' && s[e] !== '[' && s[e] !== ']' && !isSpace(s[e])) { steps++; e++; }
+      if (e === d) { p = j; continue; }
+      target = s.slice(d, e);
+    }
+    let end = -1;
+    if (e < n && s[e] === ')') {
+      end = e + 1;
+    } else if (e < n && (s[e] === ' ' || s[e] === '\t')) {
+      let k = e;
+      while (k < n && (s[k] === ' ' || s[k] === '\t')) { steps++; k++; }
+      if (k < n && (s[k] === '"' || s[k] === "'")) {
+        // A title in double or single quotes, closed by the same character. Divergence from the CoalMine scanner, named in the commit.
+        const quote = s[k];
+        let q = k + 1;
+        while (q < n && s[q] !== quote) { steps++; q++; }
+        if (q + 1 < n && s[q + 1] === ')') end = q + 2;
+      }
+    }
+    if (end < 0) { p = j; continue; }
+    links.push({ text: s.slice(p + 1, j), target });
+    p = end;
+  }
+  if (counter) counter.steps += steps;
+  return links;
+}
 const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 
 // Fence detection, per CommonMark: a fenced code block opens with 3+ BACKTICK or 3+ TILDE
@@ -261,11 +321,7 @@ export function extractCitations(text) {
     }
     const open = fenceOpen(lines[i]);
     if (open) { fence = open; continue; }
-    LINK_RE.lastIndex = 0;
-    let m;
-    while ((m = LINK_RE.exec(lines[i]))) {
-      out.push({ target: parseLinkTarget(m[1]), line: i + 1 });
-    }
+    for (const link of extractLinks(lines[i])) out.push({ target: parseLinkTarget(link.target), line: i + 1 });
   }
   return out;
 }
