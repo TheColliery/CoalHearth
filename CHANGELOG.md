@@ -27,12 +27,16 @@ Parsing stays bounded on malformed input, and remote paths go unread.
 
 Five reads that could run long on unusual input now finish in bounded time: the JSONC strip of the config, the journal's nesting, the lock's retry, and the checklist and constraint line matches. The session-start recovery block also no longer checks a transcript path that is not on this machine. The plugin dist changes in `lib/` and the version string; the new tests and the test roster are the room's own tooling.
 
-### Fixed
+### Security
+
 - **A config with many unclosed comment or string openers no longer slows the hooks.** Before: the JSONC strip rescanned to the end of the input for each unclosed opener, so a 48 KB input took about 208 ms (unclosed block openers), 606 ms (unclosed string escapes) or 1.43 s (a backslash at the end of the input) to strip. The strip now runs in linear time: the same inputs take under 2 ms (best of three runs), and a malformed config still fails to parse. — test: scripts/lib/jsonc-linear.test.mjs
 - **The session-start recovery block no longer checks a transcript path that is not on this machine.** Before: the block called stat on the recorded transcript path whatever its form, so a path on another machine was looked up there. Now only an absolute local path is checked; a relative path or a path on another machine is not checked, and it never raises the transcript-gone note. — test: lib/resume-engine.test.js
 - **A journal nested past eight levels is treated as unreadable.** Before: the journal reader parsed any depth. Now a deeper journal is refused at the read and handled as an unparseable one, and the resume mark is written without indentation: 278 bytes against 430 for the realistic journal. — test: lib/journal-depth.test.js
-- **The lock's retry for a vanished lock file stops at its deadline.** Before: the retry could keep going past the lock wait when the lock file kept disappearing. Now it gives up at the deadline and takes the existing bounded exit. — test: lib/handoff-lock.test.js
 - **The checklist, heading and constraint line matches stay linear on long lines.** Before: a 32 KB line took about 1.7 s to match in the checklist reader, 1.4 s in the heading reader, 3.1 s with tabs and a lone carriage return, and 2.5 s in the constraint reader. Now a 1 MB line matches in under 14 ms. A checklist line whose text is only whitespace no longer adds an empty checklist item or an empty next step. — test: lib/state-snapshot-linear.test.js
+
+### Fixed
+
+- **The lock's retry for a vanished lock file stops at its deadline.** Before: the retry could keep going past the lock wait when the lock file kept disappearing. Now it gives up at the deadline and takes the existing bounded exit. — test: lib/handoff-lock.test.js
 
 ### Changed
 - **Internal — the maintainer gate reads the project config within the same 1 MiB bound as the hooks.** `scripts/verify.mjs` refuses an over-size config with a named reason instead of reading it unbounded.
@@ -136,7 +140,7 @@ A link planted at the journal folder is refused, not followed.
 
 The plugin dist changes in `lib/contained-dir.js`, `lib/handoff-journal.js` and the version string; everything else below is the room's own tooling.
 
-### Fixed
+### Security
 
 - **A link planted at `.claude/coalhearth` no longer redirects the journal's writes or the prune's deletes** *(shipped: `lib/contained-dir.js`, `lib/handoff-journal.js`)*. A cloned repository that planted a symbolic link (on Windows, a junction or symlink) at `.claude/coalhearth`, aimed at another directory of the project, made the journal's session state land in that directory, and, when the disk was full, made the ENOSPC prune delete `error.log` and `*.tmp` files there. Each time a hook builds the journal (every tool call), the default folder is now refused unless its real path is exactly `<project root>/.claude/coalhearth` (a link at `.claude` above it is refused too, before anything is created), so the journal has no directory that session; and the prune deletes only inside the project root's own `.claude/coalhearth`, never in a same-named folder elsewhere and whatever `journal.outputDirectory` says. The containment checked only the project root before, so this is old behaviour, not new in 2.6.3. A custom `journal.outputDirectory` still writes where it points (contained to the project root, not pinned, not self-ignored); only its delete half is closed here. Not covered: a link swapped in at the default folder during a single hook run, between the check and the save, still redirects that run's write; the next hook run refuses it, and the prune stays safe. — test: `scripts/lib/engine.test.mjs`, `lib/handoff-journal.test.js`
 
