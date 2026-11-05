@@ -1,5 +1,66 @@
-# CoalHearth
+# CoalHearth plugin
 
-CoalHearth is the session warm-resume and handover journal. It journals session state continuously, so a limit-hit or a crash can resume from a handoff prompt instead of a manual rebuild. The honest frame is that it reduces limit-hit damage and does not prevent or guarantee against it. It is zero-dependency, offline by default, and needs no API keys.
+CoalHearth is a session warm-resume and handover journal for Claude Code. It records the state of your session as you work, so that when a session is cut off by a usage limit or a crash, the next session can start from a recovery block instead of a manual rebuild. It reduces the damage of a limit-hit. It does not prevent a limit-hit, and it does not guarantee recovery: the recovery block always tells the next session to verify its contents against git, because the journal can be stale or half-applied. It adds to what Claude Code already keeps (the session transcript and `--resume`) for two narrow cases: state captured before a compaction overwrites it, and the status of a subagent that died mid-task. It is zero-dependency, makes no network calls, and needs no API key.
 
-This README is a placeholder in the installed copy. The build writes it from plugin-src/README.md, and the documentation pass replaces it with the full text.
+## Install
+
+```bash
+claude plugin marketplace add TheColliery/CoalHearth
+claude plugin install coalhearth@coalhearth
+```
+
+A folder without a `.git` directory needs a project marker before the journal is written: run `git init`, or create a file `.coalhearth.json` containing `{}` at the project root. The journal is written only in a folder with that marker.
+
+## What the hooks run, and when
+
+`hooks/hooks.json` wires three events. Each runs one `node` script in the exec form, with the script path in `args`. None of the three sets a `matcher` or a `timeout`, so each fires on every occurrence of its event. Every hook is fail-silent: it swallows its own errors and exits 0.
+
+| Event | Script | What it does |
+|---|---|---|
+| SessionStart | `bin/session-start.js` | Reads the journal. If the previous session was left in progress, it prints the recovery block on the session-start context channel and marks the journal `resumed`, so the same block is not repeated on every start. It also prints a one-line update nudge when a check is due, and removes an older update stamp left by an earlier version. |
+| PostToolUse | `bin/post-tool-use.js` | Adds the step it observes to the journal: the goal and checklist when it can read them, the names of files touched by `Write`, `Edit`, `MultiEdit` and `NotebookEdit`, and the spawn and status of a subagent call (`Agent`, `Task`, `Workflow`). It writes the journal and prints nothing. |
+| UserPromptSubmit | `bin/user-prompt-submit.js` | Reads the journal. When a subagent's call has resolved since the last prompt and that status has not been shown, it prints one note with the subagent's description, its self-reported status and a 300-character outcome snippet, then marks it shown. Most prompts print nothing. |
+
+The Antigravity adapters ship in the same folder, wired by the root `hooks.json`: `bin/ag-pre-invocation.js` runs the resume on the first `PreInvocation`, and `bin/ag-post-tool-use.js` journals each `PostToolUse`.
+
+**What the hooks read and write.** They read the project's journal, the CoalHearth config, and the project's `task.md` and `AGENTS.md` (size-bounded). They write only the journal and its lock, both under the project's `.claude/coalhearth/` folder, and the update stamp under `~/.claude/coal/coalhearth/`.
+
+**What they delete.** The hooks remove only these, and only inside the folders named:
+
+- on resume, a corrupt journal is copied aside as `session_handoff.corrupt.json` and then removed, and a stray `.claude/coalhearth` folder left under a subdirectory of the project has its journal files removed;
+- when the disk is full, the journal writer prunes `error.log` and `*.tmp` leftovers from the journal folder;
+- a stale lock file is removed when its holder has crashed.
+
+The resume-time orphan sweep, which would remove a leftover worker folder or probe file, removes nothing today. It acts only on names that a trusted registry in your user config home lists, and no part of CoalHearth writes that registry yet.
+
+## What is fetched or sent
+
+Nothing is sent, and the hooks make no network call. The update check is not a hook: when you run `/coalhearth:update`, the agent looks up the latest published tag of this repository, by whatever means it has, and offers the update. It installs nothing by itself. Nothing is uploaded, and CoalHearth collects no telemetry.
+
+## Data handling
+
+- **What is stored:** the goal and checklist captured from `task.md`, and the planned next steps; the names of files your session touched; the path of your own session transcript, which the hooks use only to check whether it still exists, never to read it; and, for a subagent call that has resolved, its description, status and a 300-character outcome snippet.
+- **Where:** the journal is `<project>/.claude/coalhearth/session_handoff.json`, with a `.gitignore` containing `*` beside it, so its contents stay out of your version control. The config is read from your Claude config folder and from the project's agent folder; the README's Configure section lists the keys. The update stamp is `~/.claude/coal/coalhearth/update-check`.
+- **How long:** the code sets no retention period. The journal is replaced at each save and is kept under 4 MiB by dropping its oldest recorded paths, which it counts. It is not deleted on a schedule. Delete the folder above to remove it.
+- **Who can read it:** anyone with access to your user account's files or the project folder; the code sets no further access control.
+- **What leaves the machine:** nothing from the hooks. The update check reaches GitHub only when you run `/coalhearth:update`.
+
+## Example uses
+
+1. **A session cut off by a limit or a crash.** Start a new session in the same project. The recovery block appears in the session context, with the goal, the checklist, the files you touched and the subagents that were running. Check it against `git status` before you continue.
+2. **Checking what the journal holds.** Run `/coalhearth:stats`. It reads the journal and prints a table of its state and whether this session resumed. It changes no file.
+3. **Checking for a newer version.** Run `/coalhearth:update`. It compares the latest published tag with the installed version and offers `claude plugin update coalhearth@coalhearth`. It applies nothing itself.
+4. **A folder without git.** Create `.coalhearth.json` containing `{}` at the project root, or run `git init`, so the journal is written there.
+
+## Commands
+
+- `/coalhearth:stats`: a read-only report of the journal and of this session's resume.
+- `/coalhearth:update`: a consent-gated check for a newer version, and the setting for how often the check runs.
+
+## Report a problem
+
+Open an issue at <https://github.com/TheColliery/CoalHearth/issues>. For a security problem, use GitHub's private vulnerability reporting, linked from [SECURITY.md](https://github.com/TheColliery/CoalHearth/blob/main/SECURITY.md), not a public issue. The data policy is in [PRIVACY.md](https://github.com/TheColliery/CoalHearth/blob/main/PRIVACY.md).
+
+## Licence
+
+CoalHearth is licensed under Apache-2.0.

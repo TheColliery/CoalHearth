@@ -2,6 +2,16 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.10] - 2026-11-05
+
+The plugin gains its own README, and two install routes are measured.
+
+The plugin dist gains `README.md` and no code changes, so this is a PATCH release. The root README's install lines now report what the two other install routes do, measured on 2026-11-05.
+
+### Changed
+- **The plugin's own README (`plugin/README.md`), built from `plugin-src/README.md`.** It describes what the hooks run, what they read, write and delete, what is sent (nothing from the hooks), the data handling, and the example uses.
+- **The README's install lines for the `npx skills` and APM routes, measured 2026-11-05.** The `npx skills` route installs nothing, because CoalHearth ships no `SKILL.md`. The APM route gives the two commands and writes the hook entries without running them.
+
 ## [2.8.9] - 2026-11-01
 
 The resume clean-up removes a worker folder only when a registry names it.
