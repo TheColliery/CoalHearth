@@ -28,7 +28,8 @@ function mkTmp() {
 // pointer-drift surface -- r31 fixback, added so the git-fixture tests below exercise
 // a genuinely non-empty hash-comments row rather than always reading 0 from an absent dir).
 // r29b: assets/ holds the AG manifest's logo, a DIST_ITEM (build-plugin.mjs), so the pristine fixture carries it too.
-const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin', 'platform-configs', 'scripts', 'plugin', '.github', '.githooks', 'assets'];
+// plugin-src/ holds the plugin README's source; the dist copies it, and the gate reads both.
+const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin', 'platform-configs', 'scripts', 'plugin', 'plugin-src', '.github', '.githooks', 'assets'];
 // Root DOCS the config-key gate (CWK-060) names as hand-picked surfaces. Added when that gate
 // landed and this fixture went RED on its own incompleteness -- the sandbox copied directories
 // only, so every root .md was absent and the gate correctly reported a wiring bug. That red is
@@ -607,6 +608,23 @@ test('verify.mjs negative path: a factory config over MAX_CONFIG_BYTES FAILs by 
     const r = run(tmp);
     assert.notStrictEqual(r.status, 0, 'an over-bound factory config must FAIL the gate, got:\n' + r.stdout + r.stderr);
     assert.match(r.stdout, /FAIL factory config: cannot be read safely \(too-large\)/, 'the FAIL names the reason, got:\n' + r.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// a plugin README under the 40-word directory minimum FAILs by name. The source and the copy are the SAME short text, so the
+// sync check passes and only the word count can fail it.
+test('verify.mjs negative path: a plugin/README.md under 40 words FAILs by name, even when it matches its source', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    const short = 'A short plugin README with only eight words.\n';
+    fs.writeFileSync(path.join(tmp, 'plugin-src', 'README.md'), short);
+    fs.writeFileSync(path.join(tmp, 'plugin', 'README.md'), short);
+    const r = run(tmp);
+    assert.notStrictEqual(r.status, 0, 'a README under 40 words must FAIL the gate, got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /FAIL plugin\/README\.md is \d+ words \(the directory minimum is 40\)/, 'the FAIL names the count, got:\n' + r.stdout);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

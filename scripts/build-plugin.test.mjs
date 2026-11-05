@@ -5,8 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIST_ITEMS, buildDist, checkDist } from './build-plugin.mjs';
+import * as build from './build-plugin.mjs'; // DIST_DOCS, read through the namespace so a missing export fails one test, not the file's link step
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// the plugin README's source, copied to plugin/README.md by the build.
+const README_SRC = path.join('plugin-src', 'README.md');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'coalhearth-dist-test-'));
@@ -205,6 +208,8 @@ function scratchSources(prefix) {
       fs.mkdirSync(path.dirname(path.join(src, rel)), { recursive: true });
       fs.cpSync(path.join(repoRoot, rel), path.join(src, rel), { recursive: true });
     }
+    fs.mkdirSync(path.dirname(path.join(src, README_SRC)), { recursive: true }); // the README source the build copies
+    fs.cpSync(path.join(repoRoot, README_SRC), path.join(src, README_SRC));
   } catch (e) { fs.rmSync(src, { recursive: true, force: true }); throw e; }
   return src;
 }
@@ -427,4 +432,108 @@ test('checkDist names a junction two levels below a DIST_ITEM instead of passing
   const out = checkDist(dist, src);
   assert.ok(out.some((l) => /symlink/.test(l) && l.includes('linked-up')),
     `checkDist must name the deep link; got: ${JSON.stringify(out)}`);
+});
+
+// ---------------------------------------------------------------------------
+// the plugin README is a dist document. plugin-src/README.md is the source; the build copies it to plugin/README.md.
+// It is accounted for by name (never an orphan), a missing or stale copy is named, a missing source refuses the build, and a link
+// at either end is named or refused, never followed.
+// ---------------------------------------------------------------------------
+test('DIST_DOCS maps plugin-src/README.md to the dist root README.md', () => {
+  assert.deepEqual(build.DIST_DOCS, [{ src: README_SRC, dst: 'README.md' }]);
+});
+
+test('a fresh build carries plugin/README.md, and checkDist is clean with it in place', (t) => {
+  const dist = scratchDir('ch-readme-fresh-');
+  rmAfter(t, dist);
+  buildDist(dist);
+  assert.ok(fs.existsSync(path.join(dist, 'README.md')), 'plugin/README.md is built from plugin-src/README.md');
+  assert.deepEqual(checkDist(dist), [], 'a fresh dist, README included, is in sync');
+});
+
+test('a missing plugin/README.md is named by checkDist', (t) => {
+  const dist = scratchDir('ch-readme-missing-');
+  rmAfter(t, dist);
+  buildDist(dist);
+  fs.rmSync(path.join(dist, 'README.md'));
+  assert.ok(checkDist(dist).includes('missing in plugin/: README.md'), 'the missing copy is named, not passed');
+});
+
+test('a stale plugin/README.md is named by checkDist', (t) => {
+  const dist = scratchDir('ch-readme-stale-');
+  rmAfter(t, dist);
+  buildDist(dist);
+  fs.writeFileSync(path.join(dist, 'README.md'), 'stale\n');
+  assert.ok(checkDist(dist).includes('stale in plugin/: README.md'), 'the stale copy is named');
+});
+
+test('a README source missing from plugin-src/ is named by checkDist as missing in source', (t) => {
+  const src = scratchSources('ch-readme-nosrc-chk-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-nosrc-chk-d-');
+  rmAfter(t, dist);
+  buildDist(dist, src);
+  fs.rmSync(path.join(src, 'plugin-src'), { recursive: true, force: true });
+  assert.ok(checkDist(dist, src).some((l) => l.startsWith('missing in source:') && l.includes('README.md')), 'the missing source is named');
+});
+
+test('a missing README source fails the build, names it, and leaves the old plugin/ in place', (t) => {
+  const src = scratchSources('ch-readme-nosrc-build-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-keep-');
+  rmAfter(t, dist);
+  buildDist(dist, src); // a good dist first: the one a refused build must leave alone
+  fs.rmSync(path.join(src, 'plugin-src'), { recursive: true, force: true });
+  assert.throws(() => buildDist(dist, src), /plugin-src|README/, 'a missing README source is refused, and the refusal names it');
+  assert.ok(fs.existsSync(path.join(dist, 'README.md')), 'the old plugin/README.md is still there');
+  assert.ok(fs.existsSync(path.join(dist, 'bin', 'session-start.js')), 'the rest of the old plugin/ is still there');
+});
+
+test('a junction at plugin-src refuses the build, names it, and copies none of its bytes', (t) => {
+  const src = scratchSources('ch-readme-dirlink-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-dirlink-d-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-readme-dirlink-o-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
+  fs.writeFileSync(path.join(outside, 'README.md'), 'OUTSIDE-README-DIR-BYTES');
+  fs.rmSync(path.join(src, 'plugin-src'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(src, 'plugin-src'), 'junction');
+  assert.throws(() => buildDist(dist, src), LINK_REFUSAL, 'a link at plugin-src is refused, and the refusal names it');
+  assert.equal(anyFileHolds(dist, 'OUTSIDE-README-DIR-BYTES'), false, 'the linked README reaches no dist file');
+});
+
+test('a file link at plugin-src/README.md is refused, and the file it points at is untouched', (t) => {
+  const src = scratchSources('ch-readme-filelink-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-filelink-d-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-readme-filelink-o-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'file')) { t.skip('this volume refuses file symlinks without privilege (probe: symlink EPERM)'); return; }
+  const target = path.join(outside, 'outside-readme.md');
+  fs.writeFileSync(target, 'OUTSIDE-README-FILE-ORIGINAL');
+  fs.rmSync(path.join(src, README_SRC));
+  fs.symlinkSync(target, path.join(src, README_SRC));
+  assert.throws(() => buildDist(dist, src), LINK_REFUSAL, 'a file link at the README source is refused, and the refusal names it');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'OUTSIDE-README-FILE-ORIGINAL', 'the file the link points at is untouched');
+});
+
+test('checkDist names a file link at plugin/README.md and does not follow it', (t) => {
+  const src = scratchSources('ch-readme-distlink-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-distlink-d-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-readme-distlink-o-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'file')) { t.skip('this volume refuses file symlinks without privilege (probe: symlink EPERM)'); return; }
+  buildDist(dist, src);
+  const target = path.join(outside, 'outside-readme.md');
+  fs.writeFileSync(target, 'OUTSIDE-README-DIST-ORIGINAL');
+  fs.rmSync(path.join(dist, 'README.md'));
+  fs.symlinkSync(target, path.join(dist, 'README.md'));
+  const out = checkDist(dist, src);
+  assert.ok(out.some((l) => /symlink/.test(l) && l.includes('README.md')), `checkDist must name the README link; got: ${JSON.stringify(out)}`);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'OUTSIDE-README-DIST-ORIGINAL', 'the link target is not read into the check or rewritten');
 });

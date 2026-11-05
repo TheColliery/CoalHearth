@@ -30,6 +30,10 @@ export const DIST_ITEMS = [
   'assets',
 ];
 
+// a document the plugin ships under a different name. Its source is written in plugin-src/ and copied to the dist root. A DIST_ITEM
+// copies a path to the SAME path, so a file whose source and dist names differ gets its own mapping, and every check below reads this list too.
+export const DIST_DOCS = [{ src: path.join('plugin-src', 'README.md'), dst: 'README.md' }];
+
 // TEXT_EXTS grounded in what actually ships: every extension found under
 // DIST_ITEMS today (bin/lib/hooks .js — CJS throughout, per node/runtime.md §3;
 // commands/*.md; config/schema.json, hooks/hooks.json, .claude-plugin/plugin.json).
@@ -90,12 +94,21 @@ export function buildDist(distRoot = dist, srcRoot = repo) {
   const root = lstatOrNull(distRoot);
   if (root && root.isSymbolicLink()) throw new Error(`${path.basename(distRoot)}: a link or junction at the dist root is refused (the build removes and rewrites plugin/, and never through a link)`);
   for (const rel of DIST_ITEMS) assertNoLinks(srcRoot, rel); // before the old dist is removed: a refused build leaves plugin/ as it was
+  for (const d of DIST_DOCS) { // a linked or missing README source refuses the build here too, before the old dist is removed
+    assertNoLinks(srcRoot, d.src);
+    const st = lstatOrNull(path.join(srcRoot, d.src));
+    if (!st || !st.isFile()) throw new Error(`${d.src}: the plugin README source is missing, so the build refuses to ship a plugin/ without its README`);
+  }
   fs.rmSync(distRoot, { recursive: true, force: true });
   for (const rel of DIST_ITEMS) {
     const src = path.join(srcRoot, rel);
     const dst = path.join(distRoot, rel);
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.cpSync(src, dst, { recursive: true, filter: (s) => !/\.test\.[cm]?js$/.test(s) }); // recursive always; EXCLUDE *.test.* — dev-only tests never ship in the clean plugin/ dist (work-review LOW #3, clean-clone)
+  }
+  for (const d of DIST_DOCS) {
+    fs.mkdirSync(distRoot, { recursive: true });
+    fs.copyFileSync(path.join(srcRoot, d.src), path.join(distRoot, d.dst));
   }
 }
 
@@ -125,6 +138,21 @@ export function checkDist(distRoot = dist, srcRoot = repo) {
     out.push(`symlink in DIST_ITEM (refused, not followed): ${link}`);
     return true;
   };
+  // a document the build copies under another name. A link at its source or its copy is named and never followed; a missing
+  // or non-file source or copy is named; a copy that differs is stale, compared with the same EOL-agnostic filesMatch as every item.
+  for (const d of DIST_DOCS) {
+    const srcLink = firstLinkAbove(srcRoot, d.src);
+    if (srcLink !== null) { out.push(`symlink in source (refused, not followed): ${srcLink}`); continue; }
+    const srcSt = lstatOrNull(path.join(srcRoot, d.src));
+    if (!srcSt) { out.push(`missing in source: ${d.src}`); continue; }
+    if (!srcSt.isFile()) { out.push(`invalid in source (not a file): ${d.src}`); continue; }
+    const dstLink = firstLinkAbove(distRoot, d.dst);
+    if (dstLink !== null) { out.push(`symlink in plugin/ (refused, not followed): ${dstLink}`); continue; }
+    const dstSt = lstatOrNull(path.join(distRoot, d.dst));
+    if (!dstSt) out.push(`missing in plugin/: ${d.dst}`);
+    else if (!dstSt.isFile()) out.push(`invalid in plugin/ (not a file): ${d.dst}`);
+    else if (!filesMatch(path.join(srcRoot, d.src), path.join(distRoot, d.dst))) out.push(`stale in plugin/: ${d.dst}`);
+  }
   for (const item of DIST_ITEMS) {
     const srcLinked = linkAboveItem(srcRoot, item);
     for (const rel of srcLinked ? [] : filesUnder(srcRoot, item)) {
@@ -164,7 +192,7 @@ export function checkDist(distRoot = dist, srcRoot = repo) {
       if (!allowed.has(name)) out.push(`orphan in plugin/ (no DIST_ITEM): ${path.join(dir, name)}`);
     }
   }
-  const allowedTops = new Set(DIST_ITEMS.map((rel) => rel.split(path.sep)[0]));
+  const allowedTops = new Set([...DIST_ITEMS.map((rel) => rel.split(path.sep)[0]), ...DIST_DOCS.map((d) => d.dst)]); // README.md is accounted for, never an orphan
   const rootSt = lstatOrNull(distRoot);
   if (rootSt && !rootSt.isDirectory()) {
     out.push(`invalid plugin/ (not a directory): ${path.basename(distRoot)}`); // same rule at the top level
@@ -188,7 +216,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     try {
       buildDist();
-      console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json) from source.');
+      console.log('plugin/ dist built (bin + lib + config + hooks + commands + plugin.json + README.md) from source.');
     } catch (e) {
       console.error('plugin/ dist NOT built: ' + e.message); // a named refusal, never a stack trace (scripts-quality.md 1)
       process.exitCode = 1;

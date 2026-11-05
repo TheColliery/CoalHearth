@@ -481,6 +481,18 @@ try {
   else for (const d of drift) fail(d);
 } catch (e) { fail(`plugin/ dist check: ${e.message}`); }
 
+// the plugin folder's README (plugin/README.md, built from plugin-src/README.md) carries the directory minimum of 40 words.
+// A missing copy is named by the dist check above, so this only counts a copy that exists.
+try {
+  const README_MIN_WORDS = 40;
+  const readmeDist = path.join(repo, 'plugin', 'README.md');
+  if (fs.existsSync(readmeDist)) {
+    const words = fs.readFileSync(readmeDist, 'utf8').split(/\s+/).filter(Boolean).length;
+    if (words < README_MIN_WORDS) fail(`plugin/README.md is ${words} words (the directory minimum is ${README_MIN_WORDS})`);
+    else ok(`plugin/README.md: ${words} words (minimum ${README_MIN_WORDS})`);
+  }
+} catch (e) { fail(`plugin/README.md word count: ${e.message}`); }
+
 console.log('version pins (.github/ISSUE_TEMPLATE):');
 // Mirrors CoalMine's checkVersionPins (scripts-quality.md doc-transition gate): any
 // issue-template line carrying a `version-pin:` marker must quote the CURRENT
