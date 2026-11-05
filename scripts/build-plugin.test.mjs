@@ -537,3 +537,71 @@ test('checkDist names a file link at plugin/README.md and does not follow it', (
   assert.ok(out.some((l) => /symlink/.test(l) && l.includes('README.md')), `checkDist must name the README link; got: ${JSON.stringify(out)}`);
   assert.equal(fs.readFileSync(target, 'utf8'), 'OUTSIDE-README-DIST-ORIGINAL', 'the link target is not read into the check or rewritten');
 });
+
+test('a link at the README source is refused by the build, and the old plugin/ stays in place', (t) => {
+  const src = scratchSources('ch-readme-link-keep-src-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-link-keep-d-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-readme-link-keep-o-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
+  buildDist(dist, src); // a good dist first: the one a refused build must leave alone
+  fs.writeFileSync(path.join(outside, 'README.md'), 'OUTSIDE-README-KEEP-BYTES');
+  fs.rmSync(path.join(src, 'plugin-src'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(src, 'plugin-src'), 'junction');
+  assert.throws(() => buildDist(dist, src), LINK_REFUSAL, 'a link at the README source is refused, and the refusal names it');
+  assert.ok(fs.existsSync(path.join(dist, 'README.md')), 'the old plugin/README.md is still there');
+  assert.ok(fs.existsSync(path.join(dist, 'bin', 'session-start.js')), 'the rest of the old plugin/ is still there');
+});
+
+test('a directory at the README source is refused by the build, and the old plugin/ stays in place', (t) => {
+  const src = scratchSources('ch-readme-dirsrc-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-dirsrc-d-');
+  rmAfter(t, dist);
+  buildDist(dist, src); // a good dist first
+  fs.rmSync(path.join(src, README_SRC));
+  fs.mkdirSync(path.join(src, README_SRC));
+  assert.throws(() => buildDist(dist, src), /plugin-src|README/, 'a directory at the README source is refused, and the refusal names it');
+  assert.ok(fs.existsSync(path.join(dist, 'README.md')), 'the old plugin/README.md is still there');
+});
+
+test('checkDist names a link at the README source instead of comparing through it', (t) => {
+  const src = scratchSources('ch-readme-srclink-chk-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-srclink-chk-d-');
+  rmAfter(t, dist);
+  const outside = scratchDir('ch-readme-srclink-chk-o-');
+  rmAfter(t, outside);
+  if (!canLink(src, 'junction')) { t.skip('this volume cannot make a junction (probe: junction failed)'); return; }
+  buildDist(dist, src);
+  fs.rmSync(path.join(src, 'plugin-src'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(src, 'plugin-src'), 'junction');
+  const out = checkDist(dist, src);
+  assert.ok(out.includes('symlink in source (refused, not followed): plugin-src'), `checkDist must name the source link; got: ${JSON.stringify(out)}`);
+});
+
+test('checkDist names a directory at the README source as not a file', (t) => {
+  const src = scratchSources('ch-readme-srcdir-chk-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-srcdir-chk-d-');
+  rmAfter(t, dist);
+  buildDist(dist, src);
+  fs.rmSync(path.join(src, README_SRC));
+  fs.mkdirSync(path.join(src, README_SRC));
+  const out = checkDist(dist, src);
+  assert.ok(out.some((l) => l.startsWith('invalid in source (not a file):') && l.includes('README.md')), `checkDist must name the source directory; got: ${JSON.stringify(out)}`);
+});
+
+test('checkDist names a directory at plugin/README.md as not a file', (t) => {
+  const src = scratchSources('ch-readme-distdir-chk-');
+  rmAfter(t, src);
+  const dist = scratchDir('ch-readme-distdir-chk-d-');
+  rmAfter(t, dist);
+  buildDist(dist, src);
+  fs.rmSync(path.join(dist, 'README.md'));
+  fs.mkdirSync(path.join(dist, 'README.md'));
+  const out = checkDist(dist, src);
+  assert.ok(out.some((l) => l.startsWith('invalid in plugin/ (not a file):') && l.includes('README.md')), `checkDist must name the copy directory; got: ${JSON.stringify(out)}`);
+});

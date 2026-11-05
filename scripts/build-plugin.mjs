@@ -97,7 +97,7 @@ export function buildDist(distRoot = dist, srcRoot = repo) {
   for (const d of DIST_DOCS) { // a linked or missing README source refuses the build here too, before the old dist is removed
     assertNoLinks(srcRoot, d.src);
     const st = lstatOrNull(path.join(srcRoot, d.src));
-    if (!st || !st.isFile()) throw new Error(`${d.src}: the plugin README source is missing, so the build refuses to ship a plugin/ without its README`);
+    if (!st || !st.isFile()) throw new Error(`${d.src}: the plugin README source is missing or not a file, so the build refuses to ship a plugin/ without its README`);
   }
   fs.rmSync(distRoot, { recursive: true, force: true });
   for (const rel of DIST_ITEMS) {

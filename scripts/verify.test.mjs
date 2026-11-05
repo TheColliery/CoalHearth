@@ -629,3 +629,36 @@ test('verify.mjs negative path: a plugin/README.md under 40 words FAILs by name,
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// The boundary: exactly 40 words passes, 39 fails. Source and copy are the same text, so only the count decides.
+function readmeOfWords(n) {
+  return Array.from({ length: n }, (_, i) => `word${i}`).join(' ') + '\n';
+}
+
+test('verify.mjs: a plugin/README.md of exactly 40 words passes the directory minimum', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.writeFileSync(path.join(tmp, 'plugin-src', 'README.md'), readmeOfWords(40));
+    fs.writeFileSync(path.join(tmp, 'plugin', 'README.md'), readmeOfWords(40));
+    const r = run(tmp);
+    assert.strictEqual(r.status, 0, 'exactly 40 words must PASS, got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /plugin\/README\.md: 40 words \(minimum 40\)/, 'the PASS line names the count, got:\n' + r.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('verify.mjs: a plugin/README.md of 39 words FAILs the directory minimum', () => {
+  const tmp = mkTmp();
+  try {
+    seed(tmp);
+    fs.writeFileSync(path.join(tmp, 'plugin-src', 'README.md'), readmeOfWords(39));
+    fs.writeFileSync(path.join(tmp, 'plugin', 'README.md'), readmeOfWords(39));
+    const r = run(tmp);
+    assert.notStrictEqual(r.status, 0, '39 words must FAIL, got:\n' + r.stdout + r.stderr);
+    assert.match(r.stdout, /FAIL plugin\/README\.md is 39 words \(the directory minimum is 40\)/, 'the FAIL names the count, got:\n' + r.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
