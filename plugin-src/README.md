@@ -9,7 +9,7 @@ claude plugin marketplace add TheColliery/CoalHearth
 claude plugin install coalhearth@coalhearth
 ```
 
-A folder without a `.git` directory needs a project marker before the journal is written: run `git init`, or create a file `.coalhearth.json` containing `{}` at the project root. The journal is written only in a folder with that marker. The `{}` file is the deprecated root config, so the hooks print a legacy-path notice for it;
+A folder without a `.git` directory needs a project marker before the journal is written: run `git init`, or create a file `.coalhearth.json` containing `{}` at the project root. The journal is written only in a folder with that marker. The `{}` file is the deprecated root config, so the session start prints a legacy-path notice for it.
 
 ## What the hooks run, and when
 
@@ -31,7 +31,7 @@ The Antigravity adapters ship in the same folder, wired by the root `hooks.json`
 
 - the old update stamp `~/.claude/.coalhearth-update-check`, once the new stamp is written;
 - the lock file, after every save, and a lock left behind by a holder that crashed;
-- the temporary file, when a save fails;
+- the temporary file, when a save fails, and a leftover one from an earlier write is removed before the next write;
 - the corrupt journal, after its `session_handoff.corrupt.json` copy is written;
 - `error.log` and `*.tmp` leftovers in the journal folder, when the disk is full;
 - a `.claude/coalhearth` folder inside the working directory when a hook starts from a subdirectory of the project: its `.gitignore` and `session_handoff*` files are removed, then the folder itself if it is empty.
@@ -45,7 +45,7 @@ Nothing is sent, and the hooks make no network call. The update check is not a h
 ## Data handling
 
 - **What is stored:** the goal and checklist captured from `task.md`, the constraints (bullet text copied from `AGENTS.md`), the planned next steps, the session id and status, the names of files your session touched, the path of your own session transcript, which the hooks use only to check whether it still exists, never to read it, and, for a subagent call that has resolved, its type, its description, its residue path, its status and a 300-character outcome snippet.
-- **Where:** the journal is `<project>/.claude/coalhearth/session_handoff.json`, with a `.gitignore` containing `*` beside it, so its contents stay out of your version control. The config is read from your Claude config folder and from the project's agent folder; the [repository README's Configure section](https://github.com/TheColliery/CoalHearth/blob/main/README.md#configure) lists the keys. The update stamp is `~/.claude/coal/coalhearth/update-check`.
+- **Where:** the journal is `<project>/.claude/coalhearth/session_handoff.json`, with a `.gitignore` containing `*` beside it, so its contents stay out of your version control. The config is read from your Claude config folder and from the project's agent folder; the Configure section of the [repository README](https://github.com/TheColliery/CoalHearth/blob/main/README.md) lists the keys. The update stamp is `~/.claude/coal/coalhearth/update-check`.
 - **How long:** the code sets no retention period. The journal is replaced at each save. Past about 4 MiB it drops its oldest recorded paths, then its oldest subagent records, and it counts what it dropped; if it still cannot fit, nothing new is written and the last good journal stays. It is not deleted on a schedule. Delete the folder above to remove it.
 - **Who can read it:** anyone with access to your user account's files or the project folder; the code sets no further access control.
 - **What leaves the machine:** nothing from the hooks. The update check reaches GitHub only when you run `/coalhearth:update`, or accept its offer when a check is due.
