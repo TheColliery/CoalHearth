@@ -108,8 +108,8 @@ The journal is written only in a project that has a `.git` folder or a `.coalhea
 
 **Other install routes, measured 2026-11-05 on Windows** (one run each; `skills` 1.7.6 from npm and `apm-cli` 0.35.0 from PyPI). Use the plugin install above.
 
-- **`npx skills add TheColliery/CoalHearth/plugin`** installs nothing: it exits 1 with "No valid skills found", on this path and on the bare repository form. CoalHearth ships no `SKILL.md`.
-- **`apm install TheColliery/CoalHearth/plugin --target claude`** exits 0 and lands 0 skills, 0 agents and 2 commands. It also writes one hook set with three entries into `.claude/settings.json`, leaving `${CLAUDE_PLUGIN_ROOT}` unexpanded, and APM warns that the dependency is unpinned. This run did not execute the hooks, so this route gives you the commands and no working journal.
+- **`npx --yes skills@1.7.6 add TheColliery/CoalHearth/plugin --skill * --agent claude-code --copy -y`** (the bare repository form, `skills add TheColliery/CoalHearth`, gave the same result) installs nothing: it exits 1 with "No valid skills found", on this path and on the bare repository form. CoalHearth ships no `SKILL.md`.
+- **`apm install TheColliery/CoalHearth/plugin --target claude`** exits 0 and lands 0 skills, 0 agents and 2 commands. It also writes one hook set with three entries into `.claude/settings.json`, leaving `${CLAUDE_PLUGIN_ROOT}` unexpanded, and APM warns that the dependency is unpinned. This run did not execute the hooks, so whether they work from those entries is not measured.
 
 ### Antigravity — validated on the plugin path, headless (`agy` 1.4.10, measured 2026-10-30, and 1.4.12, measured 2026-11-01); the global and project `hooks.json` paths stay unproven
 
