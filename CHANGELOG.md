@@ -2,6 +2,18 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.11] - 2026-11-07
+
+The Antigravity marker folder is used only when it is the user's own and closed to other users.
+
+The plugin dist changes in `bin/ag-pre-invocation.js`, so this is a PATCH release. The release-notes script is the room's own tooling and is not in the plugin.
+
+### Security
+- **The Antigravity hook uses its once-per-session marker folder only when it is the user's own and closed to other users.** The marker folder sits in the system temporary folder, which several local accounts can reach on a multi-user POSIX system. Before this release, another local account that created the folder first could plant marker files there and suppress the recovery block for your session. Now the hook uses the folder only when it is a real directory, not a link, owned by your account with no group or other write bit. Otherwise it still emits the recovery block, with the may-repeat note, and writes no marker there. Windows has no owner or mode bits, so there only the link and directory checks apply. Affected: Antigravity users on a multi-user POSIX system, in every release from 1.3.1 through 2.8.10. Fixed in 2.8.11.
+
+### Changed
+- **The release-notes script and its test are re-copied from the org canon.** Repository tooling only; the plugin is unchanged apart from the item above.
+
 ## [2.8.10] - 2026-11-05
 
 The plugin gains its own README, and two install routes are measured.
