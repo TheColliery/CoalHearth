@@ -292,6 +292,75 @@ test('pre: a pre-planted SYMLINK at the marker subdir -> no marker in the target
   }
 });
 
+// Security (shared /tmp): the marker folder os.tmpdir()/coalhearth is used only when it is this user's own
+// and closed to others. A folder another local user created first (mode 0777, or owned by someone else)
+// must not suppress the recovery block: the hook emits with the may-repeat note and writes no marker there.
+test('pre: a marker folder another user left open (POSIX, mode 0777) does not suppress the block: emits with the may-repeat note', (t) => {
+  if (typeof process.getuid !== 'function') { t.skip('owner and mode bits do not exist on this platform (Windows): the POSIX leg cannot run here'); return; }
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const markerDir = path.join(home, 'coalhearth');
+    fs.mkdirSync(markerDir);
+    fs.chmodSync(markerDir, 0o777); // chmod after mkdir: the umask would strip the mode at create time
+    fs.writeFileSync(path.join(markerDir, `ag-resume-${hashKey('ag-session-1')}.marker`), 'planted', 'utf8');
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.notStrictEqual(r.stdout, '', 'a planted marker in a folder this user does not own must not read as "already ran"');
+    const ctx = parseInject(r.stdout);
+    assert.match(ctx, /Warm-Resume Recovery/, 'the recovery block is emitted');
+    assert.match(ctx.toLowerCase(), /may repeat/, 'honest note: the marker could not be trusted, so it was not written');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pre: a marker folder owned by another uid (POSIX, root only) does not suppress the block: emits with the may-repeat note', (t) => {
+  if (typeof process.getuid !== 'function') { t.skip('owner and mode bits do not exist on this platform (Windows): the POSIX leg cannot run here'); return; }
+  if (process.getuid() !== 0) { t.skip('needs root to hand the marker folder to another uid (uid 65534)'); return; }
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const markerDir = path.join(home, 'coalhearth');
+    fs.mkdirSync(markerDir);
+    fs.chmodSync(markerDir, 0o700);
+    fs.chownSync(markerDir, 65534, 65534);
+    fs.writeFileSync(path.join(markerDir, `ag-resume-${hashKey('ag-session-1')}.marker`), 'planted', 'utf8');
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.notStrictEqual(r.stdout, '', 'a folder owned by another uid must not suppress the block');
+    const ctx = parseInject(r.stdout);
+    assert.match(ctx, /Warm-Resume Recovery/, 'the recovery block is emitted');
+    assert.match(ctx.toLowerCase(), /may repeat/, 'honest note: the folder is not ours, so no marker was written');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pre: the once-per-session latch still works on a folder the hook made itself (every platform)', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const first = run(PRE, cwd, home, SID);
+    assert.strictEqual(first.status, 0);
+    assert.notStrictEqual(first.stdout, '', 'first run emits the recovery block');
+    assert.strictEqual(markerCount(home), 1, 'first run wrote its marker into the folder it made');
+    const second = run(PRE, cwd, home, SID);
+    assert.strictEqual(second.status, 0);
+    assert.strictEqual(second.stdout, '', 'second run in the same session is silent');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('pre: recovery.autoInjectPrompt:false -> detect+sweep silent, no additionalContext, still marks resumed', () => {
   const cwd = mkProject();
   const home = mk();

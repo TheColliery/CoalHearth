@@ -71,6 +71,19 @@ function hashKey(s) {
   return h.toString(36);
 }
 
+// The once-per-session marker folder is used only when it is this user's own and closed to others: a real
+// directory (not a link), and on POSIX owned by our uid with no group/other write bit. Windows has no owner or
+// mode bits to compare, so only the link and directory checks apply there.
+function markerDirIsOwnPrivate(dir) {
+  const st = fs.lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) return false;
+  if (typeof process.getuid === 'function') {
+    if (st.uid !== process.getuid()) return false;
+    if ((st.mode & 0o022) !== 0) return false;
+  }
+  return true;
+}
+
 function main() {
   let raw = '';
   try { raw = fs.readFileSync(0, 'utf8'); } catch { /* no stdin -> no session key -> skip below */ }
@@ -114,9 +127,9 @@ function main() {
     // syscall.
     // The wx flag guards the marker FILE; the subdir needs its own guard: mkdirSync(recursive)
     // SILENTLY succeeds on a PRE-PLANTED symlink at markerDir (following it, the 0o700 mode NOT
-    // applied), so the wx marker would then write THROUGH it into an attacker's dir. lstatSync
-    // (does NOT follow the link) rejects a symlink subdir before the write — routed to the SAME
-    // per-repo branch as a marker-write failure (CF/CM fail-closed skip; CH emits with the note).
+    // applied), so the wx marker would then write THROUGH it into an attacker's dir. markerDirIsOwnPrivate
+    // (lstat, does NOT follow the link) rejects a symlink, a non-directory, a folder another uid owns, and a
+    // folder another user can write to — routed to the SAME branch as a marker-write failure (CH emits with the note).
     // ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
     // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
     // is bounded (~one tiny file per session).
@@ -128,8 +141,8 @@ function main() {
     // repeat" note appended below.
     try {
       fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
-      if (fs.lstatSync(markerDir).isSymbolicLink()) {
-        markerWritten = false; // symlink subdir: refuse to write through it; emit with the may-repeat note
+      if (!markerDirIsOwnPrivate(markerDir)) {
+        markerWritten = false; // not ours or open to others: never read or write a marker there; emit with the may-repeat note
       } else {
         fs.writeFileSync(marker, '', { flag: 'wx' });
       }
