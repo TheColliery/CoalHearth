@@ -847,3 +847,20 @@ test('FB2 construct (control): an ordinary construction asks three times (mkdir,
   assert.equal(w.calls(), 3);
   assert.equal(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8'), '*\n');
 });
+
+// T-29cy-2: the pin asked before the self-ignore rename is the one that refuses a folder swapped at the last moment. Without it the rename goes
+// through the link, finds no temp there, and the final read of the name (through the link) reads absent, which the best-effort rule takes as usable.
+test('FB2 construct: a link swapped in at the third pin (just before the self-ignore rename) is refused: null, and the swap target stays empty', (t) => {
+  if (!canLinkDirs(t)) { t.skip('directory symlink/junction not permitted on this volume (' + process.platform + ')'); return; }
+  const root = project(t);
+  const folder = path.join(root, '.claude', 'coalhearth');
+  fs.mkdirSync(folder, { recursive: true });
+  const other = mk(t, 'ch-fb2-ign3-');
+  const { containedOutputDir } = require('../../lib/contained-dir.js');
+  const w = watchRealpath(folder, { swapBefore: 3, swap: () => swapDirForLink(folder, other) }); // 1 the check before the mkdir, 2 after it, 3 the pin before the self-ignore rename
+  let got;
+  try { got = containedOutputDir(undefined, root); } finally { w.restore(); }
+  assert.ok(w.swapped(), 'the third answer was asked, i.e. the pin stood before the self-ignore rename');
+  assert.equal(got, null, 'fail closed: no journal folder this session');
+  assert.deepEqual(fs.readdirSync(other), [], 'no self-ignore file in the swap target');
+});
