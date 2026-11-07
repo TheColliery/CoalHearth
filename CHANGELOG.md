@@ -2,6 +2,22 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.13] - 2026-11-07
+
+The `.gitignore` read in the journal folder no longer blocks on a FIFO.
+
+The plugin dist changes in `lib/contained-dir.js`, so this is a PATCH release. The test and the repository tooling changes are not in the plugin.
+
+### Security
+- **Erratum for `[2.8.12]`: its summary says the journal folder's `.gitignore` is always the tool's own, and that is not true where the tool cannot create the file at all.** On a read-only folder, the tool writes no `.gitignore` there, the journal stays on, and nothing is planted to defeat it. The rest of the 2.8.12 entry stands.
+
+### Fixed
+- **A `.gitignore` at the journal folder's name that is a FIFO no longer blocks the hook.** The read of that file opened it without the non-blocking flag, so a FIFO at the name made the hook wait until the host killed it. The read now uses the same flags as every other repository-named read, with a link refused where the platform allows. A FIFO at the name is replaced by the tool's own file, as any other planted file is, so the folder stays usable.
+
+### Changed
+- **A test for a journal folder swapped for another folder at the third pin check is refused.** The test covers the pin asked again just before the rename.
+- **The release-notes, wave-run and release-shape scripts and their tests are re-copied from the org canon, and the test runner names each skipped test.** Repository tooling only.
+
 ## [2.8.12] - 2026-11-07
 
 The journal folder's `.gitignore` is always the tool's own.
