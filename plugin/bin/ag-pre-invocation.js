@@ -74,14 +74,19 @@ function hashKey(s) {
 // The once-per-session marker folder is used only when it is this user's own and closed to others: a real
 // directory (not a link), and on POSIX owned by our uid with no group/other write bit. Windows has no owner or
 // mode bits to compare, so only the link and directory checks apply there.
+// Fails closed: any throw (the folder vanished between mkdir and this check, or lstat is refused) is "not trusted".
 function markerDirIsOwnPrivate(dir) {
-  const st = fs.lstatSync(dir);
-  if (st.isSymbolicLink() || !st.isDirectory()) return false;
-  if (typeof process.getuid === 'function') {
-    if (st.uid !== process.getuid()) return false;
-    if ((st.mode & 0o022) !== 0) return false;
+  try {
+    const st = fs.lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    if (typeof process.getuid === 'function') {
+      if (st.uid !== process.getuid()) return false;
+      if ((st.mode & 0o022) !== 0) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
-  return true;
 }
 
 function main() {

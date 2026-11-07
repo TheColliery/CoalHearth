@@ -365,6 +365,42 @@ test('pre: a FILE planted at the marker folder name does not read as "already ra
   }
 });
 
+// The marker folder vanishes between mkdirSync and the ownership check: lstatSync on it throws ENOENT. The check
+// must fail closed (the folder is not trusted), so the block still emits with the may-repeat note, and no
+// ENOENT escapes to the outer catch. A --require preload throws only for the marker folder path.
+test('pre: the marker folder vanishes between mkdir and the check (lstat throws ENOENT): fails closed, block emits with the may-repeat note (every platform)', () => {
+  const cwd = mkProject();
+  const home = mk();
+  const stubDir = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const stub = path.join(stubDir, 'lstat-enoent.cjs');
+    fs.writeFileSync(stub, [
+      "'use strict';",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const target = path.join(process.env.TMPDIR, 'coalhearth');",
+      "const real = fs.lstatSync;",
+      "fs.lstatSync = function (p, ...rest) {",
+      "  if (path.resolve(String(p)) === path.resolve(target)) { const e = new Error('ENOENT: no such file or directory, lstat'); e.code = 'ENOENT'; throw e; }",
+      "  return real.call(fs, p, ...rest);",
+      "};",
+      '',
+    ].join('\n'), 'utf8');
+    const r = run(PRE, cwd, home, SID, { NODE_OPTIONS: `--require=${stub}` });
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.notStrictEqual(r.stdout, '', 'a folder that vanishes mid-check must not silence the block');
+    const ctx = parseInject(r.stdout);
+    assert.match(ctx, /Warm-Resume Recovery/, 'the recovery block is emitted');
+    assert.match(ctx.toLowerCase(), /may repeat/, 'honest note: the marker folder was not trusted, so no marker was written');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(stubDir, { recursive: true, force: true });
+  }
+});
+
 test('pre: the once-per-session latch still works on a folder the hook made itself (every platform)', () => {
   const cwd = mkProject();
   const home = mk();
