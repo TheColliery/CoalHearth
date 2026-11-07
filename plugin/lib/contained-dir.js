@@ -172,23 +172,51 @@ function selfCleanLegacyPhantom(cwdAbs, anchoredRootAbs) {
 // by the containment check right above this call. A user-chosen custom
 // outputDirectory therefore never gets self-ignored, even a benign one — main's
 // ruling: it is not a directory CH exclusively owns, so it does not get a blanket `*`.
-// Returns true when the folder's .gitignore is the tool's own `*\n` afterwards; false means the
-// default folder must be refused. `stillPinned` re-asks the folder pin before the rename.
+// Returns true when the .gitignore name holds the tool's own `*\n` afterwards, or is still ABSENT (the tool could not
+// create it, say a read-only folder: the best-effort path the journal had before 83a970b, nothing to protect). False
+// means a planted name is present and cannot be replaced: the default folder must be refused. `stillPinned` re-asks
+// the folder pin before the rename.
 const SELF_IGNORE = '*\n';
-// True only for a regular, non-link file whose bytes are exactly the tool's own `*\n` (bounded: the size is checked before the read).
-function holdsSelfIgnore(gi) {
+// The tool's own file is two bytes, so anything past this bound is not ours and is never read further.
+const SELF_IGNORE_READ_MAX = 64;
+// Reads the NAME through ONE descriptor: open, fstat (a regular file under the bound), read the bytes from the
+// descriptor, then lstat the name and require the same file (same dev and ino, not a link). A link at the name fails
+// the match on every platform; Windows has no O_NOFOLLOW, so the match is what refuses a link there. Returns the
+// text, or null for anything else (absent, a link, a directory, over the bound, unreadable).
+function readSelfIgnoreFile(gi) {
+  let fd = null;
   try {
-    const st = fs.lstatSync(gi);
-    return st.isFile() && !st.isSymbolicLink() && st.size === SELF_IGNORE.length && fs.readFileSync(gi, 'utf8') === SELF_IGNORE;
+    fd = fs.openSync(gi, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const fst = fs.fstatSync(fd);
+    if (!fst.isFile() || fst.size > SELF_IGNORE_READ_MAX) return null;
+    const buf = Buffer.alloc(fst.size);
+    const n = fs.readSync(fd, buf, 0, fst.size, 0);
+    const lst = fs.lstatSync(gi);
+    if (lst.isSymbolicLink() || !lst.isFile() || lst.dev !== fst.dev || lst.ino !== fst.ino) return null;
+    return buf.subarray(0, n).toString('utf8');
   } catch (_) {
-    return false;
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch (_) { /* already closed */ }
+    }
   }
+}
+// The state of the NAME, judged once per attempt: 'absent' (no entry at all), 'own' (the tool's bytes in a regular
+// file), or 'other' (anything else, including an error other than ENOENT: fail closed).
+function selfIgnoreState(gi) {
+  if (readSelfIgnoreFile(gi) === SELF_IGNORE) return 'own'; // read first: the verdict rests on the descriptor's bytes
+  try {
+    fs.lstatSync(gi);
+  } catch (err) {
+    return err && err.code === 'ENOENT' ? 'absent' : 'other';
+  }
+  return 'other';
 }
 function ensureSelfIgnore(dir, stillPinned) {
   const gi = path.join(dir, '.gitignore');
-  if (holdsSelfIgnore(gi)) return true; // the hot path: one lstat, one small read
+  if (selfIgnoreState(gi) === 'own') return true; // the hot path: one lstat, one bounded descriptor read
   const tmp = path.join(dir, `.gitignore.${process.pid}.${Date.now().toString(36)}.tmp`);
-  let ok = false;
   try {
     fs.writeFileSync(tmp, SELF_IGNORE, { flag: 'wx' });
     if (!stillPinned()) return false;
@@ -199,13 +227,14 @@ function ensureSelfIgnore(dir, stillPinned) {
       // the tool's own bytes there. The rename is not the verdict: the outcome is judged below, and a planted file or a
       // directory at the name still fails that judgement.
     }
-    ok = holdsSelfIgnore(gi);
   } catch (_) {
-    ok = false;
+    // The tool's own file could not be written (a read-only folder, say). The name is judged below: absent keeps the
+    // journal usable, a planted name still refuses it.
   } finally {
     try { fs.unlinkSync(tmp); } catch (_) { /* renamed away, or never created */ }
   }
-  return ok;
+  const state = selfIgnoreState(gi);
+  return state === 'own' || state === 'absent';
 }
 
 /**
