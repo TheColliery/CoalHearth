@@ -155,7 +155,8 @@ function main() {
         markerWritten = false; // not ours, open to others, or not a folder: never read or write a marker there
       } else {
         try {
-          fs.writeFileSync(marker, '', { flag: 'wx' });
+          // Owner-only (0600): the marker is this user's, never readable by another account on a shared tmp.
+          fs.writeFileSync(marker, '', { flag: 'wx', mode: 0o600 });
         } catch (err) {
           if (err && err.code === 'EEXIST') return; // this session already did its resume check
           markerWritten = false; // the temp write failed (read-only / unwritable)

@@ -318,6 +318,27 @@ test('pre: a marker folder another user left open (POSIX, mode 0777) does not su
   }
 });
 
+// The marker is created owner-only: no group or other bit, so another local account cannot read it (CodeQL
+// js/insecure-temporary-file, 2026-11-07). POSIX mode bits do not exist on Windows: visible skip there.
+test('pre: the marker file the hook writes has no group or other permission bits (POSIX)', (t) => {
+  if (typeof process.getuid !== 'function') { t.skip('mode bits do not exist on this platform (Windows): the POSIX leg cannot run here'); return; }
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(markerCount(home), 1, 'the hook wrote its once-per-session marker');
+    const markerDir = path.join(home, 'coalhearth');
+    const name = fs.readdirSync(markerDir).find((n) => /^ag-resume-.*\.marker$/.test(n));
+    const st = fs.lstatSync(path.join(markerDir, name));
+    assert.strictEqual(st.mode & 0o077, 0, `marker mode ${(st.mode & 0o777).toString(8)} leaks to group or other`);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('pre: a marker folder owned by another uid (POSIX, root only) does not suppress the block: emits with the may-repeat note', (t) => {
   if (typeof process.getuid !== 'function') { t.skip('owner and mode bits do not exist on this platform (Windows): the POSIX leg cannot run here'); return; }
   if (process.getuid() !== 0) { t.skip('needs root to hand the marker folder to another uid (uid 65534)'); return; }
