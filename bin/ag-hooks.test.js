@@ -343,6 +343,28 @@ test('pre: a marker folder owned by another uid (POSIX, root only) does not supp
   }
 });
 
+// A FILE planted at the marker folder's name makes mkdirSync throw EEXIST. That is not "this session already
+// ran": it is a refused folder, so the block must still emit, with the may-repeat note, and no marker is written.
+test('pre: a FILE planted at the marker folder name does not read as "already ran": block emits with the may-repeat note (every platform)', () => {
+  const cwd = mkProject();
+  const home = mk();
+  try {
+    writeJournal(cwd, IN_PROGRESS);
+    fs.writeFileSync(path.join(home, 'coalhearth'), 'planted', 'utf8'); // a file where the marker folder must go
+    const r = run(PRE, cwd, home, SID);
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stderr, '');
+    assert.notStrictEqual(r.stdout, '', 'a planted file at the folder name must not suppress the recovery block');
+    const ctx = parseInject(r.stdout);
+    assert.match(ctx, /Warm-Resume Recovery/, 'the recovery block is emitted');
+    assert.match(ctx.toLowerCase(), /may repeat/, 'honest note: the marker could not be written');
+    assert.strictEqual(fs.readFileSync(path.join(home, 'coalhearth'), 'utf8'), 'planted', 'the planted file is left untouched');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('pre: the once-per-session latch still works on a folder the hook made itself (every platform)', () => {
   const cwd = mkProject();
   const home = mk();

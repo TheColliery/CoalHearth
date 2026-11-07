@@ -135,20 +135,27 @@ function main() {
     // is bounded (~one tiny file per session).
     const markerDir = path.join(os.tmpdir(), 'coalhearth');
     const marker = path.join(markerDir, `ag-resume-${hashKey(key)}.marker`);
-    // Write the guard BEFORE emitting (v1.2.1 ordering). EEXIST -> this session already ran ->
-    // silent return. Any OTHER failure (read-only / unwritable tmp) -> markerWritten=false:
-    // the block still emits (CH's recovery payload is worth repeating) with an honest "may
-    // repeat" note appended below.
+    // Write the guard BEFORE emitting (v1.2.1 ordering). Only the wx MARKER write's EEXIST means
+    // "this session already ran" -> silent return. Setup failures (mkdirSync throws, e.g. EEXIST
+    // because a FILE sits at the folder name; or the folder is refused by markerDirIsOwnPrivate)
+    // are not that signal: markerWritten=false, and the block still emits (CH's recovery payload
+    // is worth repeating) with an honest "may repeat" note appended below.
     try {
       fs.mkdirSync(markerDir, { recursive: true, mode: 0o700 });
+    } catch {
+      markerWritten = false; // the folder could not be created (a file sits at its name, or tmp is read-only)
+    }
+    if (markerWritten) {
       if (!markerDirIsOwnPrivate(markerDir)) {
-        markerWritten = false; // not ours or open to others: never read or write a marker there; emit with the may-repeat note
+        markerWritten = false; // not ours, open to others, or not a folder: never read or write a marker there
       } else {
-        fs.writeFileSync(marker, '', { flag: 'wx' });
+        try {
+          fs.writeFileSync(marker, '', { flag: 'wx' });
+        } catch (err) {
+          if (err && err.code === 'EEXIST') return; // this session already did its resume check
+          markerWritten = false; // the temp write failed (read-only / unwritable)
+        }
       }
-    } catch (err) {
-      if (err && err.code === 'EEXIST') return; // this session already did its resume check
-      markerWritten = false;
     }
   }
 
@@ -220,7 +227,7 @@ function main() {
   if (!prompt) return;
   const markedResumed = engine.markResumed(aborted);
   if (!markerWritten) {
-    prompt += '\n> ⚠️ Could not persist the once-per-session marker (a temp write failed — possibly a read-only temp dir). This recovery block may repeat on the next model call.\n';
+    prompt += '\n> ⚠️ Could not persist the once-per-session marker (the temp write failed, or the marker folder was refused: not this user\'s own, open to others, or not a folder). This recovery block may repeat on the next model call.\n';
   }
   if (!markedResumed) {
     prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session, and the interrupted session\'s file list may bleed into this session\'s journal.\n';
