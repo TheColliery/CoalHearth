@@ -833,7 +833,9 @@ test('FB2 construct: a link swapped in between the mkdir and the self-ignore wri
   assert.deepEqual(fs.readdirSync(other), [], 'no self-ignore file in the swap target');
 });
 
-test('FB2 construct (control): an ordinary construction asks twice and still plants the self-ignore file', (t) => {
+// r29cw BUILD 2: the count moved from 2 to 3 on purpose. A first construction has no .gitignore yet, so the write path runs, and the
+// folder pin is asked again before the self-ignore rename (the third act, after the mkdir check and the check after it).
+test('FB2 construct (control): an ordinary construction asks three times (mkdir, after mkdir, before the self-ignore rename) and still plants the self-ignore file', (t) => {
   const root = project(t);
   const folder = path.join(root, '.claude', 'coalhearth');
   fs.mkdirSync(folder, { recursive: true });
@@ -842,6 +844,6 @@ test('FB2 construct (control): an ordinary construction asks twice and still pla
   let got;
   try { got = containedOutputDir(undefined, root); } finally { w.restore(); }
   assert.equal(got, folder);
-  assert.equal(w.calls(), 2);
+  assert.equal(w.calls(), 3);
   assert.equal(fs.readFileSync(path.join(folder, '.gitignore'), 'utf8'), '*\n');
 });
