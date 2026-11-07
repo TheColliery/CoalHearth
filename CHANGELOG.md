@@ -15,7 +15,7 @@ The plugin dist changes in `lib/contained-dir.js`, so this is a PATCH release. T
 - **A `.gitignore` at the journal folder's name that is a FIFO no longer blocks the hook.** The read of that file opened it without the non-blocking flag, so a FIFO at the name made the hook wait until the host killed it. The read now uses the same flags as every other repository-named read, with a link refused where the platform allows. A FIFO at the name is replaced by the tool's own file, as any other planted file is, so the folder stays usable.
 
 ### Changed
-- **A test for a journal folder swapped for another folder at the third pin check is refused.** The test covers the pin asked again just before the rename.
+- **A test now covers a journal folder swapped for a link at the third pin check, which is refused.** The test covers the pin asked again just before the rename.
 - **The release-notes, wave-run and release-shape scripts and their tests are re-copied from the org canon, and the test runner names each skipped test.** Repository tooling only.
 
 ## [2.8.12] - 2026-11-07
