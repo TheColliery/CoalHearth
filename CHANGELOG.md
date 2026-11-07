@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.12] - 2026-11-07
+
+The journal folder's `.gitignore` is always the tool's own.
+
+The plugin dist changes in `lib/contained-dir.js`, so this is a PATCH release.
+
+### Security
+- **The journal folder's `.gitignore` is now the tool's own, never a file a cloned repository placed there.** The journal folder holds the recovery journal: the goal, the checklist, file paths and constraint text. The tool writes a `.gitignore` containing `*` beside the journal so that these files stay out of version control. Before this release, a `.gitignore` already present at that place was kept, even when it was empty or let the journal files show as untracked, so the user could commit the journal without noticing. Now a `.gitignore` that is not exactly the tool's own is replaced by it. If the replacement cannot be made, for example because a folder sits at that name, the journal is off for that session and the existing warning shows. Affected: every release from 2.1.1 through 2.8.11. Fixed in 2.8.12. Residual: a clone that tracks `.claude/coalhearth/session_handoff.json` shows that file as modified. That change is visible in `git status`; it is not hidden.
+
 ## [2.8.11] - 2026-11-07
 
 The Antigravity marker folder is used only when it is the user's own and closed to other users.
