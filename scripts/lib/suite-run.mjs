@@ -24,7 +24,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves } from './wave-run.mjs';
+import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves, skippedLines } from './wave-run.mjs';
 
 const MAX_LISTED = 5;
 
@@ -121,7 +121,9 @@ export function runPinned({ file, cwd, env = process.env, heapMb, fileTimeoutMs,
         : classifyFile({ file, code, signal, stdout: out, killedBy });
       r.name = file;
       if (r.status !== STATUS.PASS && r.status !== STATUS.SKIP) { r.stdout = out; r.stderr = err; }
-      resolve({ result: r, names: parseTap(out).results.map((x) => x.name) });
+      const tap = parseTap(out).results;
+      r.skipped = tap.filter((x) => x.directive === 'SKIP').map((x) => x.name); // the same list the waves keep, so skippedLines names a pinned file's skips too
+      resolve({ result: r, names: tap.map((x) => x.name) });
     };
     child.on('error', (e) => finish(null, null, e.code ?? e.message));
     child.on('close', (code, signal) => finish(code, signal));
@@ -232,6 +234,7 @@ export async function cli({ repo, tests, dirs, expectFile, argv, limits, io = { 
   }
   const unlisted = Object.entries(suite.extras).map(([f, list]) => `${f} ${list.length}`);
   if (unlisted.length) out(`test runner: test name(s) the manifest does not list (not a failure; print them with --names): ${unlisted.join(', ')}`);
+  for (const line of skippedLines(suite.results)) out(line); // one line per skipped test, before the summary (order 2026-11-07: a skipped leg is named, never only counted)
   if (suite.summary) {
     out(suite.summary.line);
     const t = testTotals(suite.results);

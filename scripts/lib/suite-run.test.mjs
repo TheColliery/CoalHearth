@@ -29,6 +29,7 @@ const FIXTURES = {
   'fail.fixture.mjs': "import { test } from 'node:test'; import assert from 'node:assert/strict';\ntest('alpha', () => assert.equal(1, 2));\n",
   'slow.fixture.mjs': "import { test } from 'node:test';\ntest('alpha', async () => { await new Promise((r) => setTimeout(r, 2500)); });\n",
   'skip.fixture.mjs': "import { test } from 'node:test';\ntest('alpha', { skip: 'no link here' }, () => {});\n",
+  'pass-and-skip.fixture.mjs': "import { test } from 'node:test';\ntest('runs', () => {});\ntest('platform leg', { skip: 'no link here' }, () => {});\n",
   'heap.fixture.mjs': "import { test } from 'node:test'; import fs from 'node:fs'; import v8 from 'node:v8';\ntest('alpha', () => { fs.writeFileSync(process.env.HEAP_FILE, String(v8.getHeapStatistics().heap_size_limit)); });\n",
   'marker.fixture.mjs': "import { test } from 'node:test'; import fs from 'node:fs';\ntest('alpha', () => { fs.writeFileSync(process.env.MARKER_FILE, 'ran'); });\n",
   // a hang BEFORE the first test: --test-timeout never applies; it starts a grandchild, records its pid, and keeps its own event loop alive for ever
@@ -391,6 +392,20 @@ test('cli: a green run prints one summary line and returns 0; a name the manifes
   assert.doesNotMatch(r.out, /^SKIP /m, 'a skipped file is counted, not printed as a problem');
   assert.match(r.out, /name\(s\) the manifest does not list .*lib\/b\.test\.mjs 1/);
   assert.equal(r.err, '');
+});
+
+// T-29cz (order 2026-11-07): the canon names every skipped test before the summary, so a skipped leg is never only counted. A line per skipped
+// test, its name as a JSON string, and the summary line still follows them.
+test('cli: a skipped test is named by a SKIPPED line before the summary line, its name as a JSON string -- RED before the runner calls skippedLines', async () => {
+  const roster = { 'scripts/a.test.mjs': 'pass-and-skip' };
+  const repo = plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1 }, names: {} } });
+  const r = await drive(repo, roster);
+  assert.equal(r.code, 0, r.err);
+  const lines = r.out.split('\n');
+  const skipAt = lines.indexOf('SKIPPED scripts/a.test.mjs: "platform leg"');
+  const summaryAt = lines.findIndex((l) => l.startsWith('wave-run: '));
+  assert.ok(skipAt >= 0, `no SKIPPED line for the skipped leg:\n${r.out}`);
+  assert.ok(summaryAt > skipAt, `the SKIPPED line must come before the summary line:\n${r.out}`);
 });
 
 test('cli: a vacuous file and a file below its floor make it return 1, each printed with its status and reason, the diagnostics of the vacuous one on stderr', async () => {
