@@ -80,6 +80,17 @@ test('runSuite: a child started with the default env sees the sandbox as HOME, U
   assert.equal(probe.status, STATUS.PASS, `the child saw the operator's folders: ${probe.reason}`);
 });
 
+// r29du: the names lane (runPinned) takes the env it is given; its child must see the sandbox as home and temp folders, like the runWaves lane.
+test('runPinned: a names-lane child started with the sandboxed env sees the sandbox as HOME, USERPROFILE, TEMP, TMP and TMPDIR -- RED on env: process.env', async () => {
+  const want = { HOME: SANDBOX, USERPROFILE: SANDBOX, TEMP: SANDBOX, TMP: SANDBOX, TMPDIR: SANDBOX };
+  fs.writeFileSync(path.join(SANDBOX, 'pinned-env-probe.fixture.mjs'),
+    "import { test } from 'node:test'; import assert from 'node:assert/strict';" + String.fromCharCode(10)
+    + 'const want = ' + JSON.stringify(want) + ';' + String.fromCharCode(10)
+    + "test('the pinned child runs in the sandbox', () => { for (const k of Object.keys(want)) assert.equal(process.env[k], want[k], k); });" + String.fromCharCode(10));
+  const p = await runPinned({ file: 'pinned-env-probe.fixture.mjs', cwd: SANDBOX, env: sandboxEnv(), ...LIMITS, fileClockMs: 60000 });
+  assert.equal(p.result.status, STATUS.PASS, `the pinned child saw the operator's folders: ${p.result.reason}`);
+});
+
 // ---- the pure parts -----------------------------------------------------------------------------------------------------------------------
 test('expectProblems: a complete manifest has none; a file with no entry, in both tables, a stray entry, a bad floor and a bad names list are each named', () => {
   const files = ['a.test.mjs', 'b.test.mjs'];
@@ -122,7 +133,7 @@ test('testTotals: sums tests, passes and skipped TESTS over the files that repor
 
 // ---- the loss at the end of a file process on a POSIX pipe (08e RUNNER RED FIX) ------------------------------------------------------------------------------------------
 test('the simulation bites: a plain node --test --test-force-exit child of 300 tests reports fewer than 300 when its stdout queues writes (no stdout-sync preload anywhere)', () => {
-  const env = { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS };
+  const env = sandboxEnv({ NODE_OPTIONS: SIM_NODE_OPTIONS });
   delete env.NODE_TEST_CONTEXT;
   const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-force-exit', 'many.fixture.mjs'], { cwd: SANDBOX, encoding: 'utf8', timeout: 60000, env });
   const m = /# tests (\d+)/.exec(r.stdout);
@@ -131,7 +142,7 @@ test('the simulation bites: a plain node --test --test-force-exit child of 300 t
 
 test('the names lane, which runs outside wave-run, still puts the canon preload on its child: all 300 listed names are reported when stdout would queue writes (a POSIX pipe) -- RED before the RED FIX', async () => {
   const names = Array.from({ length: MANY }, (_, i) => 't' + i);
-  const r = await run({ files: ['many.fixture.mjs'], env: { ...process.env, NODE_OPTIONS: SIM_NODE_OPTIONS }, expect: { floors: {}, names: { 'many.fixture.mjs': names } } });
+  const r = await run({ files: ['many.fixture.mjs'], env: sandboxEnv({ NODE_OPTIONS: SIM_NODE_OPTIONS }), expect: { floors: {}, names: { 'many.fixture.mjs': names } } });
   const res = byName(r, 'many.fixture.mjs');
   assert.equal(res.status, STATUS.PASS, res.reason);
   assert.equal(r.exitCode, 0);
@@ -207,12 +218,12 @@ test('a failing names-manifest file keeps FAIL with the failing test named, and 
 // ---- the manifest drifts loudly -------------------------------------------------------------------------------------------------------------
 test('a manifest that does not match the roster runs NOTHING and is red with every problem named', async () => {
   const marker = path.join(SANDBOX, 'marker-ran.txt');
-  const r = await run({ files: fx('marker'), env: { ...process.env, MARKER_FILE: marker }, expect: { floors: {}, names: {} } });
+  const r = await run({ files: fx('marker'), env: sandboxEnv({ MARKER_FILE: marker }), expect: { floors: {}, names: {} } });
   assert.equal(r.exitCode, 1);
   assert.equal(r.summary, null);
   assert.match(r.problems.join('|'), /marker\.fixture\.mjs has no entry/);
   assert.equal(fs.readdirSync(SANDBOX).includes(path.basename(marker)), false, 'no child was started');
-  const ran = await run({ files: fx('marker'), env: { ...process.env, MARKER_FILE: marker }, expect: { floors: { 'marker.fixture.mjs': 1 }, names: {} } });
+  const ran = await run({ files: fx('marker'), env: sandboxEnv({ MARKER_FILE: marker }), expect: { floors: { 'marker.fixture.mjs': 1 }, names: {} } });
   assert.equal(ran.exitCode, 0);
   assert.equal(fs.readFileSync(marker, 'utf8'), 'ran', 'the control: with an entry the same file runs');
 });
@@ -228,7 +239,7 @@ const gone = async (pid) => {
 
 test('a file that hangs before its first test is bounded by the whole-run deadline: FAIL, its grandchild killed with it, the next file NOT-RUN -- RED before 08e (the old runner ran to the outer kill)', async () => {
   const pidFile = path.join(SANDBOX, 'wave-grandchild.pid');
-  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 2500, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
+  const r = await run({ files: fx('top-hang', 'three'), env: sandboxEnv({ GRANDCHILD_PID_FILE: pidFile }), deadlineMs: 2500, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
   assert.equal(r.exitCode, 1);
   assert.equal(byName(r, 'top-hang.fixture.mjs').status, STATUS.FAIL);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
@@ -238,7 +249,7 @@ test('a file that hangs before its first test is bounded by the whole-run deadli
 
 test('the same for a names-manifest file (it runs in the pinned lane, not in wave-run): killed at the deadline with its tree, and the file after it is NOT-RUN with the remaining budget spent', async () => {
   const pidFile = path.join(SANDBOX, 'pinned-grandchild.pid');
-  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 2500, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
+  const r = await run({ files: fx('top-hang', 'three'), env: sandboxEnv({ GRANDCHILD_PID_FILE: pidFile }), deadlineMs: 2500, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
   assert.equal(r.exitCode, 1);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the whole-run deadline/);
   assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.NOT_RUN);
@@ -249,7 +260,7 @@ test('the pinned lane is GIVEN only the budget the earlier files left: after a s
   const pidFile = path.join(SANDBOX, 'budget-grandchild.pid');
   const given = [];
   const r = await run({
-    files: fx('slow', 'top-hang'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, deadlineMs: 6000,
+    files: fx('slow', 'top-hang'), env: sandboxEnv({ GRANDCHILD_PID_FILE: pidFile }), deadlineMs: 6000,
     onEvent: (e) => { if (e.type === 'pinned') given.push(e); },
     expect: { floors: {}, names: { 'slow.fixture.mjs': ['alpha'], 'top-hang.fixture.mjs': ['alpha'] } },
   });
@@ -266,7 +277,7 @@ test('the pinned lane is GIVEN only the budget the earlier files left: after a s
 
 test('the per-file clock (the canon --file-clock-ms) ends a file that hangs before its first test and the rest of the roster still runs: FAIL naming the clock, its grandchild dead, the next file PASS -- RED before 09a (the run waited for the whole-run deadline)', async () => {
   const pidFile = path.join(SANDBOX, 'clock-wave-grandchild.pid');
-  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, fileClockMs: 2000, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
+  const r = await run({ files: fx('top-hang', 'three'), env: sandboxEnv({ GRANDCHILD_PID_FILE: pidFile }), fileClockMs: 2000, expect: { floors: { 'top-hang.fixture.mjs': 1, 'three.fixture.mjs': 3 }, names: {} } });
   assert.equal(r.exitCode, 1);
   assert.equal(byName(r, 'top-hang.fixture.mjs').status, STATUS.FAIL);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the file clock \(2000 ms\)/);
@@ -287,7 +298,7 @@ test('runPinned: a kill that leaves the child alive does not wait for ever -- FA
   const pidFile = path.join(SANDBOX, 'selfpid.pid');
   const t0 = Date.now();
   const got = await Promise.race([
-    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: { ...process.env, SELF_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 20000, fileClockMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
+    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: sandboxEnv({ SELF_PID_FILE: pidFile }), ...LIMITS, deadlineMs: 20000, fileClockMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
     new Promise((r) => setTimeout(() => r('HUNG'), 12000).unref()),
   ]);
   try {
@@ -305,7 +316,7 @@ test('runPinned: a kill that leaves the child alive does not wait for ever -- FA
 test('runPinned: the same fallback after the WHOLE-RUN deadline kill (no per-file clock set)', async () => {
   const pidFile = path.join(SANDBOX, 'selfpid-deadline.pid');
   const got = await Promise.race([
-    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: { ...process.env, SELF_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
+    runPinned({ file: 'selfpid.fixture.mjs', cwd: SANDBOX, env: sandboxEnv({ SELF_PID_FILE: pidFile }), ...LIMITS, deadlineMs: 1500, killGraceMs: 800, killer: () => {} }).then((x) => x.result),
     new Promise((r) => setTimeout(() => r('HUNG'), 12000).unref()),
   ]);
   try {
@@ -326,7 +337,7 @@ test('runPinned: a hang whose detached grandchild holds the pipe after the real 
     '',
   ].join(String.fromCharCode(10)));
   const got = await Promise.race([
-    runPinned({ file: 'detached-gc.fixture.mjs', cwd: SANDBOX, env: { ...process.env, GC_PID_FILE: pidFile }, ...LIMITS, deadlineMs: 30000, fileClockMs: 1500, killGraceMs: 1500 }).then((x) => x.result),
+    runPinned({ file: 'detached-gc.fixture.mjs', cwd: SANDBOX, env: sandboxEnv({ GC_PID_FILE: pidFile }), ...LIMITS, deadlineMs: 30000, fileClockMs: 1500, killGraceMs: 1500 }).then((x) => x.result),
     new Promise((r) => setTimeout(() => r('HUNG'), 15000).unref()),
   ]);
   try {
@@ -339,7 +350,7 @@ test('runPinned: a hang whose detached grandchild holds the pipe after the real 
 
 test('the same clock in the names lane: the hang is killed at the file clock with its tree, and the next names file still runs and passes', async () => {
   const pidFile = path.join(SANDBOX, 'clock-pinned-grandchild.pid');
-  const r = await run({ files: fx('top-hang', 'three'), env: { ...process.env, GRANDCHILD_PID_FILE: pidFile }, fileClockMs: 2000, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
+  const r = await run({ files: fx('top-hang', 'three'), env: sandboxEnv({ GRANDCHILD_PID_FILE: pidFile }), fileClockMs: 2000, expect: { floors: {}, names: { 'top-hang.fixture.mjs': ['alpha'], 'three.fixture.mjs': ['alpha', 'beta', 'gamma'] } } });
   assert.equal(r.exitCode, 1);
   assert.match(byName(r, 'top-hang.fixture.mjs').reason, /killed at the file clock \(2000 ms\)/);
   assert.equal(byName(r, 'three.fixture.mjs').status, STATUS.PASS);
@@ -349,21 +360,21 @@ test('the same clock in the names lane: the hang is killed at the file clock wit
 test('a file that ends before its clock is untouched by it (the clock is cleared on exit, so it never holds the run open or kills a later file)', async () => {
   const r = await run({ files: fx('three'), fileClockMs: 60000, expect: { floors: { 'three.fixture.mjs': 3 }, names: {} } });
   assert.equal(r.exitCode, 0);
-  const p = await runPinned({ file: fx('three')[0], cwd: SANDBOX, env: process.env, ...LIMITS, fileClockMs: 60000 });
+  const p = await runPinned({ file: fx('three')[0], cwd: SANDBOX, env: sandboxEnv(), ...LIMITS, fileClockMs: 60000 });
   assert.equal(p.result.status, STATUS.PASS);
 });
 
 test('runPinned: a file that cannot start is FAIL, never a throw; the pinned lane takes the room heap cap and drops a parent runner\'s NODE_TEST_CONTEXT', async () => {
-  const none = await runPinned({ file: 'does-not-exist.fixture.mjs', cwd: SANDBOX, env: process.env, ...LIMITS });
+  const none = await runPinned({ file: 'does-not-exist.fixture.mjs', cwd: SANDBOX, env: sandboxEnv(), ...LIMITS });
   assert.equal(none.result.status, STATUS.FAIL);
-  const withCtx = await runPinned({ file: fx('three')[0], cwd: SANDBOX, env: { ...process.env, NODE_TEST_CONTEXT: 'child-v8' }, ...LIMITS });
+  const withCtx = await runPinned({ file: fx('three')[0], cwd: SANDBOX, env: sandboxEnv({ NODE_TEST_CONTEXT: 'child-v8' }), ...LIMITS });
   assert.equal(withCtx.result.status, STATUS.PASS, 'with the parent variable left in, the child would print a binary format and no TAP');
   assert.deepEqual(withCtx.names, ['alpha', 'beta', 'gamma']);
 });
 
 test('runPinned: the pinned lane runs under the room heap cap (NODE_OPTIONS), and a names-manifest file whose tests are all skipped is still judged by its names', async () => {
   const heapFile = path.join(SANDBOX, 'heap-limit.txt');
-  const env = { ...process.env, HEAP_FILE: heapFile };
+  const env = sandboxEnv({ HEAP_FILE: heapFile });
   delete env.NODE_OPTIONS; // this box may export its own cap, which would mask a missing one
   const r = await runPinned({ file: fx('heap')[0], cwd: SANDBOX, env, ...LIMITS, heapMb: 512 });
   assert.equal(r.result.status, STATUS.PASS);
