@@ -63,7 +63,22 @@ fs.writeFileSync(path.join(SANDBOX, 'many.fixture.mjs'), "import { test } from '
 for (const [name, text] of Object.entries(FIXTURES)) fs.writeFileSync(path.join(SANDBOX, name), text);
 const fx = (...names) => names.map((n) => `${n}.fixture.mjs`);
 const byName = (run, file) => run.results.find((r) => r.file === file);
-const run = (opts) => runSuite({ cwd: SANDBOX, env: process.env, serial: true, ...LIMITS, ...opts });
+// The children of this helper get the sandbox as their home and temp folders (the canon's sandboxEnv shape); a test that passes its own env keeps it.
+const sandboxEnv = (extra = {}) => ({ ...process.env, HOME: SANDBOX, USERPROFILE: SANDBOX, TEMP: SANDBOX, TMP: SANDBOX, TMPDIR: SANDBOX, ...extra });
+const run = (opts) => runSuite({ cwd: SANDBOX, env: sandboxEnv(), serial: true, ...LIMITS, ...opts });
+
+// r29dt: a child the runner starts must see the sandbox as its home and temp folders, never the operator's. The fixture embeds the expected
+// folders when it is written, so the child itself asserts them; a child that inherited the real environment fails the file.
+test('runSuite: a child started with the default env sees the sandbox as HOME, USERPROFILE, TEMP, TMP and TMPDIR -- RED before the sandboxed default', async () => {
+  const want = { HOME: SANDBOX, USERPROFILE: SANDBOX, TEMP: SANDBOX, TMP: SANDBOX, TMPDIR: SANDBOX };
+  fs.writeFileSync(path.join(SANDBOX, 'env-probe.fixture.mjs'),
+    "import { test } from 'node:test'; import assert from 'node:assert/strict';" + String.fromCharCode(10)
+    + 'const want = ' + JSON.stringify(want) + ';' + String.fromCharCode(10)
+    + "test('the child runs in the sandbox', () => { for (const k of Object.keys(want)) assert.equal(process.env[k], want[k], k); });" + String.fromCharCode(10));
+  const r = await run({ files: ['env-probe.fixture.mjs'], expect: { floors: { 'env-probe.fixture.mjs': 1 }, names: {} } });
+  const probe = byName(r, 'env-probe.fixture.mjs');
+  assert.equal(probe.status, STATUS.PASS, `the child saw the operator's folders: ${probe.reason}`);
+});
 
 // ---- the pure parts -----------------------------------------------------------------------------------------------------------------------
 test('expectProblems: a complete manifest has none; a file with no entry, in both tables, a stray entry, a bad floor and a bad names list are each named', () => {
