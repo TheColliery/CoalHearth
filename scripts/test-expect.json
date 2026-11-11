@@ -390,8 +390,11 @@
       "a line of secret-scan.acks that is not a 16-hex fingerprint fails loud instead of guessing",
       "--pre-push scans the added lines of every pushed commit: a key added and deleted inside the range is still found",
       "--pre-push with a clean range passes and says what it read; with no refs on stdin it says there is nothing to scan",
+      "--pre-push --remote=<name>: a commit held only by another remote is scanned for the named push remote, and is skipped when the named remote already holds it or no remote is named",
+      "--pre-push --remote=<name> with a value that is not the name of a remote of this repository (a glob, a dash-led value, empty) is ignored and the scan falls back to every remote",
       "a pushed tag whose target is not a commit is refused by name, never scanned unread",
       "a scan that cannot run fails: a missing scanner and a directory that is not a repository both exit 1 with a FAIL line",
+      "a git that runs and refuses is reported with its own first line, never as git missing from PATH (found 2026-10-23 while testing the one-wording classifier class)",
       "--help prints the usage and exits 0; an unknown flag is an error with the usage on stderr (64)",
       "a file name that carries a right-to-left override is escaped in the report, never printed raw",
       "a GIT_DIR a hook inherited is ignored: the gate scans the repository it runs in, not the one the variable names",
@@ -401,7 +404,10 @@
       "an unreadable pushed range fails: a ref line naming a commit git does not have exits 1 and says the added lines were NOT scanned",
       "a staged blob that is damaged on disk fails the scan by count: exit 1, named, never a clean pass",
       "the fixtures run in the test's own sandbox: a hostile global git config and HOME never reach them, and the fixture folders live inside the sandbox -- RED before UMB-439",
-      "the sandbox is closed against a repository ABOVE the temp folder: a non-repository fixture is still not inside one -- RED before UMB-456 (1) vi"
+      "the sandbox is closed against a repository ABOVE the temp folder: a non-repository fixture is still not inside one -- RED before UMB-456 (1) vi",
+      "a staged text file with a binary-looking name is still scanned: the bytes decide, never the name -- RED before 2026-11-03b",
+      "a blob id staged at several paths is handed to git cat-file once, and every path is still reported -- RED before 2026-11-03b",
+      "a git.exe planted in the scanned checkout is never run in git's place on Windows -- RED before 2026-11-03b"
     ]
   }
 }
