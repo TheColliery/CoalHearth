@@ -19,7 +19,7 @@
     "scripts/lib/cwk137.test.mjs": 46,
     "scripts/lib/engine.test.mjs": 45,
     "scripts/lib/wave-run.test.mjs": 45,
-    "scripts/lib/suite-run.test.mjs": 38,
+    "scripts/lib/suite-run.test.mjs": 41,
     "scripts/build-plugin.test.mjs": 24,
     "scripts/hooks-exec-form.test.mjs": 9,
     "scripts/folder-pin.test.mjs": 9,

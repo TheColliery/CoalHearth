@@ -398,15 +398,42 @@ function plantRepo({ roster, expect, extraOnDisk = [] }) {
   if (expect !== null) fs.writeFileSync(path.join(repo, 'scripts', 'test-expect.json'), typeof expect === 'string' ? expect : JSON.stringify(expect));
   return repo;
 }
+// T-29du-1 (order r29ec): cli() takes no env, and runSuite reads process.env when none is given, so the children the
+// command line starts would inherit the operator's folders. The sandbox keys are set on process.env for this one call
+// and restored after it. (cli() taking an env parameter is the runner's own change, in scripts/lib/suite-run.mjs.)
+const SANDBOX_KEYS = ['HOME', 'USERPROFILE', 'TEMP', 'TMP', 'TMPDIR'];
 async function drive(repo, roster, argv = []) {
   const out = [];
   const err = [];
-  const code = await cli({
-    repo, tests: Object.keys(roster), dirs: ['scripts', 'scripts/lib', 'lib', 'bin'], expectFile: 'scripts/test-expect.json', argv,
-    limits: { ...LIMITS, serial: true }, io: { out: (l) => out.push(l), err: (l) => err.push(l) },
-  });
-  return { code, out: out.join('\n'), err: err.join('\n') };
+  const saved = Object.fromEntries(SANDBOX_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of SANDBOX_KEYS) process.env[k] = SANDBOX;
+  try {
+    const code = await cli({
+      repo, tests: Object.keys(roster), dirs: ['scripts', 'scripts/lib', 'lib', 'bin'], expectFile: 'scripts/test-expect.json', argv,
+      limits: { ...LIMITS, serial: true }, io: { out: (l) => out.push(l), err: (l) => err.push(l) },
+    });
+    return { code, out: out.join('\n'), err: err.join('\n') };
+  } finally {
+    for (const k of SANDBOX_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
 }
+
+// T-29du-1 (order r29ec): the children the command line starts must see the sandbox as their home and temp folders.
+// The probe embeds the expected folders when it is written and asserts them in the child; RED before drive() sandboxes.
+test('cli: a child the command line starts sees the sandbox as HOME, USERPROFILE, TEMP, TMP and TMPDIR -- RED before drive() hands the sandboxed env', async () => {
+  const roster = { 'scripts/env-probe.test.mjs': 'three' };
+  const repo = plantRepo({ roster, expect: { floors: { 'scripts/env-probe.test.mjs': 1 }, names: {} } });
+  const want = { HOME: SANDBOX, USERPROFILE: SANDBOX, TEMP: SANDBOX, TMP: SANDBOX, TMPDIR: SANDBOX };
+  fs.writeFileSync(path.join(repo, 'scripts', 'env-probe.test.mjs'),
+    "import { test } from 'node:test'; import assert from 'node:assert/strict';" + String.fromCharCode(10)
+    + 'const want = ' + JSON.stringify(want) + ';' + String.fromCharCode(10)
+    + "test('the CLI child runs in the sandbox', () => { for (const k of Object.keys(want)) assert.equal(process.env[k], want[k], k); });" + String.fromCharCode(10));
+  const r = await drive(repo, roster);
+  assert.equal(r.code, 0, `the CLI child saw the operator's folders:\n${r.out}\n${r.err}`);
+});
 
 test('cli: a green run prints one summary line and returns 0; a name the manifest does not list is noted and does not fail', async () => {
   const roster = { 'scripts/a.test.mjs': 'three', 'lib/b.test.mjs': 'four', 'bin/c.test.js': 'skip' };
