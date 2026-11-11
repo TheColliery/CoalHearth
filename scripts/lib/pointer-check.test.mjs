@@ -343,16 +343,18 @@ test('classifyCheckIgnoreResult: r23c -- a pipe error with no stderr still names
   assert.equal(v.message, 'git check-ignore --stdin exited 128 -- cannot tell which cited roots are gitignored');
 });
 
-test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside status 0 stays "failed to spawn" (input may not have reached git)', () => {
+test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside status 0 is a PARTIAL answer (input may not have reached git), never clean', () => {
   const v = classifyCheckIgnoreResult({ error: PIPE_CLOSED('EPIPE'), status: 0, stdout: 'a/.probe\n', stderr: '' });
   assert.equal(v.ok, false);
-  assert.match(v.message, /failed to spawn: spawnSync git EPIPE/);
+  assert.match(v.message, /exited 0 but the stdin write failed \(spawnSync git EPIPE\) -- the answer may be partial/);
+  assert.doesNotMatch(v.message, /failed to spawn/);
 });
 
-test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside status 1 stays "failed to spawn" (git may have stopped reading)', () => {
+test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside status 1 is a PARTIAL answer (git may have stopped reading), never clean', () => {
   const v = classifyCheckIgnoreResult({ error: PIPE_CLOSED('EOF'), status: 1, stdout: '', stderr: '' });
   assert.equal(v.ok, false);
-  assert.match(v.message, /failed to spawn: spawnSync git EOF/);
+  assert.match(v.message, /exited 1 but the stdin write failed \(spawnSync git EOF\) -- the answer may be partial/);
+  assert.doesNotMatch(v.message, /failed to spawn/);
 });
 
 test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside NO status stays "failed to spawn"', () => {
@@ -361,19 +363,31 @@ test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a pipe error beside NO stat
   assert.match(v.message, /failed to spawn: spawnSync git EPIPE/);
 });
 
-test('classifyCheckIgnoreResult: r23c FAIL-CLOSED -- a NON-pipe error beside status 128 stays "failed to spawn" (ENOENT is not the child answering)', () => {
+test('classifyCheckIgnoreResult: CW-018 -- a status 128 is git\'s answer whatever error rides with it (status first): names the exit, never "failed to spawn"', () => {
   const v = classifyCheckIgnoreResult({ error: PIPE_CLOSED('ENOENT'), status: 128, stdout: '', stderr: NO_WORK_TREE });
   assert.equal(v.ok, false);
-  assert.match(v.message, /failed to spawn: spawnSync git ENOENT/);
+  assert.match(v.message, /exited 128 -- fatal: this operation must be run in a work tree/);
+  assert.doesNotMatch(v.message, /failed to spawn/);
 });
 
-// r25a INSPECT LOW-1: one leg per pipe word, so a mutant that reads EOF from error.message (M13) is killed by name.
+// CW-018 (order r29ec): the STATUS is read first. A status 0 or 1 that arrives WITH an error is a PARTIAL answer:
+// git answered, but the stdin write failed, so the answer may be incomplete. It fails with a message that says so,
+// never "failed to spawn" and never clean. Red on the error-first code, which called this a spawn failure.
+test('classifyCheckIgnoreResult: CW-018 -- status 0 WITH an error is a PARTIAL answer, not a spawn failure, and never clean', () => {
+  const v = classifyCheckIgnoreResult({ error: Object.assign(new Error('write EPIPE'), { code: 'ENOENT' }), status: 0, stdout: 'a/.probe\n', stderr: '' });
+  assert.equal(v.ok, false);
+  assert.match(v.message, /exited 0 but the stdin write failed \(write EPIPE\) -- the answer may be partial/);
+  assert.doesNotMatch(v.message, /failed to spawn/);
+});
+
+// r25a INSPECT LOW-1 (M13), re-keyed by CW-018: the status decides the verdict, so a pipe word in error.message must not
+// move it. Both words, status 0 with a non-pipe code: the same PARTIAL answer, the word echoed only inside its message.
 for (const word of ['EPIPE', 'EOF']) {
-  test(`classifyCheckIgnoreResult: CWK2-061 FAIL-CLOSED -- a "${word}" word in error.message with a non-pipe error.code stays "failed to spawn" (keyed on the code, never the message)`, () => {
-    const v = classifyCheckIgnoreResult({ error: Object.assign(new Error(`write ${word}`), { code: 'ENOENT' }), status: 128, stdout: '', stderr: NO_WORK_TREE });
+  test(`classifyCheckIgnoreResult: CWK2-061 -- a "${word}" word in error.message does not move the verdict: status 0 is a PARTIAL answer, keyed on the status (never the message)`, () => {
+    const v = classifyCheckIgnoreResult({ error: Object.assign(new Error(`write ${word}`), { code: 'ENOENT' }), status: 0, stdout: '', stderr: '' });
     assert.equal(v.ok, false);
-    assert.match(v.message, new RegExp(`failed to spawn: write ${word}`));
-    assert.doesNotMatch(v.message, /exited 128/);
+    assert.match(v.message, /exited 0 but the stdin write failed \(write /);
+    assert.doesNotMatch(v.message, /failed to spawn/);
   });
 }
 

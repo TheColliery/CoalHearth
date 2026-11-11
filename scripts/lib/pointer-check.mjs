@@ -308,25 +308,27 @@ export function deriveCandidateRoots({ surfaces = [], agentHomes = new Set() }) 
 // non-0 status short of a spawn error fell through to "read stdout" (empty, since git wrote
 // nothing useful there on a real error), silently produced an empty `ignoredRoots`, and the
 // gate printed a git-derived "0 gitignored" count over a run that derived no facts at all.
-// r23c -- THE PIPE RACE, one answer in two forms. When git exits BEFORE it reads stdin (a core.bare=true
-// repo refuses at once with 128), a spawnSync still writing `input` gets the pipe error AND the real status:
-// EPIPE on POSIX, EOF on Windows (measured 2026-10-24: EOF beside 128 at 65,550 bytes, 4 MB and 16 MB). The
-// child answered, so its exit is the verdict, not a spawn failure. Only that pairing (a pipe code, an integer
-// status other than 0 or 1) is read that way: a pipe error beside status 0 or 1 may mean git never saw all of
-// its input, and a non-pipe error beside any status is a real spawn failure. Both stay fail-closed. The code is
-// keyed on error.code, never on error.message (node/runtime.md §7).
-const STDIN_CLOSED_CODES = new Set(['EPIPE', 'EOF']);
+// The verdict is read by STATUS first (CW-018, order r29ec, the CoalFace exemplar's shape): no status = a spawn
+// failure, naming the signal; a status other than 0 or 1 = git's own answer (r23c: a pipe race beside 128 is the
+// exit, not a spawn failure, measured on POSIX and Windows); 0 or 1 with an error = a partial answer (the stdin
+// write failed, so git may not have seen every path); 0 or 1 alone = clean. Read by error.code only where it is
+// read at all, never by error.message (node/runtime.md §7).
 export function classifyCheckIgnoreResult(ci) {
-  const childExitedFirst = Boolean(ci.error) && STDIN_CLOSED_CODES.has(ci.error.code)
-    && Number.isInteger(ci.status) && ci.status !== 0 && ci.status !== 1;
-  if (ci.error && !childExitedFirst) {
-    return { ok: false, message: `git check-ignore --stdin failed to spawn: ${ci.error.message}` };
+  if (ci.status === null || ci.status === undefined) {
+    const signalNote = ci.signal ? ` (signal ${ci.signal})` : '';
+    return { ok: false, message: `git check-ignore --stdin failed to spawn${signalNote}: ${ci.error ? ci.error.message : 'no status and no error -- unrecognized shape'}` };
   }
   if (ci.status !== 0 && ci.status !== 1) {
     const stderrLine = typeof ci.stderr === 'string' ? ci.stderr.split('\n')[0].trim() : '';
     return {
       ok: false,
       message: `git check-ignore --stdin exited ${ci.status}${stderrLine ? ` -- ${stderrLine}` : ''} -- cannot tell which cited roots are gitignored`,
+    };
+  }
+  if (ci.error) {
+    return {
+      ok: false,
+      message: `git check-ignore --stdin exited ${ci.status} but the stdin write failed (${ci.error.message}) -- the answer may be partial`,
     };
   }
   return { ok: true, stdout: typeof ci.stdout === 'string' ? ci.stdout : '' };
