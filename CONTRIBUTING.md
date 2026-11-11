@@ -10,6 +10,8 @@ CoalHearth is the session warm-resume engine of the [TheColliery](https://github
 2. Make your code changes and keep the verification gates green.
 3. For hook or recovery-block changes, **validate against the hermetic fake-case suite** (`scripts/lib/hooks.test.mjs` simulates all the limit-hit failure modes) and, where you can, a real interrupted session — then document the behavior in your PR.
 
+A first-time contributor: the gate commands in the next section ARE the getting-started steps — clone, install nothing extra (Phoenix #2), run the green gate. An issue labelled for newcomers is the entry point where one exists.
+
 ---
 
 ## 💻 Developing & Testing
@@ -101,4 +103,6 @@ Bump version in `.claude-plugin/plugin.json` ➡️ add a `CHANGELOG.md` entry �
 
 ## 📄 License & Conduct
 
-Contributions are licensed under the [Apache License 2.0](LICENSE). Please assume good faith and be respectful. Report security issues per [SECURITY.md](SECURITY.md).
+Contributions are licensed under the [Apache License 2.0](LICENSE). No separate CLA: sending a PR licenses it the way the project already ships. Please assume good faith and be respectful, per [CODE_OF_CONDUCT.md](https://github.com/TheColliery/.github/blob/main/.github/CODE_OF_CONDUCT.md). Report security issues per [SECURITY.md](SECURITY.md).
+
+**Response time:** best effort by a solo maintainer; no SLA is promised. When a target window is set it is stated here.

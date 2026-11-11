@@ -6,9 +6,11 @@ CoalHearth is verified under the same framework as [CoalTipple](https://github.c
 
 Report a security issue in this repo through GitHub's private vulnerability reporting — [Security → Report a vulnerability](https://github.com/TheColliery/CoalHearth/security/advisories/new) — never a public issue. In scope: the shipped hooks (`bin/session-start.js`, `bin/post-tool-use.js`, `bin/user-prompt-submit.js`, and the Antigravity/config-only adapters), the `lib/` journal + resume core, `scripts/`, and the `plugin/` dist built from them. Out of scope: a vulnerability in a project's own rules/config file that CoalHearth merely reads as untrusted data (a hostile `AGENTS.md` or `.coalhearth.json`) — that is the project's own security question, not this tool's. The boundary is what CoalHearth does with such a file, not what the file says: a hostile file must not make a hook hang, allocate without bound, or write or delete outside the project, or delete project files it does not own, and one that does is in scope. We acknowledge a report within 5 days, send an assessment within 10 days, and disclose publicly once the fix ships, or at 90 days at most. During an absence announced on the maintainer's GitHub profile, the 5 days count from the first day back. A public GitHub issue remains the right channel for an ordinary, non-security bug.
 
-An advisory is published only for a finding an outsider can exploit through input they control, whatever its level: a repository the user cloned, a file sent to them, a reply from the network. A path only the user feeds (their own config, a command they type) does not count. An unsure finding counts and goes to CoalBoard to decide.
-
 Fixed vulnerabilities are published as [Security Advisories](https://github.com/TheColliery/CoalHearth/security/advisories).
+
+## What counts as a vulnerability
+
+The shipped code is in scope: what this project installs and runs for a user, including anything it reads from a repository or file the user did not write. This repository's own tooling (its CI workflows, its release and build scripts, and its test harness, as a maintainer runs them on the maintainer's checkout) is welcome to report on, and a flaw in it is fixed as hardening. Either part earns a published advisory only when an outsider can reach the flaw through input they control: a repository they clone, a file they send, a pull request from a fork, or a network response. A flaw that only the maintainer or the user feeds does not get one. Where it is unclear whether an outsider can reach a flaw, it counts as reachable until the maintainers have decided; an unclear finding goes to CoalBoard for that decision.
 
 ---
 
