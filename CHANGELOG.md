@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.14] - 2026-11-12
+
+The Antigravity once-per-session marker is swept after seven days.
+
+The plugin dist changes in `bin/ag-pre-invocation.js`, so this is a PATCH release. No setting changes.
+
+### Fixed
+- **The Antigravity once-per-session marker is now removed after seven days.** Each new Antigravity conversation writes one marker file in the OS temporary folder, and nothing removed it, so the markers accumulated, one small file per conversation. When a new conversation writes its marker, its first call also removes this folder's own regular `ag-resume-<hash>.marker` files older than seven days. It never removes a link, a folder, a file of another name, or the marker just written. What it does not reach: a marker younger than seven days stays until a later conversation finds it old; a machine where no new Antigravity conversation starts runs no sweep; the config-only ports write no marker, so there is nothing for them to sweep.
+
 ## [2.8.13] - 2026-11-07
 
 The `.gitignore` read in the journal folder no longer blocks on a FIFO.

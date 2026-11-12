@@ -25,7 +25,7 @@ The Antigravity adapters ship in the same folder, wired by the root `hooks.json`
 
 **What the hooks read.** The project's journal, the CoalHearth config, and the project's `task.md` and `AGENTS.md` (size-bounded).
 
-**What the hooks write.** The journal and the temporary file it is written through, the lock file that serialises writes, a `.gitignore` in the journal folder, a `session_handoff.corrupt.json` copy of a journal that cannot be read, and the update stamp under `~/.claude/coal/coalhearth/`. On Antigravity, the adapter also writes a once-per-session marker file in the OS temporary folder. The journal folder is `<project>/.claude/coalhearth/` by default. The global `journal.outputDirectory` setting can move it, and the `.gitignore` is written in the default folder.
+**What the hooks write.** The journal and the temporary file it is written through, the lock file that serialises writes, a `.gitignore` in the journal folder, a `session_handoff.corrupt.json` copy of a journal that cannot be read, and the update stamp under `~/.claude/coal/coalhearth/`. On Antigravity, the adapter also writes a once-per-session marker file in the OS temporary folder. The first call of a new Antigravity conversation removes this folder's own marker files older than seven days; a younger marker stays, and so does one on a machine where no new conversation starts. The config-only ports write no marker. The journal folder is `<project>/.claude/coalhearth/` by default. The global `journal.outputDirectory` setting can move it, and the `.gitignore` is written in the default folder.
 
 **What the hooks delete.** Files the hooks own, in these cases:
 
@@ -33,6 +33,7 @@ The Antigravity adapters ship in the same folder, wired by the root `hooks.json`
 - the lock file, after every save, and a lock left behind by a holder that crashed;
 - the temporary file, when a save fails, and a leftover one from an earlier write is removed before the next write;
 - the corrupt journal, after its `session_handoff.corrupt.json` copy is written;
+- on Antigravity, the once-per-session marker files in the OS temporary folder that are older than seven days, removed by the first call of a new conversation: only regular `ag-resume-<hash>.marker` files of that folder, never a link, a folder, a file of another name, or the marker just written;
 - `error.log` and `*.tmp` leftovers in the journal folder, when the disk is full;
 - a `.claude/coalhearth` folder inside the working directory when a hook starts from a subdirectory of the project: its `.gitignore` and `session_handoff*` files are removed, then the folder itself if it is empty.
 
