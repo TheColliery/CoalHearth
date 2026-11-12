@@ -89,6 +89,49 @@ function markerDirIsOwnPrivate(dir) {
   }
 }
 
+// 29el: the once-per-session marker is swept after seven days. One marker is written per Antigravity conversation and
+// nothing else removes it, so the sweep runs where a NEW marker is written (the first PreInvocation of a conversation,
+// never every turn). It removes only this folder's own regular ag-resume-<hash>.marker files older than
+// MARKER_MAX_AGE_MS: never a link, never a folder, never a foreign file, never the marker just written. The folder is
+// pinned to its literal realpath first, and each candidate's parent must resolve to that same folder. Age is the one
+// time-based branch here, named as such. Fail-silent: any throw ends the sweep, and the hook still exits 0.
+const MARKER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MARKER_NAME = /^ag-resume-[0-9a-z]+\.marker$/;
+// Open first, then judge the descriptor (a FIFO or a folder under the name is refused without a block: O_NONBLOCK),
+// then re-check the name: it must not be a link and must still be the same file (dev and ino). Never a check by name
+// alone followed by a use by name (node/runtime.md §5, the store's class 5).
+function sweepOneMarker(p, real, now) {
+  let fd;
+  try { fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0)); } catch { return; }
+  let id;
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || now - st.mtimeMs <= MARKER_MAX_AGE_MS) return;
+    id = { dev: st.dev, ino: st.ino };
+  } finally {
+    fs.closeSync(fd);
+  }
+  const link = fs.lstatSync(p);
+  if (link.isSymbolicLink() || link.dev !== id.dev || link.ino !== id.ino) return;
+  if (fs.realpathSync.native(path.dirname(p)) !== real) return;
+  fs.unlinkSync(p);
+}
+function sweepStaleMarkers(dir, keepName, now) {
+  try {
+    const real = fs.realpathSync.native(dir);
+    for (const name of fs.readdirSync(real)) {
+      if (name === keepName || !MARKER_NAME.test(name)) continue;
+      try {
+        sweepOneMarker(path.join(real, name), real, now);
+      } catch {
+        // one entry that fails never stops the rest of the sweep
+      }
+    }
+  } catch {
+    // fail-silent: a folder that cannot be listed is simply not swept
+  }
+}
+
 function main() {
   let raw = '';
   try { raw = fs.readFileSync(0, 'utf8'); } catch { /* no stdin -> no session key -> skip below */ }
@@ -135,9 +178,8 @@ function main() {
     // applied), so the wx marker would then write THROUGH it into an attacker's dir. markerDirIsOwnPrivate
     // (lstat, does NOT follow the link) rejects a symlink, a non-directory, a folder another uid owns, and a
     // folder another user can write to — routed to the SAME branch as a marker-write failure (CH emits with the note).
-    // ponytail: session-scoped, OS-tmp-cleaner reaped. AG's Stop is per-RESPONSE
-    // (many/session) -> no safe per-session "completion" hook to delete it on; accumulation
-    // is bounded (~one tiny file per session).
+    // AG's Stop is per-RESPONSE (many/session), so there is no per-session "completion" hook to
+    // delete the marker on. The seven-day sweep below removes it instead (29el).
     const markerDir = path.join(os.tmpdir(), 'coalhearth');
     const marker = path.join(markerDir, `ag-resume-${hashKey(key)}.marker`);
     // Write the guard BEFORE emitting (v1.2.1 ordering). Only the wx MARKER write's EEXIST means
@@ -161,6 +203,7 @@ function main() {
           if (err && err.code === 'EEXIST') return; // this session already did its resume check
           markerWritten = false; // the temp write failed (read-only / unwritable)
         }
+        if (markerWritten) sweepStaleMarkers(markerDir, path.basename(marker), Date.now());
       }
     }
   }

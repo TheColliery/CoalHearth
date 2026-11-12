@@ -42,7 +42,7 @@
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,
     "bin/user-prompt-submit.test.js": 7,
-    "bin/ag-hooks.test.js": 31
+    "bin/ag-hooks.test.js": 41
   },
   "names": {
     "scripts/lib/git-env-census.test.mjs": [

@@ -992,3 +992,101 @@ test("08b AG plugin: the shipped PostToolUse command, run from the hooks.json di
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- 29el: the once-per-session marker is swept after seven days
+// Before 29el nothing removed an ag-resume-<hash>.marker: one 0-byte file per Antigravity conversation accumulated in
+// os.tmpdir()/coalhearth until the OS cleared its temp folder. The sweep runs where a NEW marker is written (the first
+// PreInvocation of a conversation) and removes only this folder's own regular ag-resume-*.marker files older than seven
+// days. Every absence below is asserted by LISTING the folder and reading its names, never by probing one path: a probe
+// of a path is blind where the path's case is wrong, and the listing is not.
+const SWEEP_DAY_MS = 24 * 60 * 60 * 1000;
+
+// A hermetic child: the REAL adapter, TEMP/HOME at the sandbox, the CLAUDE_* keys the host exports removed, a heap cap.
+// The cwd is a bare folder with no project, so the adapter stops after the marker step and writes nothing to stdout.
+function runSwept(sandbox, convId) {
+  const env = { ...process.env, HOME: sandbox, USERPROFILE: sandbox, TEMP: sandbox, TMP: sandbox, TMPDIR: sandbox, CLAUDE_CONFIG_DIR: '' };
+  delete env.CLAUDE_PROJECT_DIR;
+  delete env.CLAUDE_PLUGIN_ROOT;
+  delete env.CLAUDE_PLUGIN_DATA;
+  const cwd = mk();
+  return spawnSync(process.execPath, ['--max-old-space-size=256', PRE, 'PreInvocation'], {
+    cwd, env, input: JSON.stringify({ conversationId: convId, cwd }), encoding: 'utf8', timeout: 20000,
+  });
+}
+function markerFolderOf(sandbox) { return path.join(sandbox, 'coalhearth'); }
+function listNames(folder) { try { return fs.readdirSync(folder); } catch { return []; } }
+function markerNameFor(convId) { return `ag-resume-${hashKey(convId)}.marker`; }
+// A planted file or folder whose mtime is `ageMs` old (0 = now).
+function plantAged(folder, name, ageMs, asDir = false) {
+  fs.mkdirSync(folder, { recursive: true });
+  const p = path.join(folder, name);
+  if (asDir) fs.mkdirSync(p);
+  else fs.writeFileSync(p, '');
+  const t = (Date.now() - ageMs) / 1000;
+  fs.utimesSync(p, t, t);
+  return p;
+}
+
+test('29el (a): an aged own marker is gone after a new conversation first call -- RED before the sweep', (t) => {
+  const sandbox = mk();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const folder = markerFolderOf(sandbox);
+  const old = plantAged(folder, markerNameFor('conv-old'), 8 * SWEEP_DAY_MS);
+  const r = runSwept(sandbox, 'conv-new');
+  assert.equal(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  assert.equal(r.stdout, '', 'a bare folder emits nothing');
+  const names = listNames(folder);
+  assert.ok(!names.includes(path.basename(old)), `the aged marker survived; the folder holds: ${names.join(', ')}`);
+  assert.ok(names.includes(markerNameFor('conv-new')), `the new conversation's marker was not written; the folder holds: ${names.join(', ')}`);
+});
+
+test('29el (b): a fresh marker of another conversation stays', (t) => {
+  const sandbox = mk();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const folder = markerFolderOf(sandbox);
+  plantAged(folder, markerNameFor('conv-live'), 0);
+  const r = runSwept(sandbox, 'conv-new');
+  assert.equal(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  const names = listNames(folder);
+  assert.ok(names.includes(markerNameFor('conv-live')), `a fresh marker of a live conversation was swept; the folder holds: ${names.join(', ')}`);
+});
+
+test('29el (c): a foreign file, a decoy name and a folder named like a marker all stay, aged or not', (t) => {
+  const sandbox = mk();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const folder = markerFolderOf(sandbox);
+  const foreign = plantAged(folder, 'notes.txt', 30 * SWEEP_DAY_MS);
+  const decoy = plantAged(folder, 'ag-resume-x.marker.bak', 30 * SWEEP_DAY_MS);
+  const dirLike = plantAged(folder, markerNameFor('conv-dir'), 30 * SWEEP_DAY_MS, true);
+  const r = runSwept(sandbox, 'conv-new');
+  assert.equal(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  const names = listNames(folder);
+  for (const p of [foreign, decoy, dirLike]) {
+    assert.ok(names.includes(path.basename(p)), `${path.basename(p)} was removed; the folder holds: ${names.join(', ')}`);
+  }
+  assert.ok(fs.lstatSync(dirLike).isDirectory(), 'the folder named like a marker was not kept as a folder');
+});
+
+test('29el (d): a link named like a marker stays, and its target is untouched (skipped visibly where links cannot be made)', (t) => {
+  const sandbox = mk();
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const folder = markerFolderOf(sandbox);
+  fs.mkdirSync(folder, { recursive: true });
+  const target = path.join(sandbox, 'target.txt');
+  fs.writeFileSync(target, 'keep me');
+  const t8 = (Date.now() - 8 * SWEEP_DAY_MS) / 1000;
+  fs.utimesSync(target, t8, t8);
+  const link = path.join(folder, markerNameFor('conv-link'));
+  try {
+    fs.symlinkSync(target, link, 'file');
+  } catch (err) {
+    t.skip(`links cannot be made on this account (${err && err.code}); skipped visibly`);
+    return;
+  }
+  const r = runSwept(sandbox, 'conv-new');
+  assert.equal(r.status, 0, `exit ${r.status}: ${r.stderr}`);
+  const names = listNames(folder);
+  assert.ok(names.includes(path.basename(link)), `the link named like a marker was removed; the folder holds: ${names.join(', ')}`);
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link was replaced by a regular entry');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'keep me', 'the link target changed');
+});
