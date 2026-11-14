@@ -6,7 +6,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 
 The Antigravity marker sweep and the measured hook fires are now stated correctly in the docs.
 
-The plugin dist changes in `commands/update.md` and the plugin README, so this is a PATCH release. No code or setting changes.
+The plugin dist changes in `commands/update.md` only, so this is a PATCH release. The root README also changes, outside the plugin. No code or setting changes.
 
 ### Fixed
 - **The Antigravity known-limits note and the update command now state the marker sweep and the measured hook fires.** The known-limits note said the once-per-session markers are never removed by the hook, which has been false since 2.8.14. It now states the seven-day sweep and what it leaves. The update command said whether the hooks fire from the installed folder was not measured. It now states the measured fires on agy 1.4.10, 1.4.12 and 1.5.9, and what is not shown.
