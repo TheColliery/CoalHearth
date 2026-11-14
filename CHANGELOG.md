@@ -6,7 +6,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 
 The update command no longer names an agent configuration path.
 
-The plugin dist changes in `commands/update.md` only, so this is a PATCH release. The root README also changes, outside the plugin. No code or setting changes.
+The plugin dist changes in `commands/update.md` only, so this is a PATCH release. No code or setting changes.
 
 ### Fixed
 - **The update command's Antigravity note names the user-wide plugins folder by description, not by its path.** A SkillSpector finding read the literal agent configuration path in that command file, which an agent follows as an instruction. The measured facts are unchanged, and the README's Antigravity section still gives the exact path.
