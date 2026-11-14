@@ -2,6 +2,15 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.16] - 2026-11-14
+
+The update command no longer names an agent configuration path.
+
+The plugin dist changes in `commands/update.md` only, so this is a PATCH release. The root README also changes, outside the plugin. No code or setting changes.
+
+### Fixed
+- **The update command's Antigravity note names the user-wide plugins folder by description, not by its path.** A SkillSpector finding read the literal agent configuration path in that command file, which an agent follows as an instruction. The measured facts are unchanged, and the README's Antigravity section still gives the exact path.
+
 ## [2.8.15] - 2026-11-14
 
 The Antigravity marker sweep and the measured hook fires are now stated correctly in the docs.
