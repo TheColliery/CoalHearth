@@ -6,6 +6,7 @@
 // plugin.json — verify.mjs FAILs on drift. Node built-ins only.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -90,9 +91,33 @@ function assertNoLinks(root, rel) {
   if (st && st.isDirectory()) for (const n of fs.readdirSync(path.join(root, rel))) assertNoLinks(root, path.join(rel, n));
 }
 
+// CW-067 (order r29gy): buildDist removes and rewrites the root it is handed, so it removes only two things: the room's own
+// plugin/ folder, or a folder strictly inside the OS temp folder that is not a repository root (no .git entry directly in it).
+// Both sides are resolved by realpath; a target whose parent cannot be resolved fails closed. Named before any delete or write.
+function resolveForGuard(p) {
+  try {
+    if (fs.existsSync(p)) return fs.realpathSync.native(p);
+    return path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p));
+  } catch {
+    return null;
+  }
+}
+function assertRemovableDistRoot(distRoot) {
+  const target = resolveForGuard(distRoot);
+  const refuse = () => {
+    throw new Error(`${distRoot}: buildDist refuses to remove or rebuild this folder (only the room's plugin/ folder, or a folder inside the OS temp folder that is not a repository root, is allowed)`);
+  };
+  if (target === null) refuse();
+  if (target === resolveForGuard(dist)) return;
+  const tmp = resolveForGuard(os.tmpdir());
+  if (tmp === null || target === tmp || !target.startsWith(tmp + path.sep)) refuse();
+  if (lstatOrNull(path.join(target, '.git')) !== null) refuse();
+}
+
 export function buildDist(distRoot = dist, srcRoot = repo) {
   const root = lstatOrNull(distRoot);
   if (root && root.isSymbolicLink()) throw new Error(`${path.basename(distRoot)}: a link or junction at the dist root is refused (the build removes and rewrites plugin/, and never through a link)`);
+  assertRemovableDistRoot(distRoot); // CW-067: before any delete, and before the build writes anything
   for (const rel of DIST_ITEMS) assertNoLinks(srcRoot, rel); // before the old dist is removed: a refused build leaves plugin/ as it was
   for (const d of DIST_DOCS) { // a linked or missing README source refuses the build here too, before the old dist is removed
     assertNoLinks(srcRoot, d.src);

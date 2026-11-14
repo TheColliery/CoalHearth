@@ -605,3 +605,18 @@ test('checkDist names a directory at plugin/README.md as not a file', (t) => {
   const out = checkDist(dist, src);
   assert.ok(out.some((l) => l.startsWith('invalid in plugin/ (not a file):') && l.includes('README.md')), `checkDist must name the copy directory; got: ${JSON.stringify(out)}`);
 });
+
+// CW-067 (order r29gy): buildDist removes whatever root it is handed. A bait folder that is a repository root inside the
+// OS temp folder must be refused before anything in it is removed. Red on the unguarded code: the marker is deleted.
+test('CW-067: buildDist refuses a bait folder that is not the plugin folder or a scratch temp folder, and deletes nothing in it', (t) => {
+  const bait = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-bait-'));
+  t.after(() => fs.rmSync(bait, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(bait, '.git'));
+  fs.writeFileSync(path.join(bait, 'marker.txt'), 'keep me');
+  assert.throws(
+    () => buildDist(bait),
+    (e) => e instanceof Error && e.message.includes(path.basename(bait)),
+    'buildDist must refuse a repository root under the temp folder, and the error must name it'
+  );
+  assert.equal(fs.readFileSync(path.join(bait, 'marker.txt'), 'utf8'), 'keep me', 'the marker in the refused bait folder was deleted');
+});
