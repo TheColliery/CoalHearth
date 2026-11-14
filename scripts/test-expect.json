@@ -13,7 +13,7 @@
     "scripts/lib/git-env.test.mjs": 10,
     "scripts/git-env-pins.test.mjs": 7,
     "scripts/release-notes.test.mjs": 48,
-    "scripts/verify-release-shape.test.mjs": 18,
+    "scripts/verify-release-shape.test.mjs": 20,
     "scripts/lib/release-shape.test.mjs": 41,
     "scripts/lib/hooks.test.mjs": 19,
     "scripts/lib/cwk137.test.mjs": 46,
@@ -278,7 +278,11 @@
       "the named ceilings are what they say: R4 (a spawner named with a unicode escape) and R5 (a command built by concatenation) are NOT counted, each with its reason",
       "no pin ships with the canon, and a pin matches only the bytes it names: any edit re-arms the census on that file",
       "censusGitSpawns is the findings-only view, and collectScriptsMjs walks scripts/**/*.mjs of a repository with forward-slash names",
-      "the lexer reads a quote inside a regex and a backtick inside a template without losing the line (F41), and a shebang is not code"
+      "the lexer reads a quote inside a regex and a backtick inside a template without losing the line (F41), and a shebang is not code",
+      "the census does linear work on the three shapes that made it quadratic: repeated reads of a declared name, a spawner named many times, and a line of unclosed regex candidates -- RED before 2026-11-02a",
+      "collectScriptsMjs refuses a symlink or junction under scripts/ by name, and a .mjs past the byte budget, instead of following or reading it -- RED before 2026-11-02a",
+      "an env in an argument Node does not read as the options is not counted: a decoy after an options object, or after the options position -- RED before 2026-11-02a",
+      "a helper with a bare return, or one whose body can end without returning, is not a safe env -- RED before 2026-11-02a"
     ],
     "scripts/secret-scan.test.mjs": [
       "every named pattern fires on its own runtime-assembled sample, and names only itself",
