@@ -26,8 +26,8 @@ name: Coverage
 # PRIOR report standing (stale, never corrupt), the same class as codeql.yml. The
 # comparison baseline comes from the push-to-main run, so both triggers are needed.
 #
-# Every step is gated on scripts/test.mjs existing (same gate as ci.yml's Test step): a bare
-# "Use this template" click has no scripts/ yet, and this job then skips cleanly, never red.
+# Every step after the checkout is gated on scripts/test.mjs existing (same gate as ci.yml's Test
+# step): a bare "Use this template" click has no scripts/ yet, and this job then skips cleanly, never red.
 
 on:
   push:
@@ -76,7 +76,7 @@ jobs:
       # skip it too; guarding here avoids spinning the step up at all).
       - name: Upload coverage report
         if: hashFiles('scripts/test.mjs') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
         with:
           file: coverage/cobertura.xml
           language: JavaScript
