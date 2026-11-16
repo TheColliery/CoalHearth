@@ -23,6 +23,7 @@
     "scripts/build-plugin.test.mjs": 25,
     "scripts/hooks-exec-form.test.mjs": 9,
     "scripts/folder-pin.test.mjs": 9,
+    "scripts/repo-fs.test.mjs": 2,
     "scripts/front-door-links.test.mjs": 5,
     "scripts/verify.test.mjs": 38,
     "scripts/temp-root-guard.test.mjs": 3,

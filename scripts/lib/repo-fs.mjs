@@ -52,6 +52,7 @@ export function checkRepoWriteTarget(target, root) {
 
 // Create the directory, then replace `target` with `content` through a temp. `root` null = no containment (the user's
 // own global config, which dotfile managers legitimately link).
+// DIVERGENCE from CoalMine 02dff20 (CWK2-069): a leftover `<target>.<pid>.tmp` is REPLACED here (writeTempExclusive, CWK-137 R14), not refused.
 export function writeRepoFile(target, content, root) {
   if (root != null) checkRepoWriteTarget(target, root);
   fs.mkdirSync(path.dirname(target), { recursive: true });
