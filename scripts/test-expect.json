@@ -98,6 +98,7 @@
       "witness X6: every fixture is a counted spawn WITH a finding (1 fixture)",
       "witness B1: every fixture is a counted spawn WITH a finding (3 fixtures)",
       "witness B2: every fixture is a counted spawn WITH a finding (8 fixtures)",
+      "witness B10 [t340]: every fixture is a counted spawn WITH a finding (1 fixture)",
       "witness B3: every fixture is a counted spawn WITH a finding (6 fixtures)",
       "witness B4: every fixture is a counted spawn WITH a finding (2 fixtures)",
       "witness B5: every fixture is a counted spawn WITH a finding (6 fixtures)",
@@ -432,7 +433,13 @@
       "the wide-text rule reads a byte-order mark, or enough NULs skewed onto the high bytes, and nothing else",
       "a key in UTF-32 shifted off its grid by one stray byte is still refused",
       "the scanner reports a UTF-16 key once from a patch held as bytes and once from a blob; a patch held as a string still reads its NULs away",
-      "a stray NUL inside a key-shaped token of bytes the rule does not read as wide text gives no hit, in the tree and in the pushed range"
+      "a stray NUL inside a key-shaped token of bytes the rule does not read as wide text gives no hit, in the tree and in the pushed range",
+      "UTF-16LE text after one stray byte still has its glued key refused in the tree",
+      "a UTF-16 key inside a mostly UTF-32 file, added then deleted inside a pushed range, is refused",
+      "wide text past the decode bound fails the scan by name, costs a few times its size in memory, and passes once its fingerprint is acknowledged",
+      "the decode bound gives wide text past it one hit that follows its bytes, never bounds other text, and long UTF-32 decodes whole",
+      "wide text of exactly the decode bound is still scanned, with no too-large hit",
+      "one line of 20,000 distinct key-shaped tokens with NULs between their characters is read in linear time, every token once"
     ]
   }
 }
