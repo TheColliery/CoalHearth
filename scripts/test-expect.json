@@ -371,6 +371,8 @@
       "one line with 6,000 provider keys and 6,000 secret assignments: every hit is found (c)",
       "(c) the containment search does log-linear work: 6,000 values count under 6x the work of 1,500 (counted probes, no clock)",
       "(1028b, X-1) 4,000 never-closing regex candidates read under 6x the literal work of 1,000 (counted steps, no clock)",
+      "(1103e) a flag run of 4,000 letters after one shared closing slash costs no more counted work than a run of 8 (counted steps, no clock)",
+      "(1103e) a literal carrying the eight distinct flags is still read whole and is not judged as a value",
       "the scanner agrees with a brute-force reference of the containment rule on 400 seeded random lines (c)",
       "a GIT_DIR and GIT_INDEX_FILE a hook inherited are dropped: every fixture git call acts on its own repository",
       "sameDir: a directory is itself however it is spelled, two directories are never one, and a path that does not resolve fails closed",
@@ -379,6 +381,7 @@
       "shortForm: a failed cmd call throws, and is not the null that means \"no 8.3 names on this volume\" (the Windows runner)",
       "a fixture call is handed GIT_CONFIG_NOSYSTEM and no other GIT_ name beyond the three the flock allows, whatever the process inherited",
       "a named environment key whose value is undefined is left out of a child's environment, never passed as the string \"undefined\"",
+      "a child started with the call sites' environment resolves its home inside the sandbox, never the OS profile (1102c)",
       "the fixtures run in the test's own sandbox: a hostile global git config and HOME never reach them, and the fixture folders live inside it",
       "the pushed range scans a file git calls binary (a NUL byte, a -diff attribute), unless the caller skips its path",
       "a key in a pushed commit message or annotated-tag message is a hit, never the value",
@@ -391,7 +394,9 @@
       "a three-deep tag chain is walked to the bottom, and a key in the OUTER message is still a hit",
       "a tag chain longer than the bound FAILS CLOSED instead of passing partly read",
       "a tag object that points back at one already read FAILS CLOSED on the repeat itself, not on the depth bound",
-      "a tag object missing the object header, the type header, or both FAILS CLOSED with ETAGCHAIN"
+      "a tag object missing the object header, the type header, or both FAILS CLOSED with ETAGCHAIN",
+      "(1103f) looksBinary reads the content: a token in text is text, a NUL in the first 8,000 bytes is binary, a NUL after them is not",
+      "the scanner drops the trailing TAB of a +++ path without a regular-expression replace, and drops exactly one"
     ],
     "scripts/secret-gate.test.mjs": [
       "a clean tree passes: exit 0 and a PASS SECRETS line naming the files scanned",
