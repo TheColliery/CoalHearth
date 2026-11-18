@@ -396,7 +396,8 @@
       "a tag object that points back at one already read FAILS CLOSED on the repeat itself, not on the depth bound",
       "a tag object missing the object header, the type header, or both FAILS CLOSED with ETAGCHAIN",
       "(1103f) looksBinary reads the content: a token in text is text, a NUL in the first 8,000 bytes is binary, a NUL after them is not",
-      "the scanner drops the trailing TAB of a +++ path without a regular-expression replace, and drops exactly one"
+      "the scanner drops the trailing TAB of a +++ path without a regular-expression replace, and drops exactly one",
+      "F4 push path guard: a pushed wide hunk reports the key on the decoded line (line 3)"
     ],
     "scripts/secret-gate.test.mjs": [
       "a clean tree passes: exit 0 and a PASS SECRETS line naming the files scanned",
@@ -454,7 +455,7 @@
       "the gate's verdict on a binary-named blob equals the whole-buffer verdict across the wide-text rule's thresholds and chunk edges (the oracle) -- RED before 18b",
       "the two witnesses are found whatever size the cat-file pieces arrive in (absolute offsets, not per-piece positions) -- RED against a per-piece position count",
       "a real binary is never read twice and a blob wide only in sum is read exactly twice (the re-read count) -- RED against a rule that flags too much",
-      "one line of 40,000 distinct key-shaped tokens with NULs between their characters is read in linear time, every token once (a killed child is the failure)"
+      "one line of 4,000 distinct key-shaped tokens with NULs between their characters is read in linear WORK, every token once (counted visits, no clock) -- RED against the quadratic de-duplication"
     ]
   }
 }

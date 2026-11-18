@@ -4,11 +4,11 @@
 //
 // WHAT IS PINNED, and why each is a carrier we cannot route through the room's gitEnv() (derived in 09a from the canon census's own output over this tree, never from the old rows):
 //   - scripts/lib/git-env.test.mjs: the hazard proof feeds a deliberately poisoned GIT_DIR into a sandbox to reproduce the incident (CWK-133), so its env is `env || gitEnv(root)` on purpose.
-//   - scripts/secret-gate.mjs (.github blob ad1968c709f9, canon 40b4940): a byte-equal org carrier whose own gitEnv keeps GIT_INDEX_FILE (a commit is made from that index), a GIT_ name the rule does not accept.
+//   - scripts/secret-gate.mjs (.github blob 719f76676090, canon 78c53e6): a byte-equal org carrier whose own gitEnv keeps GIT_INDEX_FILE (a commit is made from that index), a GIT_ name the rule does not accept.
 //   - (scripts/secret-gate.test.mjs had a row at .github blob 71452210, a carrier whose own gitEnv named GIT_CONFIG_GLOBAL; the canon rewrote it to named keys at 2f066650 and the room
 //     adopted that blob in 09a, so the canon census reads it with no row.)
-//   - (scripts/secret-scan.test.mjs, the Bankfire scanner source, had a row at blob d0db994d: its own gitEnv filtered the GIT_ family out of a copy of the environment, which the census
-//     does not read, and a ComSpec probe ran a computed command. Bankfire bd328f2 rewrote its gitEnv() to a plain named-keys object, the room adopted that blob (a0319dcd) in 09b, and the
+//   - (scripts/secret-scan.test.mjs, the scanner source named at the canon, .github 78c53e6, had a row at blob d0db994d: its own gitEnv filtered the GIT_ family out of a copy of the environment, which the census
+//     does not read, and a ComSpec probe ran a computed command. That source rewrote its gitEnv() to a plain named-keys object at an earlier commit, the room adopted that blob (a0319dcd) in 09b, and the
 //     canon census reads it with no row.) A pin hides a whole file, so a row is exactly as strong as the blob it names.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +16,7 @@ import { gitBlobId } from './git-env-census.mjs';
 
 export const GIT_ENV_PINS = [
   { rel: 'scripts/lib/git-env.test.mjs', blob: '5504e5ccae309d33d7b45387f99e6ea347f04bb5', why: 'the hazard proof feeds a deliberately poisoned GIT_DIR into a sandbox to reproduce the incident' },
-  { rel: 'scripts/secret-gate.mjs', blob: 'ad1968c709f98dab3272182c1266597887b50ea6', why: 'a byte-equal org carrier whose own gitEnv keeps GIT_INDEX_FILE, the index a commit is made from' },
+  { rel: 'scripts/secret-gate.mjs', blob: '719f76676090101f56113ac5a0cd8cb13721d470', why: 'a byte-equal org carrier whose own gitEnv keeps GIT_INDEX_FILE, the index a commit is made from' },
 ];
 
 const CODE_EXT = /\.(mjs|cjs|js)$/;
