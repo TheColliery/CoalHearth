@@ -20,7 +20,7 @@
 // unawaited timer throw or a promise reject after it, is reported as a pass (the R20 INSPECT witness: the same file exits 1 without the flag and 0 with it). So a test must
 // await everything it starts; a handle left running is a defect in the test, not something this flag makes safe.
 // The heap cap rides NODE_OPTIONS, so every test file and every process a test starts inherits it (measured at R20: a planted test saw a 2240 MB limit under it).
-// SIZING (this room's own variables, never the canon's): one run of the whole suite (738 tests, 60 s serial; 155-173 s at 70-85% busy, 2026-10-04) had its slowest single test
+// SUPERSEDED 2026-11-18 (29iw): the 120 s per-test clock below was sized on Node 24, where it is per test; Node 22 clocks the whole file, so see the 29iw note at the constants. Kept as history. SIZING (this room's own variables, never the canon's): one run of the whole suite (738 tests, 60 s serial; 155-173 s at 70-85% busy, 2026-10-04) had its slowest single test
 // at 20 s (a git-fixture scan), the next at 8 s. 120 s per test is six times the slowest and the most a test child may run (the house cap). The whole-run deadline is
 // ten minutes, about three and a half times the slowest measured serial run; a run that needs more is a defect to fix, not a number to raise.
 import path from 'node:path';
@@ -78,11 +78,15 @@ const TESTS = [
 ];
 
 const HEAP_CAP_MB = 2048;
-const TEST_TIMEOUT_MS = 120000;
+// 29iw (2026-11-18): Node 22 clocks --test-timeout over the WHOLE FILE, not per test, so a canon test that grows outruns a clock sized on Node 24. The readings, GitHub Actions
+// Node 22 runners, the same canon gate test blob 18842d601963: CoalBoard PR run 44311491675, Windows file 185.4 s (step 211 s), worst Node 22 file 224.9 s on macOS; CoalLedger
+// 4f7459f, Windows 187.8 s (step 223 s), macOS 174.1 s, Ubuntu 152.0 s; this room's PR #30 (29iq) cut at 120 s with 44 of 56 tests done. 420000 is 1.87 x the worst reading.
+// Sized from CI file times on every leg, never a local run (Node 26 here ran the same file in 80.9 s).
+const TEST_TIMEOUT_MS = 420000;
 const DEADLINE_MS = 600000;
-// The per-file wall clock (--file-clock-ms), this room's own variable: the slowest roster file measured 58 s serial and 48 s in waves on a box 57% busy (09a, 2026-10-09), so 240 s is
-// four times the slowest and stays under the whole-run deadline; it kills one hung file and lets the rest of the run go on.
-const FILE_CLOCK_MS = 240000;
+// The per-file wall clock (--file-clock-ms), this room's own variable, sized from the 29iw readings above: 480000 is 2.13 x the worst Node 22 file (224.9 s) and stays under the
+// whole-run deadline; it kills one hung file and lets the rest of the run go on. Superseded: the 240000 sized from the 09a box (58 s serial, 2026-10-09) that Node 22 outruns.
+const FILE_CLOCK_MS = 480000;
 
 // CWK-071: process.exit() forces the process to exit before pending stdout writes flush (node/runtime.md 7) -- set process.exitCode and let the process exit naturally.
 // The judge is imported inside main (node/runtime.md 1): a missing scripts/lib/suite-run.mjs is a clean message and a red exit, never a link-time stack.

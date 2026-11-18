@@ -104,7 +104,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22, 24]  # supported LTS only (24 Active, 22 Maintenance); 18/20 are EOL — bump as the Node LTS schedule moves
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15 # measured max 48 s (windows, n=16; macos max 22 s) over 8 runs (2026-10-03); ~19x headroom
+    timeout-minutes: 15 # the test step on GitHub Node 22 runners, 2026-11-18: 223 s (CoalLedger 4f7459f), 211 s (CoalBoard 44311491675), 294 s earlier (CoalBoard); the 600 s run deadline in scripts/test.mjs sits under this bound
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
