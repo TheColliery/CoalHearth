@@ -428,6 +428,7 @@
       "git's own diagnostic is escaped in the report: a path in it that carries a right-to-left override never reaches the terminal raw",
       "every node child this test file starts carries a heap cap and a kill-timeout",
       "a cat-file answer that ends early, gives a bad size, drops a newline or exits non-zero makes the gate refuse by name, never pass or throw",
+      "SECRET_GATE_MAX_HELD_BYTES cannot raise the held-bytes ceiling: a blob declared past 256 MiB is refused by name whatever the variable says -- RED against a gate that takes any positive value",
       "a text file in UTF-16 (LE and BE, with and without a byte-order mark) that holds a key is refused like its UTF-8 copy; a binary with NULs on both parities is still skipped",
       "wide text with no byte-order mark, a non-ASCII prefix or four bytes a character still has its key refused, in the tree and in the pushed range",
       "a UTF-16 key added and then deleted inside a pushed range is refused, as its UTF-8 copy is",
@@ -445,7 +446,15 @@
       "wide text past the decode bound fails the scan by name, costs a few times its size in memory, and passes once its fingerprint is acknowledged",
       "the decode bound gives wide text past it one hit that follows its bytes, never bounds other text, and long UTF-32 decodes whole",
       "wide text of exactly the decode bound is still scanned, with no too-large hit",
-      "one line of 20,000 distinct key-shaped tokens with NULs between their characters is read in linear time, every token once"
+      "a file named like the too-large marker that holds a real key is reported as a match, not as a skipped file -- RED before 2026-11-17",
+      "the bytes held for staged text are bounded: a text blob past the ceiling is a named FAIL line and the tree is not scanned; a dropped binary blob counts for nothing; the variable can only lower the ceiling -- RED before 2026-11-17",
+      "a UTF-16 file under a binary-looking name whose wide text starts after the first 8,000 bytes is scanned like its text-named twin; a real binary is still skipped -- RED before 2026-11-18",
+      "a binary-named UTF-16 file past 64 KiB is scanned whether its wide-reading bytes sit in a later chunk or in the first chunk past the prefix -- RED against the nochunk, noreread and prefix mutants",
+      "a binary-named blob whose wide-text evidence is split across pieces, each piece reading as binary, is judged on the whole file: the reviewer's TAIL and SPLIT witnesses are found -- RED before 18b",
+      "the gate's verdict on a binary-named blob equals the whole-buffer verdict across the wide-text rule's thresholds and chunk edges (the oracle) -- RED before 18b",
+      "the two witnesses are found whatever size the cat-file pieces arrive in (absolute offsets, not per-piece positions) -- RED against a per-piece position count",
+      "a real binary is never read twice and a blob wide only in sum is read exactly twice (the re-read count) -- RED against a rule that flags too much",
+      "one line of 40,000 distinct key-shaped tokens with NULs between their characters is read in linear time, every token once (a killed child is the failure)"
     ]
   }
 }
