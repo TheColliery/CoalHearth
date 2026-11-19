@@ -288,7 +288,8 @@
       "a helper with a bare return, or one whose body can end without returning, is not a safe env -- RED before 2026-11-02a",
       "collectScriptsMjs stops reading at the budget: a .mjs that grows past it after the size check is refused by name, never read to its end",
       "collectScriptsMjs refuses a .mjs that became a link after the listing, never reading the link's target",
-      "collectScriptsMjs refuses a .mjs whose open lands on another file than its name holds, never reading the other file"
+      "collectScriptsMjs refuses a .mjs whose open lands on another file than its name holds, never reading the other file",
+      "a finding names its line counting every line terminator once: LF, CRLF, a lone CR, U+2028 and U+2029, in code and in a block comment -- RED before 19c"
     ],
     "scripts/secret-scan.test.mjs": [
       "every named pattern fires on its own runtime-assembled sample, and names only itself",
