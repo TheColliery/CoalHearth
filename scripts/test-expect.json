@@ -455,7 +455,12 @@
       "the gate's verdict on a binary-named blob equals the whole-buffer verdict across the wide-text rule's thresholds and chunk edges (the oracle) -- RED before 18b",
       "the two witnesses are found whatever size the cat-file pieces arrive in (absolute offsets, not per-piece positions) -- RED against a per-piece position count",
       "a real binary is never read twice and a blob wide only in sum is read exactly twice (the re-read count) -- RED against a rule that flags too much",
-      "one line of 4,000 distinct key-shaped tokens with NULs between their characters is read in linear WORK, every token once (counted visits, no clock) -- RED against the quadratic de-duplication"
+      "one line of 4,000 distinct key-shaped tokens with NULs between their characters is read in linear WORK, every token once (counted visits, no clock) -- RED against the quadratic de-duplication",
+      "a binary-named blob that reads as wide text but is larger than the held-bytes ceiling fails by name, never passes unscanned; a real binary of the same size still passes -- RED before 19a (t346 F18, t345 #6)",
+      "the held-bytes ceiling bounds the first read and every re-read together: a wide blob that fits alone but not beside the text already held fails by name -- RED before 19a (t346 F19, t345 #5)",
+      "a re-read that fails leaves nothing half read: the tree is reported NOT scanned and no file of it is reported as scanned or matched -- RED before 19a (t345 #10)",
+      "a probed blob is charged only its 8,000-byte prefix before the probe decides: a real binary under a lowered ceiling passes whatever size its first piece arrives in -- RED before 19a (t346 F8, t345 #7)",
+      "a staged entry whose value reaches the scan as anything but its bytes fails by name and is never counted as scanned -- RED before 19b (L2)"
     ]
   }
 }
