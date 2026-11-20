@@ -96,6 +96,26 @@ function gitEntryAbove(dir) {
     d = parent;
   }
 }
+// T-53: the identity a file had at one moment (device, inode, size, mtime), or null when it cannot be read.
+function identityOf(p) {
+  try {
+    const s = fs.lstatSync(p);
+    return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+// T-53: true only when the legacy file still holds the bytes the first read returned and still has the identity it had
+// then (a same-size replace changes the mtime, so bytes alone are not enough). A failed re-read counts as changed.
+function legacyUnchanged(p, root, bytes, identity) {
+  if (bytes === null || identity === null) return false;
+  try {
+    const again = readRepoBytes(p, root, MAX_CONFIG_BYTES);
+    return again.bytes !== null && Buffer.compare(again.bytes, bytes) === 0 && identityOf(p) === identity;
+  } catch {
+    return false;
+  }
+}
 function gitTracks(file, projectRoot) {
   const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
     cwd: projectRoot, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'ignore', 'ignore'], env: gitEnv(),
@@ -243,6 +263,10 @@ function main() {
   // global layer keeps following links (a dotfile manager's symlink is legitimate there) but is still bounded.
   const readRoot = isGlobal ? null : projectRoot;
   const got = readRepoBytes(readPath, readRoot, MAX_CONFIG_BYTES);
+  // T-53: the bytes this read returned and the legacy file's identity at that moment, checked again before the legacy file is
+  // deleted. Taken only for a legacy read; the identity is read right after the bytes.
+  const legacyReadBytes = got.bytes;
+  const legacyReadIdentity = got.bytes !== null && readIsLegacy ? identityOf(readPath) : null;
   let rawConfig = null;
   let rawBytes = null;
   if (got.bytes !== null) {
@@ -337,8 +361,19 @@ function main() {
     if (readIsLegacy && writePath !== readPath) {
       const tracking = gitTracks(readPath, projectRoot);
       if (tracking === 'untracked') {
-        try { fs.rmSync(readPath, { force: true }); } catch {}
-        console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+        // T-53: the legacy file must still hold what the first read returned. The check runs here, after the git ask, so it
+        // sits in the same window as the delete. RESIDUAL WINDOW: the check narrows the window between the last check and the
+        // delete, it does not close it; a change made between this check and the rmSync can still be lost. A changed file is
+        // KEPT: the run exits 1, one line names it, and the new config is written as usual. The Migrated line prints only when
+        // the legacy file is actually gone.
+        const stillUnchanged = legacyReadBytes === null ? !fs.existsSync(readPath) : legacyUnchanged(readPath, projectRoot, legacyReadBytes, legacyReadIdentity);
+        if (stillUnchanged) {
+          try { fs.rmSync(readPath, { force: true }); } catch {}
+          if (!fs.existsSync(readPath)) console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
+        } else {
+          process.exitCode = 1;
+          console.warn(`Warning: ${readPath} changed while migrating; kept it. The new config at ${writePath} does not include that change; merge it by hand, then delete ${readPath}.`);
+        }
       } else {
         // tracked (or unknown): KEEP it. The canonical file is written, so the legacy one is now the loser of the read order; removing it is the
         // user's decision, taken after reviewing the diff.
