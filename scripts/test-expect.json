@@ -18,7 +18,7 @@
     "scripts/lib/hooks.test.mjs": 19,
     "scripts/lib/cwk137.test.mjs": 46,
     "scripts/lib/engine.test.mjs": 45,
-    "scripts/lib/wave-run.test.mjs": 47,
+    "scripts/lib/wave-run.test.mjs": 48,
     "scripts/lib/suite-run.test.mjs": 41,
     "scripts/build-plugin.test.mjs": 25,
     "scripts/hooks-exec-form.test.mjs": 9,
@@ -461,7 +461,9 @@
       "the held-bytes ceiling bounds the first read and every re-read together: a wide blob that fits alone but not beside the text already held fails by name -- RED before 19a (t346 F19, t345 #5)",
       "a re-read that fails leaves nothing half read: the tree is reported NOT scanned and no file of it is reported as scanned or matched -- RED before 19a (t345 #10)",
       "a probed blob is charged only its 8,000-byte prefix before the probe decides: a real binary under a lowered ceiling passes whatever size its first piece arrives in -- RED before 19a (t346 F8, t345 #7)",
-      "a staged entry whose value reaches the scan as anything but its bytes fails by name and is never counted as scanned -- RED before 19b (L2)"
+      "a staged entry whose value reaches the scan as anything but its bytes fails by name and is never counted as scanned -- RED before 19b (L2)",
+      "a raw hit keeps its own line when the decoded reading found the key a different number of times; equal counts still take the decoded lines -- RED before 20a (t352)",
+      "a reported line is the decoded line where the occurrence sits, whatever the two readings count -- the da5b7e9 review's two cases, RED before 20b"
     ]
   }
 }
