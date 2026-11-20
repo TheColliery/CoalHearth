@@ -6,6 +6,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 
 ### Fixed
 - **The legacy project config is kept when it changed during the `scripts/configure.mjs` migration.** Severity HIGH: a single edit to a setting could be lost silently inside a one-time migration. Before, the script read the legacy file, wrote the new config, then deleted the legacy file on the strength of that earlier read, so an edit made in between was in neither file and the run reported success. Now the script re-checks the legacy file's bytes and identity just before the delete. A changed, replaced, or unreadable file is kept, the run exits 1, and one line names the kept file. The new config is still written. The window between that last check and the delete is narrowed, not closed. This is a repository script, not part of the plugin dist, so there is no version change. — test: `scripts/configure-migrate.test.mjs`
+- **The config migration checks the legacy file's identity through the descriptor it reads.** The script opens the legacy project config once, takes its bytes and identity through that open file, and before the delete compares the name's identity with it. A file replaced between the read and that check is kept, and the run exits 1. The window between the last check and the delete is narrowed, not closed. This is a repository script, not part of the plugin dist, so there is no version change. — test: `scripts/configure-migrate.test.mjs`
 
 ## [2.8.16] - 2026-11-14
 
