@@ -16,7 +16,43 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const repoFs = createRequire(import.meta.url)('../../lib/repo-fs.js');
-export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained, folderChain } = repoFs;
+export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained, folderChain, repoEntryInfo, REPO_READ_FLAGS } = repoFs;
+
+// T-29kw-1: the bytes AND the identity of a bounded regular file through ONE descriptor. The refusal gate is the shipped
+// module's own repoEntryInfo (decided by path before any open, exactly as readRepoBytes decides it) and the open flags are
+// its REPO_READ_FLAGS. The shipped readRepoBytes returns no fstat, and changing lib/repo-fs.js would change plugin/ and so
+// the version, so the open / fstat / bounded read / close below restates readRepoBytes's descriptor half, once, here.
+// The identity (dev, ino, size, mtimeMs) is the descriptor's, so a caller compares the NAME's lstat with it, never by name.
+// Used for the seeding read and for the re-check before a migration deletes its legacy file (the same read, so one helper).
+export function readRepoBytesWithIdentity(file, root, maxBytes) {
+  const none = (why) => ({ bytes: null, why, identity: null });
+  const info = repoEntryInfo(file, root);
+  if (info.kind === 'absent') return none('absent');
+  if (info.kind === 'dir') return none('dir');
+  if (info.kind === 'error') return none(info.code === 'EACCES' || info.code === 'EPERM' ? 'denied' : 'error');
+  if (info.kind !== 'file') return none('refused');
+  let fd;
+  try {
+    fd = fs.openSync(file, REPO_READ_FLAGS);
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return none('refused');
+    if (st.size > maxBytes) return none('too-large');
+    const buf = Buffer.alloc(st.size);
+    let got = 0;
+    while (got < st.size) {
+      const n = fs.readSync(fd, buf, got, st.size - got, got);
+      if (n === 0) break;
+      got += n;
+    }
+    const identity = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+    return { bytes: got === st.size ? buf : buf.subarray(0, got), why: null, identity };
+  } catch (e) {
+    const code = e && e.code;
+    return none(code === 'EACCES' || code === 'EPERM' ? 'denied' : code === 'ENOENT' ? 'absent' : 'error');
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* best-effort */ } }
+  }
+}
 
 export class RepoWriteRefused extends Error {
   constructor(message) {

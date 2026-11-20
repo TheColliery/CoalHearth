@@ -74,7 +74,7 @@ import { spawnSync } from 'node:child_process';
 import { CONFIG_SCHEMA, validateValue } from './lib/config-schema.mjs';
 import { parseJsonc } from './lib/jsonc.mjs';
 import { findProjectRoot, projectConfigPath, projectConfigCandidates, globalConfigPath } from './lib/config-load.mjs';
-import { MAX_CONFIG_BYTES, readRepoBytes, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
+import { MAX_CONFIG_BYTES, readRepoBytesWithIdentity, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
 import { gitEnv } from './lib/git-env.mjs';
 
 // R19 (CodeRabbit PR #19 thread 14): does git TRACK `file`? 'tracked' | 'untracked' | 'unknown'. The legacy migration removes the old config only
@@ -96,25 +96,29 @@ function gitEntryAbove(dir) {
     d = parent;
   }
 }
-// T-53: the identity a file had at one moment (device, inode, size, mtime), or null when it cannot be read.
-function identityOf(p) {
+// T-29kw-1: the same file, by the two identities compared. A same-size replace changes the mtime, so the size and mtime
+// are compared too, not only device and inode.
+function sameIdentity(a, b) {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+// T-29kw-1: the NAME must still be the regular file the descriptor read (same device and inode). lstat, not stat: a link at
+// the name is not that file, so it is kept. A failed lstat is not the same file either.
+function nameIsDescriptorFile(p, descriptorIdentity) {
   try {
     const s = fs.lstatSync(p);
-    return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`;
-  } catch {
-    return null;
-  }
-}
-// T-53: true only when the legacy file still holds the bytes the first read returned and still has the identity it had
-// then (a same-size replace changes the mtime, so bytes alone are not enough). A failed re-read counts as changed.
-function legacyUnchanged(p, root, bytes, identity) {
-  if (bytes === null || identity === null) return false;
-  try {
-    const again = readRepoBytes(p, root, MAX_CONFIG_BYTES);
-    return again.bytes !== null && Buffer.compare(again.bytes, bytes) === 0 && identityOf(p) === identity;
+    return s.isFile() && s.dev === descriptorIdentity.dev && s.ino === descriptorIdentity.ino;
   } catch {
     return false;
   }
+}
+// T-53 / T-29kw-1: true only when the legacy file still holds the bytes the seeding read returned and still has the identity
+// that read's descriptor took (a same-size replace changes the mtime, so bytes alone are not enough), and the name is still
+// that file. The re-read is ONE descriptor too (readRepoBytesWithIdentity). A failed re-read counts as changed.
+function legacyUnchanged(p, root, bytes, identity) {
+  if (bytes === null || identity === null) return false;
+  const again = readRepoBytesWithIdentity(p, root, MAX_CONFIG_BYTES);
+  if (again.bytes === null || again.identity === null) return false;
+  return Buffer.compare(again.bytes, bytes) === 0 && sameIdentity(again.identity, identity) && nameIsDescriptorFile(p, again.identity);
 }
 function gitTracks(file, projectRoot) {
   const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
@@ -262,11 +266,12 @@ function main() {
   // read) is a loud refusal -- never "absent", which would overwrite the one copy of a file the user wrote. The
   // global layer keeps following links (a dotfile manager's symlink is legitimate there) but is still bounded.
   const readRoot = isGlobal ? null : projectRoot;
-  const got = readRepoBytes(readPath, readRoot, MAX_CONFIG_BYTES);
-  // T-53: the bytes this read returned and the legacy file's identity at that moment, checked again before the legacy file is
-  // deleted. Taken only for a legacy read; the identity is read right after the bytes.
+  const got = readRepoBytesWithIdentity(readPath, readRoot, MAX_CONFIG_BYTES);
+  // T-53 / T-29kw-1: the bytes this read returned and the identity of the descriptor that returned them, checked again
+  // before the legacy file is deleted. Both come from the same descriptor, so no name is looked up for them. Taken only for a
+  // legacy read.
   const legacyReadBytes = got.bytes;
-  const legacyReadIdentity = got.bytes !== null && readIsLegacy ? identityOf(readPath) : null;
+  const legacyReadIdentity = got.bytes !== null && readIsLegacy ? got.identity : null;
   let rawConfig = null;
   let rawBytes = null;
   if (got.bytes !== null) {
@@ -361,11 +366,12 @@ function main() {
     if (readIsLegacy && writePath !== readPath) {
       const tracking = gitTracks(readPath, projectRoot);
       if (tracking === 'untracked') {
-        // T-53: the legacy file must still hold what the first read returned. The check runs here, after the git ask, so it
-        // sits in the same window as the delete. RESIDUAL WINDOW: the check narrows the window between the last check and the
-        // delete, it does not close it; a change made between this check and the rmSync can still be lost. A changed file is
-        // KEPT: the run exits 1, one line names it, and the new config is written as usual. The Migrated line prints only when
-        // the legacy file is actually gone.
+        // T-53 / T-29kw-1: the legacy file must still hold what the seeding read returned, read through one descriptor, and the
+        // name must still be that file (its lstat matches the descriptor's device and inode). The check runs here, after the git
+        // ask, so it sits in the same window as the delete. RESIDUAL WINDOW, a stated limit and not closed: the last lstat by name
+        // and the rmSync are two steps, so a change made between them can still be lost. A changed, replaced, linked or unreadable
+        // file is KEPT: the run exits 1, one line names it, and the new config is written as usual. The Migrated line prints only
+        // when the legacy file is actually gone.
         const stillUnchanged = legacyReadBytes === null ? !fs.existsSync(readPath) : legacyUnchanged(readPath, projectRoot, legacyReadBytes, legacyReadIdentity);
         if (stillUnchanged) {
           try { fs.rmSync(readPath, { force: true }); } catch {}
