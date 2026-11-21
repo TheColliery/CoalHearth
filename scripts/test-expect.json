@@ -429,6 +429,7 @@
       "a staged binary blob is streamed past, never held: the gate passes, names it nowhere, and its peak memory grows by far less than the blob",
       "a replace ref never changes what is scanned: a key blob replaced by a clean one is still found, in the tree and in the pushed range",
       "git's own diagnostic is escaped in the report: a path in it that carries a right-to-left override never reaches the terminal raw",
+      "the kill-timeout check reads the option, not the word -- RED before 21i",
       "every node child this test file starts carries a heap cap and a kill-timeout",
       "a cat-file answer that ends early, gives a bad size, drops a newline or exits non-zero makes the gate refuse by name, never pass or throw",
       "SECRET_GATE_MAX_HELD_BYTES cannot raise the held-bytes ceiling: a blob declared past 256 MiB is refused by name whatever the variable says -- RED against a gate that takes any positive value",
@@ -469,9 +470,26 @@
       "binaries whose small 16-bit values run in both byte orders (a PE string table, a font collection) stay plain: no wide reading, no hit, no refusal -- RED against 7edf02c",
       "a wide-spelled word cut by a scan window is judged whole: a word too long to be a key is not reported, and a key across the edge keeps its whole fingerprint -- RED before 21a",
       "a staged or pushed path that is not valid UTF-8 fails the gate by name instead of sharing a fingerprint with another path -- RED before 21a",
-      "the failure message says where each kind of hit is acknowledged: a tree hit in HEAD, a pushed hit in the pushed commit -- RED before 21a",
+      "the failure message says where each kind of hit is acknowledged: a tree hit in HEAD, a pushed hit in the tip of the ref pushed -- RED before 21a",
       "a wide-spelled word cut at a window's text end (1 MiB + 16 KiB past its start) is judged by the window that owns it, whole: not reported -- RED against the owner rule dropped",
-      "a path that is not valid UTF-8 and holds C1, line-separator or bidi characters prints as ASCII only, and its wildcard still selects it alone -- RED before 21c"
+      "a path that is not valid UTF-8 and holds C1, line-separator or bidi characters prints as ASCII only, and its rename names it alone -- RED before 21c",
+      "the printed rename recovery, run as printed, keeps the new name with the staged blob and removes only the old entry, also when the staged blob differs from HEAD -- RED before 21i",
+      "the printed rename recovery leaves a valid neighbour of the same byte shape, and its staged change, exactly as they were -- RED before 21j",
+      "a held blob is written into one buffer as it streams: the gate never joins a whole blob, from its header or after its probe -- RED before 21i",
+      "a wide-spelled key right after a non-ASCII character is found in both little-endian spellings, as when the text is read as wide text -- RED before 21i",
+      "the second of two glued wide-spelled keys starting just past a scan window edge is found, by the search and by the gate probe -- RED before 21i",
+      "an edited wide file past the decode bound gets the same fingerprint at push as in the tree scan -- RED before 21i",
+      "a wide-spelled key longer than a window's carry, starting just before the window's owned end, keeps its whole fingerprint -- RED before 21i",
+      "a key in a later pushed hunk of a marked wide file is reported on the decoded line the tree scan names -- RED before 21i",
+      "--rename-odd refuses a wrong blob, a valid path, a taken name and a malformed spec, and changes nothing -- 21j",
+      "--rename-odd refuses every name git refuses, a file/folder clash and a letter-case twin, leaving the index byte for byte and exiting non-zero -- RED before 21k",
+      "--rename-odd adds the new entry first and reads the index back: after it, exactly the old entry is gone and the new one holds its blob and mode -- 21k",
+      "a failure after the add says the new name is staged beside the old one, never \"nothing was changed\", and its finish command completes the rename -- RED before 21l",
+      "the undo command removes the new entry and leaves the old one; --drop-twin refuses an entry whose blob no other staged entry holds -- 21l",
+      "a read-back that finds more than the one new entry names every extra one, says another run may have touched the index, and never prints success -- RED before 21l",
+      "an unmerged odd entry is refused for its stage, not for a blob it does hold -- RED before 21l",
+      "an empty odd file beside an empty .gitkeep: after the Finish the Undo is refused, after the Undo the Finish is refused, and one of the two names always remains -- RED before 21m",
+      "--drop-twin keeps only the entry it names: another file with the same blob is no substitute, and the pair must be the rename's shape -- RED before 21m"
     ]
   }
 }
