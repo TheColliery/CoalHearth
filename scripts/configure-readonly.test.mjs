@@ -129,12 +129,17 @@ test('a malformed config the user made read-only is refused before any backup is
 test('a target that cannot be inspected is refused with advice about the file, never the folder', async () => {
   const mod = await import(pathToFileURL(path.resolve(here, 'lib', 'repo-fs.mjs')).href);
   assert.equal(typeof mod.refuseIfReadOnly, 'function', 'refuseIfReadOnly is exported');
-  const bad = path.join(TMP_ROOT, 'r29mq-bad\u0000name.json');
+  // the name is never created: a NUL in it makes lstat throw whether or not anything sits there. The folder name is "folders" so the path
+  // holds that word on every box, as macOS's temp root does (/private/var/folders/...).
+  const bad = path.join(TMP_ROOT, 'folders', 'r29mq-bad\u0000name.json');
   let caught = null;
   try { mod.refuseIfReadOnly(bad); } catch (e) { caught = e; }
   assert.ok(caught, 'the target is refused, not treated as absent');
   assert.match(caught.message, /: it could not be inspected \(/, caught.message);
   assert.match(caught.message, /nothing was written/, caught.message);
   assert.match(caught.message, /check that file by hand/, caught.message);
-  assert.doesNotMatch(caught.message, /folder|directory/i, 'the advice names the file, not a folder');
+  // the path is the message's own subject and may hold "folders" (macOS's temp root does): the advice is what is checked, with the path taken out
+  const advice = caught.message.split(bad).join('');
+  assert.ok(advice.length < caught.message.length, 'the message carries the path it names');
+  assert.doesNotMatch(advice, /folder|directory/i, 'the advice names the file, not a folder');
 });
