@@ -475,6 +475,18 @@ test('cli: a TIME line is printed per test file, in roster order, before the sum
   assert.ok(lines.findIndex((l) => /^TIME /.test(l)) < summaryAt, `the TIME lines must come before the summary line:\n${r.out}`);
 });
 
+// r29mq T (the head's reading of suite-K.out: 44 TIME lines for 47 files): a PINNED file (a names list, run through runPinned) got no `ms`, so the canon's
+// timeLines printed nothing for it, and the one file whose time sizes the clock had no line. One TIME line per file, pinned or waved, in roster order.
+// RED before runSuite times the pinned run.
+test('cli: a pinned test file gets its TIME line too, in roster order, beside a waved one -- RED before runSuite times the pinned run', async () => {
+  const roster = { 'scripts/p.test.mjs': 'three', 'scripts/w.test.mjs': 'four' };
+  const repo = plantRepo({ roster, expect: { floors: { 'scripts/w.test.mjs': 4 }, names: { 'scripts/p.test.mjs': ['alpha', 'beta', 'gamma'] } } });
+  const r = await drive(repo, roster);
+  assert.equal(r.code, 0, r.err + r.out);
+  const timed = r.out.split('\n').filter((l) => /^TIME /.test(l)).map((l) => l.match(/^TIME (\S+): \d+\.\d s$/)?.[1]);
+  assert.deepEqual(timed, ['scripts/p.test.mjs', 'scripts/w.test.mjs'], `a TIME line per file, pinned or waved, in roster order:\n${r.out}`);
+});
+
 test('cli: a vacuous file and a file below its floor make it return 1, each printed with its status and reason, the diagnostics of the vacuous one on stderr', async () => {
   const roster = { 'scripts/a.test.mjs': 'exit-before', 'scripts/b.test.mjs': 'exit-after-first', 'scripts/c.test.mjs': 'three' };
   const repo = plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1, 'scripts/b.test.mjs': 3, 'scripts/c.test.mjs': 3 }, names: {} } });

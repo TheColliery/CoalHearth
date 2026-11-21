@@ -152,7 +152,9 @@ export async function runSuite(opts) {
     }
     const args = { file, cwd, env, heapMb, fileTimeoutMs, deadlineMs: left, fileClockMs };
     onEvent?.({ type: 'pinned', file, deadlineMs: args.deadlineMs }); // the budget the pinned run is GIVEN, readable without a clock
+    const t0 = Date.now();
     const { result, names } = await runPinned(args);
+    result.ms = Date.now() - t0; // r29mq T: the TIME line of a pinned file (the canon's timeLines reads a finite ms), whatever its status; a NOT_RUN file never reaches this line
     if (result.status === STATUS.PASS || result.status === STATUS.SKIP) {
       const { missing, extra } = judgeNames(expect.names[file], names);
       if (missing.length) { result.status = STATUS.FAIL; result.reason = `expected test name(s) missing: ${listSome(missing)}`; }

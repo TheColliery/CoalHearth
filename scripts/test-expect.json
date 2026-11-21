@@ -21,7 +21,7 @@
     "scripts/lib/cwk137.test.mjs": 46,
     "scripts/lib/engine.test.mjs": 45,
     "scripts/lib/wave-run.test.mjs": 48,
-    "scripts/lib/suite-run.test.mjs": 42,
+    "scripts/lib/suite-run.test.mjs": 43,
     "scripts/build-plugin.test.mjs": 25,
     "scripts/hooks-exec-form.test.mjs": 9,
     "scripts/folder-pin.test.mjs": 9,
