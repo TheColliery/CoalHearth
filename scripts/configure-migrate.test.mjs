@@ -240,3 +240,34 @@ test('a legacy config git tracks is moved too, and the one extra line names its 
   assert.equal(linesWith(out, 'is tracked by git: commit its removal (git add -A -- .coalhearth.json).').length, 1, out);
   assert.equal(linesWith(out, `${path.basename(bak)} is untracked and yours to keep or delete.`).length, 1, out);
 });
+
+// BB-533 bounce F-a and F-b (the reviewer's witness shapes). F-a: a malformed legacy file beside an earlier .bak. The move replaces the
+// earlier backup with the malformed bytes, so the run must say it replaced one. F-b: an earlier .bak and a change in the window; the
+// warning must say the earlier backup was replaced. RED on the code before the fix (HEAD 0278923).
+const PRELOAD_APPEND_AT_MOVE = [
+  "import fs from 'node:fs';",
+  "import path from 'node:path';",
+  "let done = false;",
+  "const orig = fs.renameSync;",
+  "fs.renameSync = function (from, to) {",
+  "  if (!done && typeof from === 'string' && path.basename(from) === '.coalhearth.json') { done = true; fs.appendFileSync(from, '\\n// late\\n'); }",
+  "  return orig.call(this, from, to);",
+  "};",
+].join('\n');
+
+test('F-a (bounce): a malformed legacy file beside an earlier .bak: the .bak holds the malformed bytes and the run says it replaced an earlier backup', (t) => {
+  const malformed = '{ "language": "auto", ';
+  const { r, bak, out } = runWith(t, PRELOAD_NONE, { legacyText: malformed, bakText: 'EARLIER BACKUP' });
+  assert.equal(r.status, 1, out);
+  assert.equal(fs.readFileSync(bak, 'utf8'), malformed, 'the .bak holds the malformed legacy bytes');
+  assert.equal(linesWith(out, '(replaced an earlier backup)').length, 1, 'the line says it replaced an earlier backup:\n' + out);
+  assert.equal(linesWith(out, '(no earlier backup)').length, 0, 'and does not say there was none:\n' + out);
+});
+
+test('F-b (bounce): an earlier .bak and a change in the window: the warning says the earlier backup was replaced', (t) => {
+  const { r, bak, out } = runWith(t, PRELOAD_APPEND_AT_MOVE, { bakText: 'EARLIER BACKUP' });
+  assert.equal(r.status, 1, out);
+  assert.ok(fs.readFileSync(bak, 'utf8').includes('// late'), 'the late change is in the .bak');
+  assert.equal(linesWith(out, 'differs from').length, 1, out);
+  assert.equal(linesWith(out, '(replaced an earlier backup)').length, 1, 'the warning names the replacement:\n' + out);
+});

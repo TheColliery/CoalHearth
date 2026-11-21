@@ -110,6 +110,7 @@ function presence(p) {
 // strip. Every failure says what it knows and sets the exit code; a rename that fails is never retried.
 function moveLegacyAside(readPath, writePath, projectRoot, snapshot, tracking, earlierBak) {
   const bak = readPath + '.bak';
+  const bakNote = earlierBak ? 'replaced an earlier backup' : 'no earlier backup';
   try {
     fs.renameSync(readPath, bak);
   } catch (e) {
@@ -126,12 +127,12 @@ function moveLegacyAside(readPath, writePath, projectRoot, snapshot, tracking, e
   const back = readRepoBytesWithIdentity(bak, projectRoot, MAX_CONFIG_BYTES);
   if (back.bytes === null) {
     process.exitCode = 1;
-    console.error(`Error: ${readPath} was moved to ${bak}, but the backup could not be read back (${back.why}), so the check that it holds what was read could not be done. Check it by hand.`);
+    console.error(`Error: ${readPath} was moved to ${bak}, but the backup could not be read back (${back.why}), so the check that it holds what was read could not be done (${bakNote}). Check it by hand.`);
   } else if (Buffer.compare(back.bytes, snapshot) !== 0) {
     process.exitCode = 1;
-    console.error(`Warning: ${bak} differs from ${readPath} as it was read before the move. It holds a change the new config at ${writePath} does not include: merge that change by hand. ${bak} is yours to keep or delete.`);
+    console.error(`Warning: ${bak} differs from ${readPath} as it was read before the move (${bakNote}). It holds a change the new config at ${writePath} does not include: merge that change by hand. ${bak} is yours to keep or delete.`);
   } else {
-    console.log(`Migrated the project config to ${writePath}; the old file is kept as ${bak} (${earlierBak ? 'replaced an earlier backup' : 'no earlier backup'}).`);
+    console.log(`Migrated the project config to ${writePath}; the old file is kept as ${bak} (${bakNote}).`);
   }
   const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
   if (tracking === 'tracked') console.log(`${rel} is tracked by git: commit its removal (git add -A -- ${rel}). ${bak} is untracked and yours to keep or delete.`);
@@ -273,7 +274,9 @@ function main() {
 
   let cfg = {};
   let hadComments = false;
-  let bakWrittenThisRun = false; // the malformed branch below writes <legacy>.bak in this run: that backup is not an earlier one
+  let malformedLegacy = null; // why the legacy file is malformed: it is moved aside after the new config is written, not copied here (BB-533 bounce F-a)
+  // An earlier backup is looked for before this run writes anything, so a backup this run makes is never counted as earlier.
+  const earlierBak = readIsLegacy && presence(readPath + '.bak') === 'present';
   // Read once via try/catch (no existsSync precheck) so there is no check-to-use gap.
   // BOM strip via charCodeAt, this room's own established shape (config-load.mjs's
   // readJsonc) -- never a typed regex/literal for U+FEFF (this room's own hard-won
@@ -314,9 +317,13 @@ function main() {
       // run continues from defaults.
       process.exitCode = 1;
       const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
+      if (readIsLegacy) {
+        // BB-533 (bounce F-a): a legacy file is not copied to a .bak here. The migration below moves it aside (these bytes included), so the
+        // backup holds them, and an earlier backup is replaced by that one rename. The warning is printed just before that move.
+        malformedLegacy = why;
+      } else {
       try {
         writeRepoFile(readPath + '.bak', rawBytes, readRoot); // the bytes already read: never copyFileSync, which follows a link planted at the .bak
-        bakWrittenThisRun = true;
         console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
       } catch (bakErr) {
         // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
@@ -324,6 +331,7 @@ function main() {
         // happened and what to do next (Standard System 4). Keyed on the errno CODE, never its message (node/runtime.md 7).
         console.error(`Error: existing config ${why}, and it could not be backed up to ${readPath}.bak (${(bakErr && bakErr.code) || 'error'}) \u2014 nothing was written and ${readPath} is untouched. Remove or rename ${readPath}.bak (it may be a directory), or free the space/permission it needs, then run again.`);
         return;
+      }
       }
     }
   }
@@ -380,8 +388,8 @@ function main() {
         console.error(`Error: ${readPath} gave no bytes to check, so nothing was moved. The new config at ${writePath} is written; check ${readPath} by hand.`);
       } else {
         const tracking = gitTracks(readPath, projectRoot);
-        // An earlier backup predates this run. Stated limit: this lstat is one step stale, so a backup created in the next instant reads as absent.
-        const earlierBak = !bakWrittenThisRun && presence(readPath + '.bak') === 'present';
+        // The earlier-backup check was taken before this run wrote anything (stated limit: a backup another process creates in the window is not seen).
+        if (malformedLegacy !== null) console.warn(`Warning: existing config ${malformedLegacy} — the new config is built from defaults, and the old file is kept as ${readPath}.bak.`);
         moveLegacyAside(readPath, writePath, projectRoot, rawBytes, tracking, earlierBak);
       }
     }
