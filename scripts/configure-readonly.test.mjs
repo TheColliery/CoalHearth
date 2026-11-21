@@ -108,6 +108,24 @@ test('a read-only earlier backup refuses the migration before the new home is wr
   assert.equal(fs.readFileSync(bak, 'utf8'), 'EARLIER BACKUP', 'the read-only backup is untouched');
 });
 
+// r29mq F3 (the reviewer's bounce): a MALFORMED config the user made read-only. The malformed branch wrote its .bak first, then the config write was
+// refused with "nothing was written", which was false. Every target is checked before the first write, so nothing is written at all.
+test('a malformed config the user made read-only is refused before any backup is written: no .bak, bytes and mode unchanged, the sentence, exit 1', (t) => {
+  if (ROOT_IGNORES_MODE) return t.skip('a root process on POSIX ignores the write bit, so the refusal cannot be exercised here');
+  const dir = project(t);
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home);
+  const file = path.join(dir, '.claude', 'coal', 'coalhearth.json');
+  const malformed = '{ "language": "auto", ';
+  readOnly(file, malformed);
+  const r = run(dir, home, ['--language', 'th']);
+  assert.equal(r.status, 1, r.out);
+  assert.equal(fs.existsSync(file + '.bak'), false, 'no .bak is written before the refusal:\n' + r.out);
+  assert.equal(refusalLines(r.out, file).length, 1, 'one FAIL line names the file and the fix:\n' + r.out);
+  assert.equal(fs.readFileSync(file, 'utf8'), malformed, 'the bytes are unchanged');
+  assert.equal(fs.statSync(file).mode & 0o222, 0, 'the write bit is still off: the file was not replaced');
+});
+
 test('a target that cannot be inspected is refused with advice about the file, never the folder', async () => {
   const mod = await import(pathToFileURL(path.resolve(here, 'lib', 'repo-fs.mjs')).href);
   assert.equal(typeof mod.refuseIfReadOnly, 'function', 'refuseIfReadOnly is exported');

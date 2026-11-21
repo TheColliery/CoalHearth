@@ -300,6 +300,15 @@ function main() {
     console.error(`Error: the existing config ${readPath} cannot be read safely (${got.why}) \u2014 nothing was written and it is untouched. Remove or fix it (a file over ${MAX_CONFIG_BYTES} bytes, a link to a file outside the project or in another folder, a linked folder above it, a special file or a permission problem), then run this again.`);
     return;
   }
+  // r29mq F3 (the reviewer's bounce): every target the run would write is checked before the FIRST write of the run. The config itself is written
+  // on every run, so a read-only config refuses HERE, before the malformed branch can write its .bak and before any temp exists. A valid read-only
+  // config refuses the same way it always did, only earlier. The backup's own check stays where the backup is written (writeRepoFile).
+  try { refuseIfReadOnly(writePath); } catch (e) {
+    if (!(e instanceof ReadOnlyRefused)) throw e;
+    console.error(`FAIL ${e.message}`);
+    process.exitCode = 1;
+    return;
+  }
   if (rawConfig !== null) {
     let notObject = false;
     try {

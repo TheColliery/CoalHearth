@@ -3,7 +3,7 @@
   "floors": {
     "scripts/configure.test.mjs": 42,
     "scripts/configure-migrate.test.mjs": 13,
-    "scripts/configure-readonly.test.mjs": 4,
+    "scripts/configure-readonly.test.mjs": 5,
     "scripts/lib/config-schema.test.mjs": 15,
     "scripts/lib/config-load.test.mjs": 85,
     "scripts/lib/config-keys.test.mjs": 31,
