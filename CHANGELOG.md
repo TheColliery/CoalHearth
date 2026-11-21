@@ -2,6 +2,20 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.18] - 2026-11-22
+
+Read-only config refused by name; icon moved to plugin root.
+
+The plugin dist changes in `icon.png` (moved from `.claude-plugin/icon.png` to the plugin root) and in `.claude-plugin/plugin.json` (the `icon` key now reads `./icon.png`), so this is a PATCH release. `scripts/configure.mjs` and the test runner are repository scripts, outside the dist.
+
+### Fixed
+- **`scripts/configure.mjs` refuses a read-only config or backup by name.** Before, a read-only config or `<legacy>.bak` was not refused up front by name. Now a read-only config, a read-only `<legacy>.bak` the migration would replace, and a target that cannot be inspected are refused before anything is written: a `FAIL` line names the file, the file is left as it was, and the run exits 1. — test: `scripts/configure-readonly.test.mjs`
+
+### Changed
+- The plugin icon moves to the plugin root, `icon.png`, where the vendor's plugin reference places the listing image; the `icon` key follows. The `.claude-plugin/icon.png` of 2.8.17 is gone from the dist.
+- The test runner prints a `TIME <file>: <s> s` line for the pinned test files too, not only for the rest.
+- The secret scanner and its gate are re-copied from the org canon (`scripts/lib/secret-scan.mjs`, `scripts/secret-gate.mjs` and its test).
+
 ## [2.8.17] - 2026-11-21
 
 Legacy config kept as a backup, not deleted; plugin icon added.
