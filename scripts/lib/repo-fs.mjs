@@ -62,6 +62,31 @@ export class RepoWriteRefused extends Error {
   }
 }
 
+// The 0444 refusal (r29mq Z, T-29mi-D2): a target the user made read-only is refused BEFORE anything is written to it, by name, and is
+// never replaced. Windows reads the read-only attribute as mode 0o444, so one check covers both platforms. An lstat that fails for any
+// reason but a missing file refuses too, and says so: a target that cannot be inspected is not treated as absent. Stated residual: on
+// POSIX a rename needs the FOLDER's write bit, not the file's, so a file made read-only after this check is still replaced.
+export class ReadOnlyRefused extends Error {
+  constructor(file, why, advice) {
+    super(`${file}: ${why} -- ${advice}`);
+    this.name = 'ReadOnlyRefused';
+    this.code = 'EREADONLY';
+    this.file = file;
+    this.why = why;
+    this.advice = advice;
+  }
+}
+
+export function refuseIfReadOnly(target) {
+  let st;
+  try { st = fs.lstatSync(target); }
+  catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    throw new ReadOnlyRefused(target, `it could not be inspected (${(e && e.code) || 'error'}); nothing was written`, 'check that file by hand, then run this again.');
+  }
+  if (st.isFile() && (st.mode & 0o222) === 0) throw new ReadOnlyRefused(target, 'read-only; nothing was written', 'make the file writable if you mean to change it, then run this again.');
+}
+
 function deepestExisting(p) {
   let cur = p;
   for (;;) {
@@ -91,6 +116,7 @@ export function checkRepoWriteTarget(target, root) {
 // DIVERGENCE from CoalMine 02dff20 (CWK2-069): a leftover `<target>.<pid>.tmp` is REPLACED here (writeTempExclusive, CWK-137 R14), not refused.
 export function writeRepoFile(target, content, root) {
   if (root != null) checkRepoWriteTarget(target, root);
+  refuseIfReadOnly(target); // before the folder is made and before the temp exists
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.tmp`;
   try {

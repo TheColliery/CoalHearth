@@ -74,7 +74,7 @@ import { spawnSync } from 'node:child_process';
 import { CONFIG_SCHEMA, validateValue } from './lib/config-schema.mjs';
 import { parseJsonc } from './lib/jsonc.mjs';
 import { findProjectRoot, projectConfigPath, projectConfigCandidates, globalConfigPath } from './lib/config-load.mjs';
-import { MAX_CONFIG_BYTES, readRepoBytesWithIdentity, writeRepoFile, RepoWriteRefused } from './lib/repo-fs.mjs';
+import { MAX_CONFIG_BYTES, readRepoBytesWithIdentity, writeRepoFile, RepoWriteRefused, ReadOnlyRefused, refuseIfReadOnly } from './lib/repo-fs.mjs';
 import { gitEnv } from './lib/git-env.mjs';
 
 // R19 (CodeRabbit PR #19 thread 14): does git TRACK `file`? 'tracked' | 'untracked' | 'unknown'. The legacy migration removes the old config only
@@ -326,6 +326,8 @@ function main() {
         writeRepoFile(readPath + '.bak', rawBytes, readRoot); // the bytes already read: never copyFileSync, which follows a link planted at the .bak
         console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
       } catch (bakErr) {
+        // r29mq Z: a read-only backup is refused by name, and nothing was written (the config itself is not written past this point).
+        if (bakErr instanceof ReadOnlyRefused) { console.error(`FAIL ${bakErr.message}`); return; }
         // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
         // file the user wrote. Refuse: nothing written, the original stays byte-exact, exit 1, and the message says what
         // happened and what to do next (Standard System 4). Keyed on the errno CODE, never its message (node/runtime.md 7).
@@ -374,7 +376,11 @@ function main() {
 
   try {
     const out = JSON.stringify(cfg, null, 2) + '\n';
+    // r29mq Z: every target is checked BEFORE the first write. A read-only earlier backup refuses the run here, so the new home is not written
+    // first and the move at the end is never left to fail after it (the BB-533 order, with the 0444 refusal).
+    if (readIsLegacy && writePath !== readPath) refuseIfReadOnly(readPath + '.bak');
     if (isGlobal) {
+      refuseIfReadOnly(writePath); // the user's own home config: links are followed on purpose, the mode is still checked first
       fs.mkdirSync(path.dirname(writePath), { recursive: true });
       fs.writeFileSync(writePath, out, 'utf8'); // the user's own home config: links followed on purpose (see the read above)
     } else {
@@ -399,6 +405,11 @@ function main() {
     console.log(`Successfully updated configuration in: ${writePath}`);
     console.log(JSON.stringify(cfg, null, 2));
   } catch (e) {
+    if (e instanceof ReadOnlyRefused) {
+      console.error(`FAIL ${e.message}`);
+      process.exitCode = 1;
+      return;
+    }
     console.error(e instanceof RepoWriteRefused
       ? `Error: refused to write the config \u2014 ${e.message}. Nothing was written. Remove the link (or run from the real project) and run this again.`
       : `Error: Failed to write to config file: ${e.message}`);
