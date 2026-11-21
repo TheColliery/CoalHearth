@@ -4,17 +4,15 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 
 ## [2.8.17] - 2026-11-21
 
-The config migration keeps your legacy config as a backup and removes nothing; the plugin gets an icon.
+Legacy config kept as a backup, not deleted; plugin icon added.
 
 The plugin dist changes in `.claude-plugin/plugin.json` (a new `icon` key), `.claude-plugin/icon.png` (new) and `assets/logo.svg` (replaced), so this is a PATCH release. `scripts/configure.mjs` and the test runner are repository scripts, outside the dist.
 
 ### Fixed
 - **The config migration no longer deletes the legacy config.** Severity HIGH: before, `scripts/configure.mjs` read the legacy project config, wrote the new one, then deleted the legacy file on the strength of that earlier read, so an edit made in between was in neither file and the run reported success. Now the legacy file is moved aside with one rename to `<legacy path>.bak`, and nothing is removed. An earlier `.bak` is replaced and the run says so. A git-tracked legacy file is moved too; the run prints the `git add -A -- <path>` line that records its removal. The backup is yours to keep or delete. — test: `scripts/configure-migrate.test.mjs`
 
-### Added
-- **A plugin icon.** `.claude-plugin/plugin.json` names `./.claude-plugin/icon.png` as its icon. Claude Code does not read that key; the listing in Anthropic's plugin directory does. The Antigravity manifest's `logo` still names `assets/logo.svg`, which is the replaced file.
-
 ### Changed
+- **A plugin icon.** `.claude-plugin/plugin.json` names `./.claude-plugin/icon.png` as its icon. Claude Code does not read that key; the listing in Anthropic's plugin directory does. The Antigravity manifest's `logo` still names `assets/logo.svg`, which is the replaced file.
 - The test runner prints one `TIME <file>: <s> s` line per test file before its summary, so CI can bound each file.
 - The secret scanner and its gate are re-copied from the org canon (`scripts/lib/secret-scan.mjs`, `scripts/secret-gate.mjs` and its test).
 
