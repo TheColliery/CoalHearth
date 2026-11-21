@@ -29,8 +29,8 @@ export const DIST_ITEMS = [
   'hooks.json',
   // r29b: the AG manifest's logo (plugin.json "logo": "assets/logo.svg") resolves inside the folder AG installs, so the dist carries assets/ too.
   'assets',
-  // r29mi: the plugin icon (plugin.json "icon") is a PNG inside the manifest's own folder, so the dist carries it beside plugin.json.
-  path.join('.claude-plugin', 'icon.png'),
+  // r29mq: the plugin icon (plugin.json "icon") sits at the plugin root, as the vendor's manifest reference places it, so the dist carries it there.
+  'icon.png',
 ];
 
 // a document the plugin ships under a different name. Its source is written in plugin-src/ and copied to the dist root. A DIST_ITEM

@@ -8,7 +8,7 @@
   "homepage": "https://github.com/TheColliery/CoalHearth",
   "repository": "https://github.com/TheColliery/CoalHearth",
   "license": "Apache-2.0",
-  "icon": "./.claude-plugin/icon.png",
+  "icon": "./icon.png",
   "keywords": [
     "session-memory",
     "warm-resume",

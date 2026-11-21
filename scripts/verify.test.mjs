@@ -37,7 +37,8 @@ const COPY_DIRS = ['bin', 'lib', 'config', 'hooks', 'commands', '.claude-plugin'
 // CHANGELOG.md added (r31 fixback) so the pointer-drift block's historyOnly row reads cleanly
 // instead of a "could not read" SKIP -- harmless either way, but a clean read matches production.
 // 08b: plugin.json + hooks.json are the Antigravity plugin's own root files, gated by verify.mjs.
-const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'plugin.json', 'hooks.json'];
+// r29mq: icon.png is the plugin icon at the root (DIST_ITEMS names it); the gate's orphan check reads it from the source tree.
+const COPY_FILES = ['README.md', 'SECURITY.md', 'PRIVACY.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'plugin.json', 'hooks.json', 'icon.png'];
 
 function seed(tmp) {
   for (const d of COPY_DIRS) fs.cpSync(path.join(repo, d), path.join(tmp, d), { recursive: true });
