@@ -461,6 +461,20 @@ test('cli: a skipped test is named by a SKIPPED line before the summary line, it
   assert.ok(summaryAt > skipAt, `the SKIPPED line must come before the summary line:\n${r.out}`);
 });
 
+// T-29kn-4 (order r29mi): the canon prints one `TIME <file>: <s> s` line per file (wave-run.mjs timeLines), and CI reads them to bound each file. The runner
+// printed none. One line per file, in roster order, before the summary line, on a green run too. RED before the runner calls timeLines.
+test('cli: a TIME line is printed per test file, in roster order, before the summary line, on a green run -- RED before the runner calls timeLines', async () => {
+  const roster = { 'scripts/a.test.mjs': 'three', 'scripts/b.test.mjs': 'four' };
+  const repo = plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 3, 'scripts/b.test.mjs': 4 }, names: {} } });
+  const r = await drive(repo, roster);
+  assert.equal(r.code, 0, r.err);
+  const lines = r.out.split('\n');
+  const timed = lines.filter((l) => /^TIME /.test(l)).map((l) => l.match(/^TIME (\S+): \d+\.\d s$/)?.[1]);
+  assert.deepEqual(timed, ['scripts/a.test.mjs', 'scripts/b.test.mjs'], `no TIME line per file, in roster order:\n${r.out}`);
+  const summaryAt = lines.findIndex((l) => l.startsWith('wave-run: '));
+  assert.ok(lines.findIndex((l) => /^TIME /.test(l)) < summaryAt, `the TIME lines must come before the summary line:\n${r.out}`);
+});
+
 test('cli: a vacuous file and a file below its floor make it return 1, each printed with its status and reason, the diagnostics of the vacuous one on stderr', async () => {
   const roster = { 'scripts/a.test.mjs': 'exit-before', 'scripts/b.test.mjs': 'exit-after-first', 'scripts/c.test.mjs': 'three' };
   const repo = plantRepo({ roster, expect: { floors: { 'scripts/a.test.mjs': 1, 'scripts/b.test.mjs': 3, 'scripts/c.test.mjs': 3 }, names: {} } });

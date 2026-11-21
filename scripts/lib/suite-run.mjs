@@ -24,7 +24,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves, skippedLines } from './wave-run.mjs';
+import { STATUS, parseTap, classifyFile, summarize, nodeOptionsWithHeap, withStdoutSync, runWaves, skippedLines, timeLines } from './wave-run.mjs';
 
 const MAX_LISTED = 5;
 
@@ -235,6 +235,7 @@ export async function cli({ repo, tests, dirs, expectFile, argv, limits, io = { 
   const unlisted = Object.entries(suite.extras).map(([f, list]) => `${f} ${list.length}`);
   if (unlisted.length) out(`test runner: test name(s) the manifest does not list (not a failure; print them with --names): ${unlisted.join(', ')}`);
   for (const line of skippedLines(suite.results)) out(line); // one line per skipped test, before the summary (order 2026-11-07: a skipped leg is named, never only counted)
+  for (const line of timeLines(suite.results)) out(line); // T-29kn-4: one TIME line per file, before the summary, which CI reads to bound each file (the canon's timeLines)
   if (suite.summary) {
     out(suite.summary.line);
     const t = testTotals(suite.results);
