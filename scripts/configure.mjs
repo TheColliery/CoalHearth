@@ -96,29 +96,46 @@ function gitEntryAbove(dir) {
     d = parent;
   }
 }
-// T-29kw-1: the same file, by the two identities compared. A same-size replace changes the mtime, so the size and mtime
-// are compared too, not only device and inode.
-function sameIdentity(a, b) {
-  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
-}
-// T-29kw-1: the NAME must still be the regular file the descriptor read (same device and inode). lstat, not stat: a link at
-// the name is not that file, so it is kept. A failed lstat is not the same file either.
-function nameIsDescriptorFile(p, descriptorIdentity) {
+// BB-533: is a path there, by lstat (a link counts, a dangling link counts). 'present' | 'absent' | 'unchecked'. Never throws.
+function presence(p) {
   try {
-    const s = fs.lstatSync(p);
-    return s.isFile() && s.dev === descriptorIdentity.dev && s.ino === descriptorIdentity.ino;
-  } catch {
-    return false;
+    fs.lstatSync(p);
+    return 'present';
+  } catch (e) {
+    return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'absent' : 'unchecked';
   }
 }
-// T-53 / T-29kw-1: true only when the legacy file still holds the bytes the seeding read returned and still has the identity
-// that read's descriptor took (a same-size replace changes the mtime, so bytes alone are not enough), and the name is still
-// that file. The re-read is ONE descriptor too (readRepoBytesWithIdentity). A failed re-read counts as changed.
-function legacyUnchanged(p, root, bytes, identity) {
-  if (bytes === null || identity === null) return false;
-  const again = readRepoBytesWithIdentity(p, root, MAX_CONFIG_BYTES);
-  if (again.bytes === null || again.identity === null) return false;
-  return Buffer.compare(again.bytes, bytes) === 0 && sameIdentity(again.identity, identity) && nameIsDescriptorFile(p, again.identity);
+// BB-533: the legacy file is MOVED aside, never deleted. The rename is the one destroying call: nothing is checked before it and
+// removed after it. It runs after the new home is written and reads the backup back, bounded, against the bytes read before the BOM
+// strip. Every failure says what it knows and sets the exit code; a rename that fails is never retried.
+function moveLegacyAside(readPath, writePath, projectRoot, snapshot, tracking, earlierBak) {
+  const bak = readPath + '.bak';
+  try {
+    fs.renameSync(readPath, bak);
+  } catch (e) {
+    const code = (e && e.code) || 'error';
+    process.exitCode = 1;
+    // A failed rename does not prove the source is there: say "kept" only when an lstat finds it.
+    const now = presence(readPath);
+    if (now === 'present') console.error(`Error: could not move ${readPath} aside (${code}). It is kept, untouched by this run; the new config at ${writePath} does not include any change made to it. Nothing was retried: release whatever holds it and run this again.`);
+    else if (now === 'absent') console.error(`Error: could not move ${readPath} aside (${code}), and it is no longer there. What it held after it was read is not known; check ${bak} and the new config at ${writePath} by hand.`);
+    else console.error(`Error: could not move ${readPath} aside (${code}), and it could not be checked whether it is still there. Nothing was retried; check ${readPath} by hand.`);
+    return;
+  }
+  // Read back what now sits at the backup name. A writer that holds the file open and writes after this read is not seen (a stated limit).
+  const back = readRepoBytesWithIdentity(bak, projectRoot, MAX_CONFIG_BYTES);
+  if (back.bytes === null) {
+    process.exitCode = 1;
+    console.error(`Error: ${readPath} was moved to ${bak}, but the backup could not be read back (${back.why}), so the check that it holds what was read could not be done. Check it by hand.`);
+  } else if (Buffer.compare(back.bytes, snapshot) !== 0) {
+    process.exitCode = 1;
+    console.error(`Warning: ${bak} differs from ${readPath} as it was read before the move. It holds a change the new config at ${writePath} does not include: merge that change by hand. ${bak} is yours to keep or delete.`);
+  } else {
+    console.log(`Migrated the project config to ${writePath}; the old file is kept as ${bak} (${earlierBak ? 'replaced an earlier backup' : 'no earlier backup'}).`);
+  }
+  const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
+  if (tracking === 'tracked') console.log(`${rel} is tracked by git: commit its removal (git add -A -- ${rel}). ${bak} is untracked and yours to keep or delete.`);
+  else if (tracking === 'unknown') console.log(`git could not be asked whether ${rel} is tracked; it was moved aside anyway. If git tracks it, commit its removal (git add -A -- ${rel}).`);
 }
 function gitTracks(file, projectRoot) {
   const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], {
@@ -256,6 +273,7 @@ function main() {
 
   let cfg = {};
   let hadComments = false;
+  let bakWrittenThisRun = false; // the malformed branch below writes <legacy>.bak in this run: that backup is not an earlier one
   // Read once via try/catch (no existsSync precheck) so there is no check-to-use gap.
   // BOM strip via charCodeAt, this room's own established shape (config-load.mjs's
   // readJsonc) -- never a typed regex/literal for U+FEFF (this room's own hard-won
@@ -267,11 +285,6 @@ function main() {
   // global layer keeps following links (a dotfile manager's symlink is legitimate there) but is still bounded.
   const readRoot = isGlobal ? null : projectRoot;
   const got = readRepoBytesWithIdentity(readPath, readRoot, MAX_CONFIG_BYTES);
-  // T-53 / T-29kw-1: the bytes this read returned and the identity of the descriptor that returned them, checked again
-  // before the legacy file is deleted. Both come from the same descriptor, so no name is looked up for them. Taken only for a
-  // legacy read.
-  const legacyReadBytes = got.bytes;
-  const legacyReadIdentity = got.bytes !== null && readIsLegacy ? got.identity : null;
   let rawConfig = null;
   let rawBytes = null;
   if (got.bytes !== null) {
@@ -303,6 +316,7 @@ function main() {
       const why = notObject ? 'is valid JSON but not a JSON object' : 'is malformed';
       try {
         writeRepoFile(readPath + '.bak', rawBytes, readRoot); // the bytes already read: never copyFileSync, which follows a link planted at the .bak
+        bakWrittenThisRun = true;
         console.warn(`Warning: existing config ${why} \u2014 backed it up to ${readPath}.bak and rebuilding.`);
       } catch (bakErr) {
         // R8 FIXBACK L4 (head's ruling): NEVER write when the backup did not land -- the original is the only copy of a
@@ -358,33 +372,17 @@ function main() {
     } else {
       writeRepoFile(writePath, out, projectRoot); // CWK-137: realpath-and-contain, then a temp replaced into place
     }
-    // Move-on-CONFIG-WRITE-only (no-old-version-leftover): the legacy file is
-    // removed only AFTER the new-home write above succeeded, and only when this write
-    // actually migrated it. Best-effort -- a failed delete here still leaves a
-    // correctly-written new config; the stray legacy file is simply not cleaned up
-    // this run.
+    // BB-533: the legacy file is moved aside once the new home is written. The git probe runs before the move and only chooses the
+    // extra line. A null snapshot means the legacy path gave no bytes to compare with, so nothing is moved.
     if (readIsLegacy && writePath !== readPath) {
-      const tracking = gitTracks(readPath, projectRoot);
-      if (tracking === 'untracked') {
-        // T-53 / T-29kw-1: the legacy file must still hold what the seeding read returned, read through one descriptor, and the
-        // name must still be that file (its lstat matches the descriptor's device and inode). The check runs here, after the git
-        // ask, so it sits in the same window as the delete. RESIDUAL WINDOW, a stated limit and not closed: the last lstat by name
-        // and the rmSync are two steps, so a change made between them can still be lost. A changed, replaced, linked or unreadable
-        // file is KEPT: the run exits 1, one line names it, and the new config is written as usual. The Migrated line prints only
-        // when the legacy file is actually gone.
-        const stillUnchanged = legacyReadBytes === null ? !fs.existsSync(readPath) : legacyUnchanged(readPath, projectRoot, legacyReadBytes, legacyReadIdentity);
-        if (stillUnchanged) {
-          try { fs.rmSync(readPath, { force: true }); } catch {}
-          if (!fs.existsSync(readPath)) console.log(`Migrated the project config from ${readPath} to ${writePath}.`);
-        } else {
-          process.exitCode = 1;
-          console.warn(`Warning: ${readPath} changed while migrating; kept it. The new config at ${writePath} does not include that change; merge it by hand, then delete ${readPath}.`);
-        }
+      if (rawBytes === null) {
+        process.exitCode = 1;
+        console.error(`Error: ${readPath} gave no bytes to check, so nothing was moved. The new config at ${writePath} is written; check ${readPath} by hand.`);
       } else {
-        // tracked (or unknown): KEEP it. The canonical file is written, so the legacy one is now the loser of the read order; removing it is the
-        // user's decision, taken after reviewing the diff.
-        const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
-        console.log(`Wrote the project config to ${writePath}. The old ${readPath} was KEPT: ${tracking === 'tracked' ? 'git tracks it' : 'git could not be asked whether it tracks it'}. After you review the change, remove it with: git rm -- ${rel}`);
+        const tracking = gitTracks(readPath, projectRoot);
+        // An earlier backup predates this run. Stated limit: this lstat is one step stale, so a backup created in the next instant reads as absent.
+        const earlierBak = !bakWrittenThisRun && presence(readPath + '.bak') === 'present';
+        moveLegacyAside(readPath, writePath, projectRoot, rawBytes, tracking, earlierBak);
       }
     }
     if (hadComments) {
