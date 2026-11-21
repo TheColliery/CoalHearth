@@ -464,7 +464,14 @@
       "a probed blob is charged only its 8,000-byte prefix before the probe decides: a real binary under a lowered ceiling passes whatever size its first piece arrives in -- RED before 19a (t346 F8, t345 #7)",
       "a staged entry whose value reaches the scan as anything but its bytes fails by name and is never counted as scanned -- RED before 19b (L2)",
       "a raw hit keeps its own line when the decoded reading found the key a different number of times; equal counts still take the decoded lines -- RED before 20a (t352)",
-      "a reported line is the decoded line where the occurrence sits, whatever the two readings count -- the da5b7e9 review's two cases, RED before 20b"
+      "a reported line is the decoded line where the occurrence sits, whatever the two readings count -- the da5b7e9 review's two cases, RED before 20b",
+      "a key in a wide spelling is reported in a file with no mark whose NULs do not skew (both byte orders balanced, or one order beside other NULs), and the gate refuses it -- RED before 20e",
+      "binaries whose small 16-bit values run in both byte orders (a PE string table, a font collection) stay plain: no wide reading, no hit, no refusal -- RED against 7edf02c",
+      "a wide-spelled word cut by a scan window is judged whole: a word too long to be a key is not reported, and a key across the edge keeps its whole fingerprint -- RED before 21a",
+      "a staged or pushed path that is not valid UTF-8 fails the gate by name instead of sharing a fingerprint with another path -- RED before 21a",
+      "the failure message says where each kind of hit is acknowledged: a tree hit in HEAD, a pushed hit in the pushed commit -- RED before 21a",
+      "a wide-spelled word cut at a window's text end (1 MiB + 16 KiB past its start) is judged by the window that owns it, whole: not reported -- RED against the owner rule dropped",
+      "a path that is not valid UTF-8 and holds C1, line-separator or bidi characters prints as ASCII only, and its wildcard still selects it alone -- RED before 21c"
     ]
   }
 }
