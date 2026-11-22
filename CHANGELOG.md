@@ -2,6 +2,18 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.19] - 2026-11-22
+
+Reader checks the opened file; read-only legacy config stays read-only.
+
+The plugin dist changes in `lib/repo-fs.js` only, so this is a PATCH release. `scripts/configure.mjs` and its test are repository scripts, outside the dist.
+
+### Fixed
+- **The reader compares the opened file's device and inode with the ones it checked.** Before, the read did not check that the file it opened was the file it had checked, so a file swapped in between could be read in its place. The reader now refuses a swapped file. — test: `lib/repo-fs-toctou.test.js`
+
+### Changed
+- The migration keeps a read-only legacy config read-only when it moves the file aside, and its Migrated line says `read-only as it was`.
+
 ## [2.8.18] - 2026-11-22
 
 Read-only config refused by name; icon moved to plugin root.
