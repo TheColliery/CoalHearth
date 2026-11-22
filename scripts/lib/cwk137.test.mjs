@@ -320,18 +320,24 @@ test('CWK-137: an over-bound update stamp is SKIPPED (the check reads as due), a
 // A link as the reader sees one: the name's lstat reports a link, its realpath is `target`, and the open follows to `target` (as a real link does),
 // so the identity and the bytes both come from the target. (r29nz: the open used to stay on the name, so a fake that changed only the lstat
 // and the realpath read the name's own bytes; a reader that takes the identity from the path it admitted refuses that mismatch, correctly.)
+// The injected link answers are keyed on the name's GIVEN spelling and its RESOLVED one (the reader asks the resolved path after a realpath; an 8.3
+// short name or a junction makes the two differ, r29nz-win). The real realpath is captured at load, before pretendLink patches it.
+const REAL_NATIVE_CWK137 = fs.realpathSync.native;
+function sameEntryOf(f, p) {
+  return typeof p === 'string' && (path.resolve(p) === path.resolve(f) || path.resolve(p) === REAL_NATIVE_CWK137.call(fs, f));
+}
 function pretendLink(file, target) {
   const real = { lstat: fs.lstatSync, native: fs.realpathSync.native, open: fs.openSync };
   fs.lstatSync = function (p, ...a) {
     const st = real.lstat.call(this, p, ...a);
-    return typeof p === 'string' && path.resolve(p) === path.resolve(file)
+    return sameEntryOf(file, p)
       ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true, isFile: () => false }) : st;
   };
   fs.realpathSync.native = function (p, ...a) {
-    return typeof p === 'string' && path.resolve(p) === path.resolve(file) ? target : real.native.call(this, p, ...a);
+    return sameEntryOf(file, p) ? target : real.native.call(this, p, ...a);
   };
   fs.openSync = function (p, ...a) {
-    return real.open.call(this, typeof p === 'string' && path.resolve(p) === path.resolve(file) ? target : p, ...a);
+    return real.open.call(this, sameEntryOf(file, p) ? target : p, ...a);
   };
   return () => { fs.lstatSync = real.lstat; fs.realpathSync.native = real.native; fs.openSync = real.open; };
 }
@@ -630,8 +636,9 @@ test('CWK2-026: configure refuses a config-path link to a file in ANOTHER projec
   fs.writeFileSync(pre, [
     "const fs = require('node:fs'); const path = require('node:path');",
     "const entry = path.resolve(process.env.CH_FAKE_ENTRY); const target = process.env.CH_FAKE_TARGET;",
-    "const same = (p) => typeof p === 'string' && path.resolve(p) === entry;",
+    "const same = (p) => typeof p === 'string' && (path.resolve(p) === entry || path.resolve(p) === entryReal);",
     "const lstat = fs.lstatSync, stat = fs.statSync, open = fs.openSync, rp = fs.realpathSync.native;",
+    "const entryReal = rp.call(fs, path.dirname(entry)) + path.sep + path.basename(entry);",
     "fs.lstatSync = function (p, ...a) { return same(p) ? Object.assign(Object.create(lstat.call(fs, target)), { isSymbolicLink: () => true, isFile: () => false }) : lstat.call(this, p, ...a); };",
     "fs.statSync = function (p, ...a) { return same(p) ? stat.call(this, target, ...a) : stat.call(this, p, ...a); };",
     "fs.openSync = function (p, ...a) { return same(p) ? open.call(this, target, ...a) : open.call(this, p, ...a); };",
