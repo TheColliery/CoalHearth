@@ -43,6 +43,7 @@
     "lib/state-snapshot-linear.test.js": 5,
     "lib/read-pin.test.js": 15,
     "lib/repo-fs-toctou.test.js": 5,
+    "lib/repo-fs-linkretarget.test.js": 16,
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,
     "bin/user-prompt-submit.test.js": 7,

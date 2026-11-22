@@ -317,8 +317,11 @@ test('CWK-137: an over-bound update stamp is SKIPPED (the check reads as due), a
 
 // ---- the root wiring, on EVERY OS (the link is pretended, so a Windows box without symlink privilege still proves it) ----
 // `file` is a real regular file in the sandbox that lstat/realpath are TOLD is a link resolving to `target`.
+// A link as the reader sees one: the name's lstat reports a link, its realpath is `target`, and the open follows to `target` (as a real link does),
+// so the identity and the bytes both come from the target. (r29nz: the open used to stay on the name, so a fake that changed only the lstat
+// and the realpath read the name's own bytes; a reader that takes the identity from the path it admitted refuses that mismatch, correctly.)
 function pretendLink(file, target) {
-  const real = { lstat: fs.lstatSync, native: fs.realpathSync.native };
+  const real = { lstat: fs.lstatSync, native: fs.realpathSync.native, open: fs.openSync };
   fs.lstatSync = function (p, ...a) {
     const st = real.lstat.call(this, p, ...a);
     return typeof p === 'string' && path.resolve(p) === path.resolve(file)
@@ -327,7 +330,10 @@ function pretendLink(file, target) {
   fs.realpathSync.native = function (p, ...a) {
     return typeof p === 'string' && path.resolve(p) === path.resolve(file) ? target : real.native.call(this, p, ...a);
   };
-  return () => { fs.lstatSync = real.lstat; fs.realpathSync.native = real.native; };
+  fs.openSync = function (p, ...a) {
+    return real.open.call(this, typeof p === 'string' && path.resolve(p) === path.resolve(file) ? target : p, ...a);
+  };
+  return () => { fs.lstatSync = real.lstat; fs.realpathSync.native = real.native; fs.openSync = real.open; };
 }
 
 test('CWK-137 (any OS): AGENTS.md and task.md are read CONTAINED in the workspace -- a link out is refused, a link inside is honored', (t) => {
@@ -341,6 +347,7 @@ test('CWK-137 (any OS): AGENTS.md and task.md are read CONTAINED in the workspac
       const s = buildStateSnapshot(dir);
       assert.deepEqual(f === 'AGENTS.md' ? s.activePlan.constraints : [s.activePlan.goal], f === 'AGENTS.md' ? [] : [''], f + ' through an escaping link');
     } finally { restore(); }
+    fs.copyFileSync(path.join(dir, f), path.join(dir, 'CLAUDE.md')); // the contained link's target holds the same text the name is claimed to hold
     const restoreIn = pretendLink(path.join(dir, f), path.join(dir, 'CLAUDE.md'));
     try {
       const s = buildStateSnapshot(dir);
@@ -360,6 +367,7 @@ test('CWK-137 (any OS): the journal is read CONTAINED in its output dir -- a lin
     assert.equal(new ResumeEngine({ outputDirectory: dir }, {}, dir).detectAbortedSession(), null, 'detect through an escaping link');
     assert.equal(new HandoffJournal({ outputDirectory: dir }, dir)._loadOrQuarantine(), null, 'update path through an escaping link');
   } finally { restore(); }
+  fs.writeFileSync(path.join(dir, 'real.json'), JSON.stringify({ status: 'in_progress', sessionId: 'seen' })); // the contained link's target
   const restoreIn = pretendLink(j, path.join(dir, 'real.json'));
   try {
     assert.equal(new ResumeEngine({ outputDirectory: dir }, {}, dir).detectAbortedSession().sessionId, 'seen', 'a contained link is honored');

@@ -74,6 +74,7 @@ const TESTS = [
   'lib/state-snapshot-linear.test.js',
   'lib/read-pin.test.js',
   'lib/repo-fs-toctou.test.js',
+  'lib/repo-fs-linkretarget.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
   'bin/user-prompt-submit.test.js',
