@@ -10,6 +10,7 @@ The plugin dist changes in `lib/repo-fs.js` only, so this is a PATCH release. `s
 
 ### Fixed
 - **A link's identity is taken from the path the check admitted, never from a second stat.** Before, a link could be re-pointed between the containment check and the identity read, so the reader could read a file the check had not admitted. The path is now resolved once, and the identity is taken from that resolved path. — test: `lib/repo-fs-linkretarget.test.js`
+- **A plain file's identity is taken after the folder walk, and the folder-swap limit is stated.** The identity is taken after the folder walk and the realpath check, not at the first lstat, which narrows the window for a folder swapped out and back in. A folder swapped with exact timing between the check and the open can still hand the reader another file; no Node call closes that on Windows or macOS. — test: `lib/repo-fs-t82.test.js`
 
 ### Changed
 - SECURITY.md states the inode-0 limit: where a filesystem reports inode 0, the reader's inode compare is skipped and only the device compare applies, so a same-device swap is not caught there.
