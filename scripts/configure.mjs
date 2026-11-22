@@ -111,6 +111,10 @@ function presence(p) {
 function moveLegacyAside(readPath, writePath, projectRoot, snapshot, tracking, earlierBak) {
   const bak = readPath + '.bak';
   const bakNote = earlierBak ? 'replaced an earlier backup' : 'no earlier backup';
+  // r29ni N: the legacy file's write bit is read by name BEFORE the rename. A rename keeps the file's mode, so a read-only legacy file stays
+  // read-only under its backup name, and the success line says so. A failed lstat says nothing here: the rename below decides.
+  let readOnlyLegacy = false;
+  try { readOnlyLegacy = (fs.lstatSync(readPath).mode & 0o222) === 0; } catch { /* the rename decides */ }
   try {
     fs.renameSync(readPath, bak);
   } catch (e) {
@@ -132,7 +136,8 @@ function moveLegacyAside(readPath, writePath, projectRoot, snapshot, tracking, e
     process.exitCode = 1;
     console.error(`Warning: ${bak} differs from ${readPath} as it was read before the move (${bakNote}). It holds a change the new config at ${writePath} does not include: merge that change by hand. ${bak} is yours to keep or delete.`);
   } else {
-    console.log(`Migrated the project config to ${writePath}; the old file is kept as ${bak} (${bakNote}).`);
+    const keptAs = readOnlyLegacy ? `kept as ${bak}, read-only as it was` : `kept as ${bak}`; // r29ni N: a writable file's line is unchanged
+    console.log(`Migrated the project config to ${writePath}; the old file is ${keptAs} (${bakNote}).`);
   }
   const rel = path.relative(projectRoot, readPath).split(path.sep).join('/');
   if (tracking === 'tracked') console.log(`${rel} is tracked by git: commit its removal (git add -A -- ${rel}). ${bak} is untracked and yours to keep or delete.`);

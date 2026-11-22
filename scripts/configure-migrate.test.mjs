@@ -19,11 +19,21 @@ const LEGACY_TEXT = JSON.stringify({ language: 'auto' });
 const WINDOWS = process.platform === 'win32';
 
 // A temp folder of the test's own making, removed by its teardown only after checking it resolves under the OS temp root.
+// r29ni N: a read-only file (the read-only legacy leg) is made writable before the teardown removes it, as Windows will not unlink a read-only entry.
+function makeWritable(p) {
+  let st;
+  try { st = fs.lstatSync(p); } catch { return; }
+  if (st.isDirectory()) for (const e of fs.readdirSync(p)) makeWritable(path.join(p, e));
+  try { fs.chmodSync(p, st.isDirectory() ? 0o755 : 0o644); } catch { /* best-effort */ }
+}
 function project(t) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(TMP_ROOT, 'r29mi-proj-')));
   t.after(() => {
     const real = fs.realpathSync.native(dir);
-    if (path.dirname(real) === TMP_ROOT && path.basename(real).startsWith('r29mi-proj-')) fs.rmSync(real, { recursive: true, force: true });
+    if (path.dirname(real) === TMP_ROOT && path.basename(real).startsWith('r29mi-proj-')) {
+      makeWritable(real);
+      fs.rmSync(real, { recursive: true, force: true });
+    }
   });
   return dir;
 }
@@ -239,6 +249,23 @@ test('a legacy config git tracks is moved too, and the one extra line names its 
   assert.equal(fs.existsSync(legacy), false, 'the tracked file is moved too');
   assert.equal(linesWith(out, 'is tracked by git: commit its removal (git add -A -- .coalhearth.json).').length, 1, out);
   assert.equal(linesWith(out, `${path.basename(bak)} is untracked and yours to keep or delete.`).length, 1, out);
+});
+
+// r29ni N: a legacy file the user made read-only migrates, and the one success line says the old file is kept read-only as it was. A writable
+// legacy file's line is unchanged (Leg B pins it). The word check runs on the line WITH THE PATHS REMOVED: a temp path can hold any word.
+test('a read-only legacy config migrates, and the success line says the old file is kept read-only as it was', (t) => {
+  if (!WINDOWS && typeof process.getuid === 'function' && process.getuid() === 0) return t.skip('a root process on POSIX ignores the write bit, so the read-only case cannot be exercised here');
+  const { r, dir, bak, out } = runWith(t, PRELOAD_NONE, {
+    legacyText: LEGACY_TEXT,
+    prepare: (d) => fs.chmodSync(path.join(d, '.coalhearth.json'), 0o444),
+  });
+  assert.equal(r.status, 0, out);
+  const migrated = linesWith(out, 'Migrated the project config to');
+  assert.equal(migrated.length, 1, 'one success line:\n' + out);
+  const bare = migrated[0].split(bak).join('').split(dir).join(''); // the longer path (the backup) goes first: it holds the project folder
+  // the order's form: "the old file is kept as <bak>, read-only as it was (...)"; the backup path is taken out, so what is left reads "kept as , read-only as it was ("
+  assert.match(bare, /kept as\s*, read-only as it was \(/,'the line says the old file is kept read-only as it was:\n' + migrated[0]);
+  assert.equal(fs.statSync(bak).mode & 0o222, 0, 'the moved file keeps its read-only mode');
 });
 
 // BB-533 bounce F-a and F-b (the reviewer's witness shapes). F-a: a malformed legacy file beside an earlier .bak. The move replaces the

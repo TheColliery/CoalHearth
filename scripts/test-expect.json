@@ -2,7 +2,7 @@
   "about": "Read by scripts/test.mjs (scripts/lib/suite-run.mjs). floors: the fewest tests a file may report (# tests N); a floor is a minimum, lower it only when tests are removed on purpose. names: the top-level test names a file must report (the census and the secret scanners); print a file's names with `node scripts/test.mjs --names <file>`. Every file of the roster has exactly one entry.",
   "floors": {
     "scripts/configure.test.mjs": 42,
-    "scripts/configure-migrate.test.mjs": 13,
+    "scripts/configure-migrate.test.mjs": 14,
     "scripts/configure-readonly.test.mjs": 5,
     "scripts/lib/config-schema.test.mjs": 15,
     "scripts/lib/config-load.test.mjs": 85,
