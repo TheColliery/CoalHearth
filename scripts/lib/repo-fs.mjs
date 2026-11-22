@@ -16,7 +16,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const repoFs = createRequire(import.meta.url)('../../lib/repo-fs.js');
-export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained, folderChain, repoEntryInfo, REPO_READ_FLAGS } = repoFs;
+export const { MAX_CONFIG_BYTES, readRepoBytes, readRepoText, writeTempExclusive, isContained, folderChain, repoEntryInfo, sameEntry, REPO_READ_FLAGS } = repoFs;
 
 // T-29kw-1: the bytes AND the identity of a bounded regular file through ONE descriptor. The refusal gate is the shipped
 // module's own repoEntryInfo (decided by path before any open, exactly as readRepoBytes decides it) and the open flags are
@@ -34,18 +34,21 @@ export function readRepoBytesWithIdentity(file, root, maxBytes) {
   let fd;
   try {
     fd = fs.openSync(file, REPO_READ_FLAGS);
-    const st = fs.fstatSync(fd);
+    const st = fs.fstatSync(fd, { bigint: true });
+    if (!sameEntry(st, info.expected)) return none('refused'); // T-76: the opened file is the one checked by name, or it is refused
     if (!st.isFile()) return none('refused');
-    if (st.size > maxBytes) return none('too-large');
-    const buf = Buffer.alloc(st.size);
+    const size = Number(st.size);
+    if (size > maxBytes) return none('too-large');
+    const buf = Buffer.alloc(size);
     let got = 0;
-    while (got < st.size) {
-      const n = fs.readSync(fd, buf, got, st.size - got, got);
+    while (got < size) {
+      const n = fs.readSync(fd, buf, got, size - got, got);
       if (n === 0) break;
       got += n;
     }
-    const identity = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
-    return { bytes: got === st.size ? buf : buf.subarray(0, got), why: null, identity };
+    // the identity keeps the Number form the callers compare with their own lstat (configure.mjs), so only the compare above is bigint
+    const identity = { dev: Number(st.dev), ino: Number(st.ino), size, mtimeMs: Number(st.mtimeMs) };
+    return { bytes: got === size ? buf : buf.subarray(0, got), why: null, identity };
   } catch (e) {
     const code = e && e.code;
     return none(code === 'EACCES' || code === 'EPERM' ? 'denied' : code === 'ENOENT' ? 'absent' : 'error');
