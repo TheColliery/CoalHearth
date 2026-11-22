@@ -2,6 +2,18 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.20] - 2026-11-22
+
+Link identity taken from the checked path; the inode-0 limit is stated.
+
+The plugin dist changes in `lib/repo-fs.js` only, so this is a PATCH release. `scripts/` and the tests are repository scripts, outside the dist.
+
+### Fixed
+- **A link's identity is taken from the path the check admitted, never from a second stat.** Before, a link could be re-pointed between the containment check and the identity read, so the reader could read a file the check had not admitted. The path is now resolved once, and the identity is taken from that resolved path. — test: `lib/repo-fs-linkretarget.test.js`
+
+### Changed
+- SECURITY.md states the inode-0 limit: where a filesystem reports inode 0, the reader's inode compare is skipped and only the device compare applies, so a same-device swap is not caught there.
+
 ## [2.8.19] - 2026-11-22
 
 Reader checks the opened file; read-only legacy config stays read-only.
