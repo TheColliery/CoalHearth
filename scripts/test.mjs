@@ -75,6 +75,7 @@ const TESTS = [
   'lib/read-pin.test.js',
   'lib/repo-fs-toctou.test.js',
   'lib/repo-fs-linkretarget.test.js',
+  'lib/repo-fs-t82.test.js',
   'bin/session-start.test.js',
   'bin/post-tool-use.test.js',
   'bin/user-prompt-submit.test.js',

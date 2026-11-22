@@ -14,11 +14,12 @@
 //   4. read at most the fstat'd size.
 // `root` null = no containment: the user's OWN home files (the global config, the update stamp) are legitimately
 // symlinked by dotfile managers, but they still get the kind gate and the bound, because /dev/zero there is still
-// a hang. RESIDUAL, named: a regular file swapped in between the lstat and the open may lie outside the root; the
-// fd check still holds it to a bounded regular-file read. O_NONBLOCK guards only that swap (the lstat gate masks it
-// everywhere else), which no deterministic test reaches -- the one mutation row that survives by design.
-// T-76 (r29ni T): a regular file swapped in between the check by name and the open is REFUSED, never read: the handle's device and inode are compared
-// with the stat taken by name (sameEntry). Stated residual: an inode of 0 on either side skips the inode compare (see sameEntry).
+// a hang. RESIDUAL, named: a regular file swapped in between the lstat and the open may lie outside the root. The fd check
+// compares the opened file's device and inode with the identity taken from the name AFTER the folder walk (T-76, T-82) and then
+// reads a bounded regular file, so a file swapped in is REFUSED, never read. A FOLDER in the chain swapped out and back in with
+// exact timing is not closed (T-82, stated at the open in readRepoBytes). O_NONBLOCK guards a FIFO swapped in that window (the
+// kind gate masks it everywhere else), which no deterministic test reaches -- the one mutation row that survives by design.
+// An inode of 0 on either side skips the inode compare (see sameEntry).
 //
 // WRITE -- writeTempExclusive, the journal temp file (see the function): a link planted at the pid-named temp used to be
 // written THROUGH.
@@ -54,7 +55,7 @@ function isContained(child, parent) {
 // Windows junction as a symbolic link (measured 2026-10-15, CoalLedger 9f48634), so one lstat test covers both kinds. Returns { ok: true } for a plain chain, { ok: false, link } naming the
 // first link, or { ok: false, why } for a path that is not lexically under the root or a component that cannot be lstat-ed (fail CLOSED, never a throw). A component that does not exist ends
 // the walk as plain: nothing below a missing folder can redirect anything (the write guard asks this BEFORE it creates the folders). Residual, named: the check and the later open are two
-// steps, so a link swapped in between is not caught here (the fd re-check in readRepoBytes only re-checks kind and size). ENTRY-LEVEL RULE (CWK2-026, 18h; it was the looser 'anywhere inside the root' rule until then, the exemplar's stricter one not adopted): under a root, a file symlink at the entry is honoured only when its
+// steps, so a link swapped in between is not caught here (the fd check in readRepoBytes also compares device and inode with the identity taken after this walk, T-76/T-82). ENTRY-LEVEL RULE (CWK2-026, 18h; it was the looser 'anywhere inside the root' rule until then, the exemplar's stricter one not adopted): under a root, a file symlink at the entry is honoured only when its
 // target's realpath lies in the entry's OWN folder, path.dirname(realpath(entry)) === realpath(path.dirname(entry)), both sides through realpathSync.native. Every other link is refused, wherever it points,
 // a file in another folder of the project included: a config name that quietly hands another folder's file to the reader is the entry-level twin of the folder-chain link above. The common same-folder link
 // (AGENTS.md -> CLAUDE.md at the root) is kept. The write is unchanged: it replaces the link (temp + rename), never writes through it. root null (the user's own home files) follows links as before.
@@ -101,7 +102,9 @@ function repoEntryInfo(p, root) {
       // CWK2-026: a link is honoured only in the entry's own folder (a plain file always is: its realpath's folder is its folder's realpath)
       if (lst.isSymbolicLink() && path.dirname(realP) !== fs.realpathSync.native(path.dirname(p))) return { kind: 'refused' };
     }
-    const st = lst.isSymbolicLink() ? fs.lstatSync(realP, { bigint: true }) : lst;
+    // T-82 (r29nz): a plain file's identity is taken HERE, after the folder walk and the realpath check, not at the first lstat above (a folder
+    // swapped out for that lstat and back in for the walk would carry the outside file's identity into the open). A link's is the lstat of the path admitted.
+    const st = lst.isSymbolicLink() ? fs.lstatSync(realP, { bigint: true }) : fs.lstatSync(p, { bigint: true });
     if (st.isFile()) return { kind: 'file', expected: st };
     if (st.isDirectory()) return { kind: 'dir' };
     return { kind: 'refused' }; // not a regular file or directory: a FIFO, device or socket (or a link to one), decided with no open
@@ -120,6 +123,10 @@ function readRepoBytes(file, root, maxBytes) {
   if (info.kind !== 'file') return { bytes: null, why: 'refused' };
   let fd;
   try {
+    // T-82 (r29nz), the limit stated at the open: the name was checked (the folder walk, the realpath, the identity) BEFORE this open, and the
+    // compare below catches a swapped FILE, not every folder swap. A folder in the chain swapped out and back in with exact timing between the
+    // check and this open can still hand the reader another file. No Node call closes that on Windows or macOS (/proc/self/fd names the file on
+    // Linux only; not built here, see the T-82 study).
     fd = fs.openSync(file, REPO_READ_FLAGS);
     const st = fs.fstatSync(fd, { bigint: true });
     if (!sameEntry(st, info.expected)) return { bytes: null, why: 'refused' }; // T-76: the opened file is the one checked by name, or it is refused

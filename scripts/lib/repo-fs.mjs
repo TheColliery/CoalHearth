@@ -33,6 +33,9 @@ export function readRepoBytesWithIdentity(file, root, maxBytes) {
   if (info.kind !== 'file') return none('refused');
   let fd;
   try {
+    // T-82 (r29nz), the limit stated at the open: a folder in the chain swapped out and back in with exact timing between the name's check and
+    // this open can still hand the reader another file; the compare below catches a swapped FILE. No Node call closes it on Windows or macOS
+    // (lib/repo-fs.js readRepoBytes states the same limit at its open).
     fd = fs.openSync(file, REPO_READ_FLAGS);
     const st = fs.fstatSync(fd, { bigint: true });
     if (!sameEntry(st, info.expected)) return none('refused'); // T-76: the opened file is the one checked by name, or it is refused

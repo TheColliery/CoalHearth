@@ -44,6 +44,7 @@
     "lib/read-pin.test.js": 15,
     "lib/repo-fs-toctou.test.js": 5,
     "lib/repo-fs-linkretarget.test.js": 16,
+    "lib/repo-fs-t82.test.js": 4,
     "bin/session-start.test.js": 32,
     "bin/post-tool-use.test.js": 19,
     "bin/user-prompt-submit.test.js": 7,
