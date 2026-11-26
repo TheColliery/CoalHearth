@@ -9,9 +9,10 @@ on:
   # cannot fire on the change that breaks most of this gate's own coverage (renaming one of
   # those files breaks a link and changes no .md). Enumerating the target globs instead would
   # be a roster that rots the day a doc cites a new directory. The job runs in seconds and is
-  # not a required check (verified at the REST API: the `dependabot-auto-merge-gate` ruleset
-  # requires exactly `all-green` + `analyze (javascript)`), so running it on every push/PR
-  # costs nothing a filter would have saved.
+  # a required check (the `dependabot-auto-merge-gate` ruleset, id 18703488, read at the REST
+  # API 2026-11-27, requires `all-green`, `analyze (javascript)` and `check`, the job below). A
+  # paths filter would leave that check pending on a skipped run, so the filter stays off and the
+  # job runs on every push/PR; a run costs seconds.
   push:
     branches: [main]
   pull_request:
