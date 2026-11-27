@@ -174,6 +174,37 @@ class HandoffJournal {
   }
 
   /**
+   * The re-check a SessionStart act on the journal needs (T-29jw-1, T-29jw-2): `act` runs under
+   * THIS journal's own lock (the one every writer holds, updateUnderLock's), and only when `holds`
+   * says the journal as it stands NOW is still the one the caller decided from. The re-read is the
+   * same bounded, contained reader every writer uses (readRepoFileBounded: a FIFO, a device, a link
+   * out of the folder or an over-bound file reads as absent), so `now` is null for a journal that is
+   * absent or refused. A refused pin, a journal that changed, or an act that throws leaves the journal
+   * as it is and answers false. Residue, named: _acquireLock degrades to lock-free after LOCK_WAIT_MS,
+   * so a writer that holds the lock longer still leaves a window; the re-read narrows that window, it
+   * does not close it.
+   * @param {() => boolean} pinned the caller's pin check: asked before the re-read, the same way the detect read asks it.
+   * @param {(now: string|null) => boolean} holds true while the journal is still the one decided from.
+   * @param {() => boolean} act the write or delete; its own pin checks stay where they are.
+   * @returns {boolean} whether act ran and answered true.
+   */
+  actIfJournalHolds(pinned, holds, act) {
+    if (!this.outputDir) return false; // fail-closed: no contained dir -> nothing to act on
+    if (typeof pinned === 'function' && !pinned()) return false; // the re-read is a read through the folder: the pin is asked first
+    const release = this._acquireLock();
+    try {
+      const now = readRepoFileBounded(path.join(this.outputDir, JOURNAL_NAME), this.outputDir, MAX_JOURNAL_BYTES);
+      if (typeof pinned === 'function' && !pinned()) return false; // a folder swapped while the re-read ran: its bytes are not the ones decided from
+      if (!holds(now)) return false;
+      return act() === true;
+    } catch (_) {
+      return false; // fail-silent: a throwing act leaves the journal as it is
+    } finally {
+      release();
+    }
+  }
+
+  /**
    * Like load(), but a CORRUPT (present-but-unparseable) journal is QUARANTINED to
    * session_handoff.corrupt.json (preserving the bytes) before returning null — so the RMW
    * starts fresh WITHOUT destroying the forensic evidence (H2; mirrors ResumeEngine._quarantine,
