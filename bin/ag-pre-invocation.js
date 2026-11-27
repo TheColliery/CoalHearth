@@ -279,7 +279,7 @@ function main() {
     prompt += '\n> ⚠️ Could not persist the once-per-session marker (the temp write failed, or the marker folder was refused: not this user\'s own, open to others, or not a folder). This recovery block may repeat on the next model call.\n';
   }
   if (!markedResumed) {
-    prompt += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session, and the interrupted session\'s file list may bleed into this session\'s journal.\n';
+    prompt += '\n> ⚠️ Could not mark this session resumed (the journal was not written: the write failed, possibly on a read-only filesystem, or the journal changed since it was read). This recovery block may repeat next session, and the interrupted session\'s file list may bleed into this session\'s journal.\n';
   }
   emit(prompt);
 }

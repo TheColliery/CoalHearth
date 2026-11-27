@@ -147,7 +147,7 @@ function main() {
       const markedResumed = engine.markResumed(aborted);
       let out = prompt;
       if (out && !markedResumed) {
-        out += '\n> ⚠️ Could not mark this session resumed (the journal write failed — possibly a read-only filesystem). This recovery block may repeat next session.\n';
+        out += '\n> ⚠️ Could not mark this session resumed (the journal was not written: the write failed, possibly on a read-only filesystem, or the journal changed since it was read). This recovery block may repeat next session.\n';
       }
       if (out) console.log(out + tail()); // sanctioned SessionStart context-injection channel (Phoenix #13)
     }
