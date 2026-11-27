@@ -118,15 +118,17 @@ export function checkRepoWriteTarget(target, root) {
 }
 
 // Create the directory, then replace `target` with `content` through a temp. `root` null = no containment (the user's
-// own global config, which dotfile managers legitimately link).
+// own global config, which dotfile managers legitimately link). `mode`, when given, is applied to the temp BEFORE the rename,
+// so the replacement never sits on the default bits (r29sm: a rename gave a 0600 global config back as 0644).
 // DIVERGENCE from CoalMine 02dff20 (CWK2-069): a leftover `<target>.<pid>.tmp` is REPLACED here (writeTempExclusive, CWK-137 R14), not refused.
-export function writeRepoFile(target, content, root) {
+export function writeRepoFile(target, content, root, mode) {
   if (root != null) checkRepoWriteTarget(target, root);
   refuseIfReadOnly(target); // before the folder is made and before the temp exists
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.tmp`;
   try {
     writeTempExclusive(temp, content);
+    if (mode !== undefined && mode !== null) fs.chmodSync(temp, mode);
     fs.renameSync(temp, target);
   } finally {
     try { fs.rmSync(temp, { force: true }); } catch { /* best-effort: the rename normally consumed it */ }

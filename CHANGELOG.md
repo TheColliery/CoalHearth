@@ -8,7 +8,7 @@ All notable changes to CoalHearth are documented here. Format follows [Keep a Ch
 - A Kiro V3 hooks snippet, `platform-configs/hooks/kiro-v3-agent-hooks.json`, in the array form the CLI documents for V3. No live Kiro session has run it yet.
 
 ### Fixed
-- **The global config is written through a temp file and renamed into place.** It was rewritten in place, so a process killed mid-write left a torn file. A link to the global config is still followed, and the read-only check now runs on the file the link points to.
+- **The global config is written through a temp file and renamed into place.** It was rewritten in place, so a process killed mid-write left a torn file. A link to the global config is still followed, and the read-only check now runs on the file the link points to. The rewritten file keeps the permission bits of the one it replaces, and a hard link to the old file keeps its old bytes.
 
 ## [2.8.21] - 2026-11-27
 

@@ -118,6 +118,10 @@ function resolveGlobalTarget(p) {
   }
   throw new Error(`too many links to resolve ${p}`);
 }
+// The mode of the file a rename is about to replace, or null when there is none yet. The replacement takes these bits (writeRepoFile).
+function existingMode(p) {
+  try { return fs.statSync(p).mode & 0o7777; } catch (e) { if (e && e.code === 'ENOENT') return null; throw e; }
+}
 // BB-533: the legacy file is MOVED aside, never deleted. The rename is the one destroying call: nothing is checked before it and
 // removed after it. It runs after the new home is written and reads the backup back, bounded, against the bytes read before the BOM
 // strip. Every failure says what it knows and sets the exit code; a rename that fails is never retried.
@@ -321,8 +325,18 @@ function main() {
   // r29mq F3 (the reviewer's bounce): every target the run would write is checked before the FIRST write of the run. The config itself is written
   // on every run, so a read-only config refuses HERE, before the malformed branch can write its .bak and before any temp exists. A valid read-only
   // config refuses the same way it always did, only earlier. The backup's own check stays where the backup is written (writeRepoFile).
-  try { refuseIfReadOnly(writePath); } catch (e) {
-    if (!(e instanceof ReadOnlyRefused)) throw e;
+  // r29sm: the global target is resolved here, once, and the check runs on it, the same path the write and the backup use. A link
+  // followed to a read-only file refuses before any .bak is written beside the link. A link that cannot be resolved refuses too, by name.
+  let globalTarget = null;
+  try {
+    if (isGlobal) globalTarget = resolveGlobalTarget(writePath);
+    refuseIfReadOnly(globalTarget !== null ? globalTarget : writePath);
+  } catch (e) {
+    if (!(e instanceof ReadOnlyRefused)) {
+      process.exitCode = 1;
+      console.error(`Error: Failed to write to config file: ${e.message}`);
+      return;
+    }
     console.error(`FAIL ${e.message}`);
     process.exitCode = 1;
     return;
@@ -410,7 +424,7 @@ function main() {
       // The user's own home config: a link to it (a dotfile manager's) is followed on purpose, so the write goes to the RESOLVED target,
       // as a temp renamed over it. writeRepoFile checks that target for read-only before the folder or the temp exists. No root is
       // passed, so there is no containment check: the global file is the user's own, wherever its link points.
-      writeRepoFile(resolveGlobalTarget(writePath), out, null);
+      writeRepoFile(globalTarget, out, null, existingMode(globalTarget)); // the replacement keeps the mode of the file it replaces (r29sm)
     } else {
       writeRepoFile(writePath, out, projectRoot); // CWK-137: realpath-and-contain, then a temp replaced into place
     }

@@ -128,3 +128,68 @@ test('control: with no global file yet, --global creates it as a plain file', (t
   assert.ok(!fs.lstatSync(globalFile(home)).isSymbolicLink(), 'the new file is a plain file, not a link');
   assert.equal(JSON.parse(fs.readFileSync(globalFile(home), 'utf8')).update.updateMode, 'remind');
 });
+
+// r29sm (a): the read-only check and the backup run on the RESOLVED target. A malformed config behind a read-only link is refused by
+// name before any .bak is written, beside the link or beside the target.
+test('a malformed global config behind a read-only link is refused before any backup is written', (t) => {
+  if (ROOT_IGNORES_MODE) return t.skip('a root process on POSIX ignores the write bit, so the refusal cannot be exercised here');
+  const dir = sandbox(t);
+  if (!canSymlink(dir)) return t.skip(`this account cannot make a file symlink (${process.platform}), so the link backup is not exercised here`);
+  const home = path.join(dir, 'home');
+  const target = path.join(dir, 'dotfiles', '.coalhearth.json');
+  const BROKEN = '{ "language": ';
+  const lexists = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, BROKEN);
+  fs.chmodSync(target, 0o444);
+  fs.mkdirSync(path.dirname(globalFile(home)), { recursive: true });
+  fs.symlinkSync(target, globalFile(home));
+  const r = run(dir, home, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 1, r.out);
+  assert.ok(r.out.split(/\r?\n/).some((l) => l.startsWith('FAIL ') && l.includes(target)), 'the FAIL line names the RESOLVED target:\n' + r.out);
+  assert.equal(fs.readFileSync(target, 'utf8'), BROKEN, 'the read-only target is unchanged');
+  assert.ok(!lexists(globalFile(home) + '.bak'), 'no backup is written beside the link');
+  assert.ok(!lexists(target + '.bak'), 'no backup is written beside the target');
+  assert.ok(fs.lstatSync(globalFile(home)).isSymbolicLink(), 'the link is still a link');
+});
+
+// r29sm (b): a rewrite keeps the permission bits of the file it replaces. A rename gives the new file the default mode, so 0600 came back 0644.
+test('a rewritten global config keeps the permission bits of the file it replaces', (t) => {
+  if (process.platform === 'win32') return t.skip('permission bits are not stored on Windows, so the mode is not exercised here');
+  const dir = sandbox(t);
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(path.dirname(globalFile(home)), { recursive: true });
+  fs.writeFileSync(globalFile(home), SEED);
+  fs.chmodSync(globalFile(home), 0o600);
+  const r = run(dir, home, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 0, r.out);
+  assert.equal(fs.statSync(globalFile(home)).mode & 0o777, 0o600, 'the replacement keeps 0600');
+});
+
+// r29sm (c): a link that points at itself is refused by name, and nothing is written. Pins the behaviour; a loop is not reached by the other legs.
+test('a global config that links to itself is refused and is not rewritten', (t) => {
+  const dir = sandbox(t);
+  if (!canSymlink(dir)) return t.skip(`this account cannot make a file symlink (${process.platform}), so the self-link is not exercised here`);
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(path.dirname(globalFile(home)), { recursive: true });
+  fs.symlinkSync(globalFile(home), globalFile(home));
+  const r = run(dir, home, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 1, r.out);
+  assert.ok(!r.out.includes('Successfully'), 'nothing reports a write:\n' + r.out);
+  assert.ok(fs.lstatSync(globalFile(home)).isSymbolicLink(), 'the link is still a link');
+});
+
+// Pins the dangling-link path: a link to a file that does not exist yet creates that file and keeps the link.
+test('a global config link to a file that does not exist yet creates that file and keeps the link', (t) => {
+  const dir = sandbox(t);
+  if (!canSymlink(dir)) return t.skip(`this account cannot make a file symlink (${process.platform}), so the dangling link is not exercised here`);
+  const home = path.join(dir, 'home');
+  const target = path.join(dir, 'dotfiles', '.coalhearth.json');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.mkdirSync(path.dirname(globalFile(home)), { recursive: true });
+  fs.symlinkSync(target, globalFile(home));
+  const r = run(dir, home, ['--global', '--update.updateMode', 'remind']);
+  assert.equal(r.status, 0, r.out);
+  assert.ok(fs.lstatSync(globalFile(home)).isSymbolicLink(), 'the link is still a link');
+  assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).update.updateMode, 'remind', 'the created target holds the new bytes');
+});
