@@ -2,6 +2,19 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [2.8.21] - 2026-11-27
+
+The journal is acted on only while it still holds the bytes read.
+
+The plugin dist changes in `lib/handoff-journal.js`, `lib/repo-fs.js` and `lib/resume-engine.js`, so this is a PATCH release. The re-copied link checker, the tests and the documentation are repository files, outside the dist.
+
+### Fixed
+- **The corrupt-journal quarantine and the resume mark act only while the journal still holds the bytes SessionStart read.** Before, both were decided from a read taken outside the lock the journal's writers hold, so a journal another session wrote in between could be deleted, or overwritten with a stale copy. Now both run under the journal's own lock and are refused when the journal has changed. The lock gives up after 500 ms and the act then runs lock-free, so the re-read narrows that window without closing it. — test: `lib/resume-engine-relock.test.js`
+
+### Changed
+- The front-door link checker is re-copied from the org canon. A github.com repository, account or file link that stays 5xx is now asked of the REST API with the workflow's read-only token; only a 2xx or a 404 there replaces the result.
+- The docs say what the reader, the checker and the journal lock do now, and name Kiro as the CLI wherever the hook wiring is meant.
+
 ## [2.8.20] - 2026-11-22
 
 Link identity taken from the checked path; the inode-0 limit is stated.
