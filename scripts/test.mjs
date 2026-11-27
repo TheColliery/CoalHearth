@@ -32,6 +32,7 @@ const TESTS = [
   'scripts/configure.test.mjs',
   'scripts/configure-migrate.test.mjs',
   'scripts/configure-readonly.test.mjs',
+  'scripts/configure-global.test.mjs',
   'scripts/lib/config-schema.test.mjs',
   'scripts/lib/config-load.test.mjs',
   'scripts/lib/config-keys.test.mjs',

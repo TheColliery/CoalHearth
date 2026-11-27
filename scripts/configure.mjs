@@ -105,6 +105,19 @@ function presence(p) {
     return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'absent' : 'unchecked';
   }
 }
+// The global config is the user's own home file, and a link to it is followed on purpose. An existing target resolves by realpath.
+// A dangling link, or an absent file, resolves to where the write lands today: the link's own target, or the path itself.
+function resolveGlobalTarget(p) {
+  try { return fs.realpathSync.native(p); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  let cur = p;
+  for (let hops = 0; hops < 40; hops++) {
+    let st;
+    try { st = fs.lstatSync(cur); } catch { return cur; } // nothing at cur: the write creates it here
+    if (!st.isSymbolicLink()) return cur;
+    cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+  }
+  throw new Error(`too many links to resolve ${p}`);
+}
 // BB-533: the legacy file is MOVED aside, never deleted. The rename is the one destroying call: nothing is checked before it and
 // removed after it. It runs after the new home is written and reads the backup back, bounded, against the bytes read before the BOM
 // strip. Every failure says what it knows and sets the exit code; a rename that fails is never retried.
@@ -394,9 +407,10 @@ function main() {
     // first and the move at the end is never left to fail after it (the BB-533 order, with the 0444 refusal).
     if (readIsLegacy && writePath !== readPath) refuseIfReadOnly(readPath + '.bak');
     if (isGlobal) {
-      refuseIfReadOnly(writePath); // the user's own home config: links are followed on purpose, the mode is still checked first
-      fs.mkdirSync(path.dirname(writePath), { recursive: true });
-      fs.writeFileSync(writePath, out, 'utf8'); // the user's own home config: links followed on purpose (see the read above)
+      // The user's own home config: a link to it (a dotfile manager's) is followed on purpose, so the write goes to the RESOLVED target,
+      // as a temp renamed over it. writeRepoFile checks that target for read-only before the folder or the temp exists. No root is
+      // passed, so there is no containment check: the global file is the user's own, wherever its link points.
+      writeRepoFile(resolveGlobalTarget(writePath), out, null);
     } else {
       writeRepoFile(writePath, out, projectRoot); // CWK-137: realpath-and-contain, then a temp replaced into place
     }

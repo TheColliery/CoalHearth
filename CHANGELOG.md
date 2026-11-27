@@ -2,6 +2,11 @@
 
 All notable changes to CoalHearth are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer (the canonical version lives in `.claude-plugin/plugin.json`).
 
+## [Unreleased]
+
+### Fixed
+- **The global config is written through a temp file and renamed into place.** It was rewritten in place, so a process killed mid-write left a torn file. A link to the global config is still followed, and the read-only check now runs on the file the link points to.
+
 ## [2.8.21] - 2026-11-27
 
 The journal is acted on only while it still holds the bytes read.
