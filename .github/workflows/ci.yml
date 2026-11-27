@@ -102,7 +102,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: [22, 24]  # supported LTS only (24 Active, 22 Maintenance); 18/20 are EOL — bump as the Node LTS schedule moves
+        node: [22, 24, 26]  # supported lines per the Node Release WG schedule: 26 Active LTS (LTS 2026-10-28), 24 and 22 Maintenance (22 ends 2027-04-30); 18/20 are EOL — bump as the schedule moves
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15 # the test step on GitHub Node 22 runners, 2026-11-18: 223 s (CoalLedger 4f7459f), 211 s (CoalBoard 44311491675), 294 s earlier (CoalBoard); the 600 s run deadline in scripts/test.mjs sits under this bound
     steps:
