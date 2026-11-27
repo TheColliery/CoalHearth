@@ -1,0 +1,17 @@
+{
+  "$comment": "Kiro V3 (array form) — a MERGE SNIPPET: the hooks array goes INSIDE the agent config, not a standalone file. Copy the 'hooks' array below into the 'hooks' key of .kiro/agents/<name>.json (project) or ~/.kiro/agents/<name>.json (user). Triggers SessionStart and PostToolUse are the V3 names; the legacy names agentSpawn and postToolUse are accepted as aliases, so kiro-agent-hooks.json is the older object form. Field 'timeout' is in SECONDS for command actions (kiro.dev/docs/hooks/, updated 2026-11-15); the legacy form's timeout_ms is a different key. The 'matcher' field is optional and omitted here, so the PostToolUse hook runs after every tool, as the legacy snippet does. The trailing 'FileCopy' argument selects the plain Claude-Code stdout shape; Kiro's response and context-inject schema is entirely UNVERIFIED, so flag it if the recovery block never appears. Adjust C:/path/to/CoalHearth in every command. Sources: kiro.dev/docs/hooks/ and kiro.dev/docs/custom-agents/configuration-reference/ (read 2026-11-27). Tier: works with — built and hermetically tested against the primary docs; NO live Kiro session has run this wiring yet.",
+  "hooks": [
+    {
+      "name": "coalhearth-resume",
+      "trigger": "SessionStart",
+      "action": { "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-pre-invocation.js\" FileCopy" },
+      "timeout": 10
+    },
+    {
+      "name": "coalhearth-journal",
+      "trigger": "PostToolUse",
+      "action": { "type": "command", "command": "node \"C:/path/to/CoalHearth/bin/ag-post-tool-use.js\" FileCopy" },
+      "timeout": 10
+    }
+  ]
+}
